@@ -25,8 +25,10 @@
   .bar-track { flex:1; background:#eef1f6; border-radius:99px; height:14px; overflow:hidden; }
   .bar-fill { height:100%; background:#2557a7; border-radius:99px; }
   .bar-n { flex:0 0 2.5rem; text-align:right; font-variant-numeric:tabular-nums; }
-  .day-chart { display:flex; align-items:flex-end; gap:.5rem; min-height:150px; padding-top:.5rem; }
-  .day-col { flex:1 1 0; max-width:90px; display:flex; flex-direction:column; justify-content:flex-end; align-items:center; gap:.2rem; }
+    /* พอข้อมูลเกิน ~12 วัน คอลัมน์จะล้นกรอบ ถ้าไม่ให้เลื่อนจะโดนตัดหายโดยดูเหมือนครบ */
+  .day-chart { display:flex; align-items:flex-end; gap:.5rem; min-height:150px;
+               padding-top:.5rem; overflow-x:auto; }
+  .day-col { flex:0 0 44px; display:flex; flex-direction:column; justify-content:flex-end; align-items:center; gap:.2rem; }
   .day-bar { width:70%; background:#2557a7; border-radius:4px 4px 0 0; min-height:2px; }
   .day-bar.ret { background:#0a7d34; }
   .day-x { font-size:.7rem; color:var(--muted); }
@@ -110,5 +112,5 @@
   {% else %}<p class="muted">ยังไม่มีการแก้ไข</p>{% endfor %}
 </div>
 
-<p><a href="/export.xlsx"><button class="ghost">⬇ โหลดข้อมูลทั้งหมดเป็น Excel</button></a></p>
+<p><a href="/export.xlsx" class="btn ghost">⬇ โหลดข้อมูลทั้งหมดเป็น Excel</a></p>
 {% endblock %}

@@ -21,7 +21,11 @@ input[type=file] { padding:.45rem .5rem; }
 input.warn { background:#fff8e1; border-color:#e6c300; }
 input.bad  { background:#fdecea; border-color:#e99; }
 button { padding:.6rem 1rem; border:0; border-radius:8px; background:#2557a7; color:#fff; font-size:1rem; cursor:pointer; }
-button.ghost { background:#eef1f6; color:#223; }
+button.ghost, .btn.ghost { background:#eef1f6; color:#223; }
+/* ใช้กับ <a> ที่ต้องดูเป็นปุ่ม — ห้ามเอา <button> ไปใส่ใน <a> เพราะ HTML ไม่อนุญาต
+   ให้ <a> มี interactive content ข้างใน พฤติกรรมตอนกดจึงขึ้นกับเบราว์เซอร์ */
+.btn { display:inline-block; padding:.6rem 1rem; border-radius:8px; background:#2557a7;
+       color:#fff; text-decoration:none; font-size:1rem; line-height:1.2; }
 button.danger { background:#b3261e; }
 table { width:100%; border-collapse:collapse; font-size:.92rem; }
 th, td { text-align:left; padding:.45rem .5rem; border-bottom:1px solid var(--line); vertical-align:top; }
@@ -49,10 +53,13 @@ th { color:var(--muted); font-weight:600; }
   }
   header { gap: .4rem .9rem; padding: .6rem .8rem; }
   header nav { display: flex; flex-wrap: wrap; gap: .1rem .9rem; }
-  nav a { margin-right: 0; padding: .3rem 0; }
+  nav a { margin-right: 0; padding: .55rem 0; }
   main { padding: 0 .7rem; margin-top: .8rem; }
   .card { padding: .8rem; }
   table { font-size: .88rem; }
+  /* checkbox ไม่ทำให้ iOS ซูม แต่กล่องขนาด 13px เล็กเกินกว่าจะกดโดน */
+  input[type=checkbox] { width: 22px; height: 22px; }
+  .checkrow { display: flex; align-items: center; gap: .5rem; min-height: 44px; }
   /* ตารางกว้างกว่าจอ ให้เลื่อนในกรอบของตัวเอง ห้ามดันทั้งหน้าให้เลื่อนแนวนอน */
   .card > table { display: block; overflow-x: auto; white-space: nowrap; }
 }
@@ -67,6 +74,10 @@ th { color:var(--muted); font-weight:600; }
                border-top: 1px solid var(--line); padding-top: .45rem; }
 }
 
-/* กันหน้าเลื่อนแนวนอนทั้งหน้าในทุกขนาดจอ */
-html, body { max-width: 100%; overflow-x: hidden; }
+/* กันหน้าเลื่อนแนวนอนทั้งหน้าในทุกขนาดจอ
+   ห้ามใส่ overflow-x:hidden บน body เด็ดขาด — เมื่อ overflow-x เป็น hidden แล้ว overflow-y
+   จะกลายเป็น auto ทำให้ body เป็น scroll container เอง แล้ว position:sticky ข้างในจะไม่ยึดขอบจอ
+   (แถบปุ่มอนุมัติบนมือถือหายไปเพราะสาเหตุนี้) ใส่ที่ html พอ ได้ผลกันเลื่อนเหมือนกัน */
+html { max-width: 100%; overflow-x: hidden; }
+body { max-width: 100%; }
 img { max-width: 100%; }

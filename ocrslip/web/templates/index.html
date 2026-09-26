@@ -3,7 +3,10 @@
 <div class="card">
   <h2>อัปโหลดใบฝากรถ</h2>
   <p class="muted">ถ่ายจากมือถือหรือเลือกจากคลังรูปได้ อัปโหลดหลายใบพร้อมกันได้ · รองรับ HEIC จาก iPhone · ทุกใบจะเข้าคิวรอคนตรวจก่อนเสมอ</p>
-  <form hx-post="/api/ocr" hx-target="#result" hx-encoding="multipart/form-data"
+  {# action/method/enctype ไว้เป็นทางสำรอง ถ้า htmx โหลดไม่ขึ้นฟอร์มจะยัง submit ได้จริง
+     ไม่ใช่ยิง GET เปล่า ๆ แล้วไฟล์หายไปเฉย ๆ #}
+  <form method="post" action="/api/ocr" enctype="multipart/form-data"
+        hx-post="/api/ocr" hx-target="#result" hx-encoding="multipart/form-data"
         hx-indicator="#busy" hx-disabled-elt="button">
 
     <div class="row">

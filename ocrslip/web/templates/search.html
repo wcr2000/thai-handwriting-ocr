@@ -6,8 +6,9 @@
   <input type="search" name="q" placeholder="เช่น สมชาย / 0800000000 / กก1234"
          hx-get="/api/search" hx-trigger="keyup changed delay:300ms, search"
          hx-target="#results" autofocus>
-  <label><input type="checkbox" name="include_pending" value="true" form="opts"
-         hx-get="/api/search" hx-include="[name=q]" hx-target="#results"> แสดงใบที่ยังไม่ผ่านการตรวจด้วย</label>
+  <label class="checkrow"><input type="checkbox" name="include_pending" value="true"
+         hx-get="/api/search" hx-include="[name=q]" hx-target="#results">
+         แสดงใบที่ยังไม่ผ่านการตรวจด้วย</label>
 </div>
 <div id="results"></div>
 {% endblock %}

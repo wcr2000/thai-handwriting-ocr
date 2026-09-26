@@ -4,7 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}ระบบฝากรถน้ำท่วม{% endblock %}</title>
-<script src="https://unpkg.com/htmx.org@1.9.12"></script>
+{# เก็บ htmx ไว้ในเครื่องแทนการดึงจาก CDN — ถ้า unpkg ใช้ไม่ได้ (เน็ตมือถือในพื้นที่น้ำท่วม
+   captive portal, DNS พัง) ฟอร์มจะ submit แบบ native โดยไม่มี enctype ไฟล์หายเงียบ ๆ #}
+<script src="/static/htmx.min.js"></script>
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
