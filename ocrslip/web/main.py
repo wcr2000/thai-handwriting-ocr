@@ -20,7 +20,7 @@ from fastapi.templating import Jinja2Templates
 from ..auth import COOKIE_NAME, SESSION_TTL, User, authenticate, make_token, read_token
 from ..config import COOKIE_SECURE, OCR_MODEL, SECRET_KEY, USD_THB
 from ..db import (
-    add_staff, build_filters, connect, dashboard_stats, export_rows, get_image, get_slip,
+    add_staff, build_filters, clean_person_name, connect, dashboard_stats, export_rows, get_image, get_slip,
     known_people, list_slips, list_staff, mark_returned, query_slips, review_counts,
     set_staff_active, update_slip,
 )
@@ -67,22 +67,6 @@ def current_user(request: Request) -> User | None:
 
 
 @app.middleware("http")
-async def no_stale_html(request: Request, call_next):
-    """ห้ามเบราว์เซอร์ cache หน้า HTML
-
-    ก่อนหน้านี้ไม่ได้ส่ง Cache-Control มาเลย เบราว์เซอร์ (โดยเฉพาะ Safari บน iOS)
-    จึงใช้ heuristic caching เดาเอาเองว่าเก็บได้ ผลคือหลัง deploy ผู้ใช้ยังเห็นฟอร์มเวอร์ชันเก่า
-    ขณะที่ server เป็นเวอร์ชันใหม่ — ฟอร์มเก่าไม่มีช่องที่ server ใหม่บังคับ กดแล้วพังทันที
-    ข้อมูลในหน้าเว็บนี้เปลี่ยนตลอด (คิวตรวจ ผลค้นหา) และเป็นข้อมูลส่วนบุคคล
-    จึงไม่ควรถูกเก็บไว้ในเครื่องอยู่แล้ว
-    """
-    response = await call_next(request)
-    if "text/html" in response.headers.get("content-type", ""):
-        response.headers["Cache-Control"] = "no-store, must-revalidate"
-    return response
-
-
-@app.middleware("http")
 async def auth_gate(request: Request, call_next):
     """ปิดทุกหน้าที่ไม่ได้อยู่ใน PUBLIC_PATHS และบังคับสิทธิ์ admin ในหน้าที่กำหนด"""
     path = request.url.path
@@ -102,6 +86,34 @@ async def auth_gate(request: Request, call_next):
 
     request.state.user = user
     return await call_next(request)
+
+
+@app.middleware("http")
+async def no_stale_html(request: Request, call_next):
+    """ห้ามเบราว์เซอร์ cache หน้า HTML
+
+    ต้องประกาศ "หลัง" auth_gate เพราะ Starlette วาง middleware ที่ลงทะเบียนทีหลังไว้ชั้นนอกสุด
+    ถ้าอยู่ก่อน response ที่ auth_gate คืนเอง (303 เด้งไป login, 403 หน้าไม่มีสิทธิ์)
+    จะไม่ผ่าน middleware นี้เลย จึงไม่มี Cache-Control ติดไป
+
+    ก่อนหน้านี้ไม่ได้ส่ง Cache-Control มาเลย เบราว์เซอร์ (โดยเฉพาะ Safari บน iOS)
+    จึงใช้ heuristic caching เดาเอาเองว่าเก็บได้ ผลคือหลัง deploy ผู้ใช้ยังเห็นฟอร์มเวอร์ชันเก่า
+    ขณะที่ server เป็นเวอร์ชันใหม่ — ฟอร์มเก่าไม่มีช่องที่ server ใหม่บังคับ กดแล้วพังทันที
+    ข้อมูลในหน้าเว็บนี้เปลี่ยนตลอด (คิวตรวจ ผลค้นหา) และเป็นข้อมูลส่วนบุคคล
+    จึงไม่ควรถูกเก็บไว้ในเครื่องอยู่แล้ว
+    """
+    response = await call_next(request)
+
+    # ห้ามดูจาก content-type เพราะ redirect 303 ไม่มี body จึงไม่มี content-type
+    # ถ้าเช็ค "text/html" หน้าที่เด้งไป login จะหลุดไม่ได้ header
+    # ข้าม /static (มี no-cache ของตัวเอง) กับ /image (รูปหลักฐานไม่เปลี่ยน cache ได้นาน)
+    # และไม่ทับค่าที่ route ตั้งไว้เองแล้ว
+    if (
+        not request.url.path.startswith(("/static", "/image"))
+        and "cache-control" not in response.headers
+    ):
+        response.headers["Cache-Control"] = "no-store, must-revalidate"
+    return response
 
 
 def render(request: Request, name: str, **ctx) -> HTMLResponse:
@@ -175,8 +187,10 @@ async def api_ocr(
     account = getattr(request.state, "user", None) and request.state.user.username
     # ค่า "__new__" คือผู้ใช้เลือก "+ ชื่อใหม่" ในรายการ แล้วไปพิมพ์ในช่องข้าง ๆ
     def pick(choice: str, typed: str) -> str | None:
-        choice = choice.strip()
-        return (typed.strip() or None) if choice == "__new__" else (choice or None)
+        raw = typed if choice.strip() == "__new__" else choice
+        # clean_person_name ตัดอักขระล่องหนและปฏิเสธค่า sentinel
+        # ไม่งั้นจะได้ชื่อที่ว่างเปล่าในสายตาคนแต่ระบบนับว่ามีค่า
+        return clean_person_name(raw) or None
 
     uploader = pick(uploaded_by, uploaded_by_new)
     shooter = pick(photographer, photographer_new) or uploader

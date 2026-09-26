@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -236,9 +237,26 @@ def list_staff(conn: psycopg.Connection) -> list[dict[str, Any]]:
     return cur.fetchall()
 
 
+# ค่าที่ฟอร์มใช้สื่อว่า "ขอพิมพ์ชื่อใหม่" ห้ามหลุดเข้าไปเป็นชื่อคนจริง
+# ไม่งั้นจะโผล่เป็นตัวเลือกซ้ำในรายการ และคนที่เลือกมันจะถูกตีความเป็น sentinel ตลอดไป
+NEW_NAME_SENTINEL = "__new__"
+
+# อักขระที่มองไม่เห็น (zero-width, BOM) .strip() เอาออกไม่ได้
+# ถ้าปล่อยผ่านจะได้ชื่อที่ว่างเปล่าในสายตาคน แต่ระบบนับว่ามีค่า
+_INVISIBLE = re.compile(r"[\u200b-\u200f\u2028\u2029\ufeff\u00ad]")
+
+
+def clean_person_name(name: str | None) -> str:
+    """ชื่อคนที่ใช้ได้จริง — ตัดอักขระล่องหนออก และปฏิเสธค่า sentinel"""
+    cleaned = _INVISIBLE.sub("", str(name or "")).strip()
+    if cleaned == NEW_NAME_SENTINEL:
+        return ""
+    return cleaned
+
+
 def add_staff(conn: psycopg.Connection, name: str, created_by: str | None = None) -> bool:
     """เพิ่มชื่อเข้ารายการ คืน False ถ้าชื่อซ้ำ (เทียบแบบไม่สนตัวพิมพ์และช่องว่างหัวท้าย)"""
-    name = (name or "").strip()
+    name = clean_person_name(name)
     if not name:
         return False
     cur = conn.execute(
