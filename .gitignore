@@ -243,7 +243,9 @@ secrets.json
 # --- PII: รูปใบฝากรถจริง + ground truth -----------------------------------
 # example/ = ภาพถ่ายใบฝากรถลายมือของเจ้าของรถจริง + label.json (ชื่อ/เบอร์/ทะเบียน)
 example/
-!example/.gitkeep
+# บรรทัดล่างไม่มี / ท้าย เพื่อกัน symlink ชื่อ example ด้วย
+# ("example/" แมตช์เฉพาะโฟลเดอร์จริง ไม่แมตช์ symlink ซึ่ง git นับเป็นไฟล์)
+example
 
 # --- PII: ผลลัพธ์ LLM (มีข้อมูลเดียวกับ example/ + usage/cost data) --------
 bench/out/
