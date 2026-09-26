@@ -249,6 +249,9 @@ example
 
 # --- PII: ผลลัพธ์ LLM (มีข้อมูลเดียวกับ example/ + usage/cost data) --------
 bench/out/
+# ชุดทดสอบเทียบวิธี crop: รูปใบจริง + cases.json ที่มีชื่อ/เบอร์/ทะเบียนเป็น ground truth
+bench/crop_cases/
+bench/crop_out/
 out/
 **/out/
 
