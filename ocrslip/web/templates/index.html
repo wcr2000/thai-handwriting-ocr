@@ -43,4 +43,17 @@
 {% endif %}
 
 <div id="result"></div>
+
+<script>
+  // จำชื่อคนอัปโหลดไว้ในเครื่องนี้ จะได้ไม่ต้องพิมพ์ใหม่ทุกครั้ง
+  // (staff ใช้บัญชีร่วมกัน แต่ละเครื่องมักเป็นของคนเดิม)
+  (function () {
+    var box = document.getElementById('uploaded_by');
+    if (!box) return;
+    try { box.value = box.value || localStorage.getItem('uploaded_by') || ''; } catch (e) {}
+    box.form.addEventListener('submit', function () {
+      try { localStorage.setItem('uploaded_by', box.value.trim()); } catch (e) {}
+    });
+  })();
+</script>
 {% endblock %}
