@@ -117,6 +117,19 @@ def add_image(
     )
 
 
+def replace_image(
+    conn: psycopg.Connection, slip_id: str, kind: str, jpeg: bytes, size: tuple[int, int]
+) -> None:
+    """เปลี่ยนรูปของใบนี้เป็นไฟล์ใหม่ (ใช้ตอน reprocess ภาพที่ crop ผิด)
+
+    ลบของเดิมก่อนเพื่อไม่ให้เหลือรูปเก่าค้าง เพราะ get_image หยิบรูปที่เก่าที่สุดของ kind นั้น
+    """
+    conn.execute(
+        f"DELETE FROM {DB_SCHEMA}.slip_images WHERE slip_id = %s AND kind = %s", (slip_id, kind)
+    )
+    add_image(conn, slip_id, kind, jpeg, size)
+
+
 def image_seen(conn: psycopg.Connection, jpeg: bytes) -> bool:
     """เคยอัปโหลดรูปนี้ (byte ตรงกันเป๊ะ) มาก่อนหรือยัง"""
     cur = conn.execute(
