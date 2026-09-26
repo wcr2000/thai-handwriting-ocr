@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>รายชื่อเจ้าหน้าที่ / อาสาสมัคร</h2>
+  <p class="muted">ชื่อในรายการนี้จะขึ้นให้เลือกตอนอัปโหลดใบฝากรถ ·
+     ชื่อใหม่ที่พิมพ์เองตอนอัปจะถูกเพิ่มเข้ามาที่นี่อัตโนมัติ</p>
+  {% if error %}<div class="err">{{ error }}</div>{% endif %}
+  <form method="post" action="/staff" class="row" style="align-items:flex-end; gap:.6rem">
+    <div style="flex:1 1 260px">
+      <label for="name">เพิ่มชื่อใหม่</label>
+      <input type="text" id="name" name="name" placeholder="เช่น สมชาย ใจดี" required>
+    </div>
+    <div><button type="submit">เพิ่ม</button></div>
+  </form>
+</div>
+
+<div class="card">
+  <table>
+    <tr><th>ชื่อ</th><th>อัปโหลดไปแล้ว</th><th>สถานะ</th><th>เพิ่มเมื่อ</th><th></th></tr>
+    {% for s in staff %}
+    <tr>
+      <td>{{ s.name }}</td>
+      <td>{{ s.slips }} ใบ</td>
+      <td>{% if s.active %}<span class="badge ok">ใช้งานอยู่</span>
+          {% else %}<span class="badge">ปิดใช้งาน</span>{% endif %}</td>
+      <td class="muted">{{ s.created_at.strftime('%d/%m/%Y') if s.created_at else '—' }}</td>
+      <td>
+        <form method="post" action="/staff/{{ s.id }}/toggle" style="display:inline">
+          <input type="hidden" name="active" value="{{ 'false' if s.active else 'true' }}">
+          <button type="submit" class="ghost" style="padding:.3rem .7rem">
+            {{ 'ปิดใช้งาน' if s.active else 'เปิดใช้งาน' }}</button>
+        </form>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5" class="muted">ยังไม่มีรายชื่อ</td></tr>
+    {% endfor %}
+  </table>
+  <p class="muted">ปิดใช้งานแทนการลบ เพื่อให้ใบเก่าที่บันทึกชื่อนี้ไว้ยังตามรอยได้</p>
+</div>
+{% endblock %}

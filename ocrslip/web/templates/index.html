@@ -5,6 +5,22 @@
   <p class="muted">ถ่ายจากมือถือหรือเลือกจากคลังรูปได้ อัปโหลดหลายใบพร้อมกันได้ · รองรับ HEIC จาก iPhone · ทุกใบจะเข้าคิวรอคนตรวจก่อนเสมอ</p>
   <form hx-post="/api/ocr" hx-target="#result" hx-encoding="multipart/form-data"
         hx-indicator="#busy" hx-disabled-elt="button">
+    <div class="row">
+      <div class="col">
+        <label for="uploaded_by">ชื่อคุณ (คนอัปโหลด)</label>
+        <input type="text" id="uploaded_by" name="uploaded_by" list="people" required
+               placeholder="พิมพ์ชื่อ หรือเลือกจากรายชื่อที่เคยใช้" autocomplete="off">
+      </div>
+      <div class="col">
+        <label for="photographer">คนถ่ายรูป <span class="muted">(เว้นว่างถ้าเป็นคุณเอง)</span></label>
+        <input type="text" id="photographer" name="photographer" list="people"
+               placeholder="ชื่อคนที่ถ่ายรูปใบนี้" autocomplete="off">
+      </div>
+    </div>
+    <datalist id="people">
+      {% for person in people %}<option value="{{ person }}"></option>{% endfor %}
+    </datalist>
+
     <label for="files">รูปใบฝากรถ</label>
     <input type="file" id="files" name="files" accept="image/*,.heic,.heif" multiple required>
     <p><button type="submit">อ่านด้วย AI แล้วเข้าคิวตรวจ</button>

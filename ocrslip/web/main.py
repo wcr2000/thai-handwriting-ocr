@@ -20,8 +20,9 @@ from fastapi.templating import Jinja2Templates
 from ..auth import COOKIE_NAME, SESSION_TTL, User, authenticate, make_token, read_token
 from ..config import COOKIE_SECURE, OCR_MODEL, SECRET_KEY, USD_THB
 from ..db import (
-    build_filters, connect, dashboard_stats, export_rows, get_image, get_slip,
-    list_slips, mark_returned, query_slips, review_counts, update_slip,
+    add_staff, build_filters, connect, dashboard_stats, export_rows, get_image, get_slip,
+    known_people, list_slips, list_staff, mark_returned, query_slips, review_counts,
+    set_staff_active, update_slip,
 )
 from ..review import REASON_LABELS, evaluate
 from ..search import search as fuzzy_search
@@ -36,7 +37,7 @@ _SECRET = SECRET_KEY or secrets.token_urlsafe(32)
 # หน้าที่เข้าได้โดยไม่ต้องล็อกอิน
 PUBLIC_PATHS = ("/login", "/static", "/health", "/favicon.ico")
 # หน้าที่เฉพาะ admin เท่านั้น — จุดที่ย้อนกลับไม่ได้ หรือเป็นข้อมูลส่วนตัวทั้งก้อน
-ADMIN_ONLY = ("/table", "/dashboard", "/export.xlsx")
+ADMIN_ONLY = ("/table", "/dashboard", "/export.xlsx", "/staff")
 ADMIN_ONLY_SUFFIX = ("/return", "/reject")
 app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 templates = Jinja2Templates(directory=HERE / "templates")
@@ -122,17 +123,41 @@ def logout():
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
     with connect() as conn:
-        return render(request, "index.html", counts=review_counts(conn), model=OCR_MODEL)
+        return render(request, "index.html", counts=review_counts(conn), model=OCR_MODEL,
+                      people=known_people(conn))
 
 
 @app.post("/api/ocr", response_class=HTMLResponse)
-async def api_ocr(request: Request, files: list[UploadFile], created_by: str = Form("")):
+async def api_ocr(
+    request: Request,
+    files: list[UploadFile],
+    uploaded_by: str = Form(""),
+    photographer: str = Form(""),
+):
     """อัปโหลดได้หลายใบพร้อมกัน — ทุกใบเข้าคิว pending รอคนตรวจเสมอ
 
     ประมวลผลขนานกัน เพราะเวลาเกือบทั้งหมดหมดไปกับการรอ LLM ตอบ
     (คีย์ย้อนหลังเป็นร้อยใบแบบทีละใบจะช้าเกินใช้งาน)
     """
-    created_by = created_by or getattr(request.state, "user", None) and request.state.user.username
+    # created_by = บัญชีที่ล็อกอิน (ปลอมไม่ได้), uploaded_by/photographer = ชื่อคนจริงที่เลือกมา
+    account = getattr(request.state, "user", None) and request.state.user.username
+    uploader = uploaded_by.strip() or None
+    shooter = photographer.strip() or uploader
+
+    # ต้องตรวจฝั่ง server ด้วย เพราะ required ใน HTML ข้ามได้ถ้ายิง API ตรง ๆ
+    # ถ้าปล่อยผ่าน จะได้ใบที่ไม่รู้ว่าใครเป็นคนบันทึก ซึ่งเป็นสิ่งที่ feature นี้มีไว้กันพอดี
+    if not uploader:
+        return render(request, "partials/upload_result.html", results=[],
+                      uploader=None, shooter=None,
+                      error="ต้องระบุชื่อคนอัปโหลดก่อน จะได้รู้ว่าใบนี้ใครเป็นคนบันทึก")
+    # ชื่อที่ยังไม่อยู่ในรายการ ให้เพิ่มเข้าไปเลย ไม่บล็อกคนหน้างานตอนฉุกเฉิน
+    # admin ไปปิดหรือจัดระเบียบทีหลังได้ที่หน้า /staff
+    with connect() as conn:
+        for person in {uploader, shooter}:
+            if person:
+                add_staff(conn, person, created_by=account)
+        conn.commit()
+
     uploads = [(f.filename, await f.read()) for f in files]
     uploads = [(name, raw) for name, raw in uploads if raw]
 
@@ -140,13 +165,15 @@ async def api_ocr(request: Request, files: list[UploadFile], created_by: str = F
         name, raw = item
         try:
             with connect() as conn:  # หนึ่ง connection ต่อหนึ่ง thread
-                return {**ingest(conn, raw, created_by=created_by or None), "filename": name}
+                return {**ingest(conn, raw, created_by=account,
+                                 uploaded_by=uploader, photographer=shooter), "filename": name}
         except Exception as exc:  # ใบเดียวพังต้องไม่ทำให้ทั้ง batch ล่ม
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "filename": name}
 
     with ThreadPoolExecutor(max_workers=min(6, max(1, len(uploads)))) as pool:
         results = list(pool.map(one, uploads))
-    return render(request, "partials/upload_result.html", results=results)
+    return render(request, "partials/upload_result.html", results=results,
+                  uploader=uploader, shooter=shooter)
 
 
 @app.get("/review", response_class=HTMLResponse)
@@ -270,6 +297,37 @@ def image(slip_id: str, kind: str = "processed"):
                     headers={"Cache-Control": "private, max-age=86400"})
 
 
+@app.get("/staff", response_class=HTMLResponse)
+def staff_page(request: Request, error: str = ""):
+    with connect() as conn:
+        return render(request, "staff.html", staff=list_staff(conn), error=error)
+
+
+@app.post("/staff")
+async def staff_add(request: Request):
+    form = await request.form()
+    name = str(form.get("name", "")).strip()
+    account = getattr(request.state, "user", None) and request.state.user.username
+    error = ""
+    if not name:
+        error = "กรุณากรอกชื่อ"
+    else:
+        with connect() as conn:
+            if not add_staff(conn, name, created_by=account):
+                error = f"มีชื่อ “{name}” อยู่ในรายการแล้ว"
+            conn.commit()
+    return RedirectResponse(f"/staff?error={quote(error)}" if error else "/staff", status_code=303)
+
+
+@app.post("/staff/{staff_id}/toggle")
+async def staff_toggle(request: Request, staff_id: int):
+    form = await request.form()
+    with connect() as conn:
+        set_staff_active(conn, staff_id, str(form.get("active", "")) == "true")
+        conn.commit()
+    return RedirectResponse("/staff", status_code=303)
+
+
 @app.get("/table", response_class=HTMLResponse)
 def table_view(
     request: Request,
@@ -310,7 +368,8 @@ def export_xlsx(
     ws = wb.active
     ws.title = "ใบฝากรถ"
     headers = ["ชื่อ", "เบอร์โทร", "ทะเบียน", "จังหวัด", "ยี่ห้อ", "ประเภท", "ที่จอด",
-               "วันที่ฝาก", "สถานะตรวจ", "สถานะรถ", "คืนเมื่อ", "ผู้คืน", "model", "บันทึกเมื่อ"]
+               "วันที่ฝาก", "สถานะตรวจ", "สถานะรถ", "คืนเมื่อ", "ผู้คืน",
+               "คนอัปโหลด", "คนถ่ายรูป", "คนตรวจ", "model", "บันทึกเมื่อ"]
     ws.append(headers)
     filters = build_filters(q=q, review_status=review_status,
                             car_status=car_status, car_type=car_type)
@@ -320,7 +379,8 @@ def export_xlsx(
                 r["name"], r["tel"], r["plate_raw"], r["province"], r["brand"], r["car_type"],
                 r["location"], r["deposit_date"], r["review_status"], r["car_status"],
                 r["returned_at"].replace(tzinfo=None) if r["returned_at"] else None,
-                r["returned_by"], r["ocr_model"],
+                r["returned_by"],
+                r["uploaded_by"], r["photographer"], r["reviewed_by"], r["ocr_model"],
                 r["created_at"].replace(tzinfo=None) if r["created_at"] else None,
             ])
     for i, h in enumerate(headers, 1):

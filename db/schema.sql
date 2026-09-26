@@ -51,7 +51,12 @@ CREATE TABLE IF NOT EXISTS ocr_dhammakaya.slips (
     ocr_latency_s   numeric(8, 2) NOT NULL DEFAULT 0,
     raw_ocr         jsonb NOT NULL DEFAULT '{}'::jsonb,
 
+    -- created_by = บัญชีที่ล็อกอิน (staff/admin) ปลอมไม่ได้ ใช้เป็น audit trail
     created_by      text,
+    -- uploaded_by / photographer = ชื่อคนจริงที่เลือกตอนอัปโหลด
+    -- เพราะ staff ใช้บัญชีร่วมกันหลายคน ถ้าดูแค่ created_by จะเป็น "staff" เหมือนกันหมด
+    uploaded_by     text,
+    photographer    text,
     created_at      timestamptz NOT NULL DEFAULT now(),
     updated_at      timestamptz NOT NULL DEFAULT now()
 );
@@ -68,6 +73,19 @@ CREATE TABLE IF NOT EXISTS ocr_dhammakaya.slip_images (
     bytes      bytea NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now()
 );
+
+-- รายชื่อเจ้าหน้าที่/อาสาสมัคร สำหรับให้เลือกตอนอัปโหลด
+-- แยกจากบัญชีล็อกอิน เพราะ staff ใช้บัญชีร่วมกันแต่เป็นคนละคน
+CREATE TABLE IF NOT EXISTS ocr_dhammakaya.staff_members (
+    id         bigserial PRIMARY KEY,
+    name       text NOT NULL,
+    active     boolean NOT NULL DEFAULT true,
+    note       text,
+    created_by text,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS staff_members_name_key
+    ON ocr_dhammakaya.staff_members (lower(btrim(name)));
 
 -- ทุกการแก้ค่าโดยคน เก็บไว้ทั้งหมด (ใช้ดูว่า model พลาด field ไหนบ่อย)
 CREATE TABLE IF NOT EXISTS ocr_dhammakaya.slip_edits (
@@ -118,3 +136,8 @@ ALTER TABLE ocr_dhammakaya.slips ADD COLUMN IF NOT EXISTS ocr_cost_usd   numeric
 ALTER TABLE ocr_dhammakaya.slips ADD COLUMN IF NOT EXISTS ocr_tokens_in  integer NOT NULL DEFAULT 0;
 ALTER TABLE ocr_dhammakaya.slips ADD COLUMN IF NOT EXISTS ocr_tokens_out integer NOT NULL DEFAULT 0;
 ALTER TABLE ocr_dhammakaya.slips ADD COLUMN IF NOT EXISTS ocr_latency_s  numeric(8, 2) NOT NULL DEFAULT 0;
+
+ALTER TABLE ocr_dhammakaya.slips ADD COLUMN IF NOT EXISTS uploaded_by  text;
+ALTER TABLE ocr_dhammakaya.slips ADD COLUMN IF NOT EXISTS photographer text;
+CREATE INDEX IF NOT EXISTS slips_uploaded_by_idx  ON ocr_dhammakaya.slips (uploaded_by);
+CREATE INDEX IF NOT EXISTS slips_photographer_idx ON ocr_dhammakaya.slips (photographer);
