@@ -1,7 +1,11 @@
 """Preprocessing ใบฝากรถ: จับมุมกระดาษ -> warp -> หมุนให้ด้านยาวเป็นแนวนอน -> ปรับสี
 
-ภาพต้นทางเป็นรูปถ่ายมือถือ: สลิปแผ่นเล็กวางบนโต๊ะไม้ มักถ่ายตะแคง 90/180 องศา
-เขียนด้วยปากกาน้ำเงินจาง จึงห้าม binarize แรงเพราะเส้นปากกาจะหาย
+ภาพต้นทางเป็นรูปถ่ายมือถือ: สลิปแผ่นเล็กวางบนพื้นหลากหลาย (โต๊ะไม้สีส้ม, โต๊ะ/ผนังสีขาวเทา)
+มักถ่ายตะแคง 90/180 องศา เขียนด้วยปากกาน้ำเงินจาง จึงห้าม binarize แรงเพราะเส้นปากกาจะหาย
+
+การหาขอบกระดาษใช้หลายวิธีพร้อมกันแล้วให้คะแนน เพราะวิธีเดียวเอาไม่อยู่ทุกพื้นหลัง
+และถ้าไม่มี candidate ไหนน่าเชื่อถือพอ จะคืน None ให้ caller ใช้ภาพเต็มแทน —
+crop ผิดอันตรายกว่าไม่ crop เพราะภาพจะถูกบิด/หมุน/ตัดขอบโดยที่ไม่มีใครรู้
 """
 
 from __future__ import annotations
@@ -35,8 +39,23 @@ def _order_quad(pts: np.ndarray) -> np.ndarray:
     )
 
 
+# รูปร่างของใบฝากรถจริง วัดจากใบที่ crop สำเร็จ: อัตราส่วนด้านยาว/ด้านสั้น 1.96-2.25
+# และกินพื้นที่ 20-35% ของเฟรม เผื่อช่วงให้กว้างกว่าที่วัดได้พอสมควร กันใบที่ถ่ายใกล้/ไกลผิดปกติ
+SLIP_AR = 2.1
+AR_RANGE = (1.45, 3.4)
+AREA_RANGE = (0.03, 0.55)
+MIN_RECTANGULARITY = 0.8    # convex hull ต้องเต็ม minAreaRect เกินเท่านี้ ไม่งั้นไม่ใช่กระดาษสี่เหลี่ยม
+
+# texture_mask จับได้แค่บริเวณที่มีหมึก ซึ่งอยู่ในกรอบพิมพ์ที่เว้นจากขอบกระดาษเข้ามา
+# จึงต้องขยาย quad ออกเล็กน้อยเพื่อดึงขอบกระดาษจริงกลับมา ไม่งั้นตัวหนังสือริมขอบจะโดนตัด
+TEXTURE_GROW = 0.12
+
+
 def paper_mask(bgr: np.ndarray) -> np.ndarray:
-    """mask ของกระดาษ: สว่าง + แทบไม่มีสี (โต๊ะไม้เป็นสีส้มอิ่มสี จึงถูกตัดออก)"""
+    """mask จากสี: สว่าง + แทบไม่มีสี — ใช้ได้เมื่อพื้นหลังอิ่มสี (โต๊ะไม้สีส้ม)
+
+    พื้นหลังขาว/เทาจะหลุด mask นี้มาด้วย จึงต้องมี texture_mask คู่กันเสมอ
+    """
     hsv = cv2.cvtColor(cv2.GaussianBlur(bgr, (7, 7), 0), cv2.COLOR_BGR2HSV)
     s, v = hsv[:, :, 1], hsv[:, :, 2]
     # ใช้ Otsu หา threshold เองจากการกระจายของภาพ แทนการ hardcode ค่าคงที่
@@ -47,41 +66,117 @@ def paper_mask(bgr: np.ndarray) -> np.ndarray:
     return cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((9, 9), np.uint8))
 
 
-def find_paper_quad(bgr: np.ndarray) -> np.ndarray | None:
-    """หา 4 มุมของกระดาษ คืน None ถ้าไม่มั่นใจ (ให้ caller fallback ไปใช้ภาพเต็ม)"""
-    h, w = bgr.shape[:2]
-    area_total = h * w
+def texture_mask(bgr: np.ndarray) -> np.ndarray:
+    """mask จากลวดลาย: ในใบมีเส้นประพิมพ์ + ลายมือ ส่วนโต๊ะ/ผนังเรียบ
 
-    mask = paper_mask(bgr)
-    n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
-    best_idx, best_area = None, 0
-    for i in range(1, n):
-        area = stats[i, cv2.CC_STAT_AREA]
-        if area > best_area and 0.03 * area_total < area < 0.95 * area_total:
-            best_idx, best_area = i, area
-    if best_idx is None:
-        return None
+    ใช้ได้แม้พื้นหลังจะขาวพอ ๆ กับกระดาษ เพราะแยกด้วย "ความไม่เรียบ" ไม่ใช่ความสว่าง
+    """
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    # ความต่างของ local max/min ในหน้าต่างเล็ก ๆ — สูงตรงที่มีเส้น ต่ำตรงพื้นเรียบ
+    k = np.ones((9, 9), np.uint8)
+    detail = cv2.subtract(cv2.dilate(gray, k), cv2.erode(gray, k))
+    thr, _ = cv2.threshold(detail, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    mask = (detail >= max(thr, 24)).astype(np.uint8) * 255
 
-    blob = (labels == best_idx).astype(np.uint8) * 255
-    contours, _ = cv2.findContours(blob, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    c = max(contours, key=cv2.contourArea)
+    # เส้นในใบอยู่ห่างกัน ต้องเชื่อมให้เป็นก้อนเดียวก่อน แล้วค่อยลบจุดรบกวนเล็ก ๆ
+    long_side = max(bgr.shape[:2])
+    close = max(int(long_side * 0.04) | 1, 21)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((close, close), np.uint8))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((9, 9), np.uint8))
+    return mask
 
-    # ลอง approx เป็น 4 เหลี่ยมก่อน (ได้ perspective ที่แม่นกว่า) ถ้าไม่ได้ค่อยใช้ minAreaRect
+
+def _expand_quad(quad: np.ndarray, frac: float, shape: tuple[int, int]) -> np.ndarray:
+    """ขยาย quad ออกจากจุดกึ่งกลางตามสัดส่วนที่กำหนด แล้วหนีบไม่ให้เลยขอบภาพ"""
+    if frac <= 0:
+        return quad
+    center = quad.mean(axis=0)
+    grown = center + (quad - center) * (1.0 + frac)
+    h, w = shape
+    grown[:, 0] = np.clip(grown[:, 0], 0, w - 1)
+    grown[:, 1] = np.clip(grown[:, 1], 0, h - 1)
+    return grown.astype(np.float32)
+
+
+def _quad_from_contour(c: np.ndarray) -> np.ndarray:
+    """contour -> 4 มุม ลอง approx ก่อน (ได้ perspective แม่นกว่า) ไม่ได้ค่อยใช้ minAreaRect"""
     peri = cv2.arcLength(c, True)
-    quad = None
     for eps in (0.02, 0.03, 0.04, 0.06):
         approx = cv2.approxPolyDP(c, eps * peri, True)
         if len(approx) == 4 and cv2.isContourConvex(approx):
-            quad = approx.astype(np.float32)
+            quad = approx.astype(np.float32).reshape(4, 2)
+            # กันกรณี approx เบี้ยวจนกินพื้นที่นอกกระดาษ
+            if cv2.contourArea(quad) <= 1.25 * cv2.contourArea(c):
+                return quad
             break
-    if quad is None:
-        quad = cv2.boxPoints(cv2.minAreaRect(c)).astype(np.float32)
+    return cv2.boxPoints(cv2.minAreaRect(c)).astype(np.float32).reshape(4, 2)
 
-    # กันกรณี approx เบี้ยวจนกินพื้นที่นอกกระดาษ: ถ้าใหญ่กว่า contour จริงมาก ใช้ minAreaRect แทน
-    if cv2.contourArea(quad) > 1.25 * cv2.contourArea(c):
-        quad = cv2.boxPoints(cv2.minAreaRect(c)).astype(np.float32)
 
-    return _order_quad(quad)
+def _score_quad(quad: np.ndarray, hull: np.ndarray, area_total: float) -> float | None:
+    """ให้คะแนนว่า quad นี้ "หน้าตาเหมือนใบฝากรถ" แค่ไหน คืน None ถ้าไม่ผ่านเกณฑ์
+
+    เกณฑ์มาจากรูปร่างของใบจริง ไม่ใช่จากสีพื้นหลัง จึงใช้ได้กับทุกสถานที่ถ่าย
+    """
+    (_, _), (w, h), _ = cv2.minAreaRect(hull)
+    if min(w, h) < 1:
+        return None
+    ar = max(w, h) / min(w, h)
+    if not AR_RANGE[0] <= ar <= AR_RANGE[1]:
+        return None
+
+    quad_area = cv2.contourArea(quad)
+    if not AREA_RANGE[0] * area_total <= quad_area <= AREA_RANGE[1] * area_total:
+        return None
+
+    rectangularity = cv2.contourArea(hull) / max(w * h, 1)
+    if rectangularity < MIN_RECTANGULARITY:
+        return None
+
+    # ยิ่งสัดส่วนใกล้ใบจริง และยิ่งเป็นสี่เหลี่ยมเต็ม ๆ ยิ่งได้คะแนนสูง
+    ar_fit = 1.0 / (1.0 + abs(np.log(ar / SLIP_AR)) * 3)
+    return float(ar_fit * rectangularity)
+
+
+def _quad_candidates(
+    mask: np.ndarray, shape: tuple[int, int], *, grow: float = 0.0
+) -> list[tuple[float, np.ndarray]]:
+    """ทุกก้อนใน mask ที่ผ่านเกณฑ์รูปร่าง พร้อมคะแนน
+
+    ใช้ convex hull ของก้อนเป็นตัวตัดสิน เพราะกระดาษเป็นรูปนูน ส่วนรอยหยัก/รูโหว่
+    ที่เกิดจากช่องว่างระหว่างตัวหนังสือไม่ควรถูกนับเป็นความไม่เป็นสี่เหลี่ยม
+    """
+    area_total = float(shape[0] * shape[1])
+    out: list[tuple[float, np.ndarray]] = []
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
+    for i in range(1, n):
+        if not AREA_RANGE[0] * area_total < stats[i, cv2.CC_STAT_AREA] < AREA_RANGE[1] * area_total:
+            continue
+        blob = (labels == i).astype(np.uint8) * 255
+        contours, _ = cv2.findContours(blob, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            continue
+        hull = cv2.convexHull(max(contours, key=cv2.contourArea))
+        quad = _quad_from_contour(hull)
+        score = _score_quad(quad, hull, area_total)
+        if score is not None:
+            out.append((score, _expand_quad(quad, grow, shape)))
+    return out
+
+
+def find_paper_quad(bgr: np.ndarray) -> np.ndarray | None:
+    """หา 4 มุมของกระดาษ คืน None ถ้าไม่มั่นใจ (ให้ caller fallback ไปใช้ภาพเต็ม)
+
+    ลองทั้ง mask จากสีและ mask จากลวดลาย แล้วเลือกอันที่หน้าตาเหมือนใบฝากรถที่สุด
+    """
+    shape = bgr.shape[:2]
+    candidates = (
+        _quad_candidates(paper_mask(bgr), shape)
+        + _quad_candidates(texture_mask(bgr), shape, grow=TEXTURE_GROW)
+    )
+    if not candidates:
+        return None
+
+    return _order_quad(max(candidates, key=lambda t: t[0])[1])
 
 
 def warp_quad(bgr: np.ndarray, quad: np.ndarray, pad: int = 12) -> np.ndarray:
@@ -128,7 +223,9 @@ def preprocess(source: str | Path | bytes) -> PreprocessResult:
     bgr = to_bgr(raw_pil)
 
     quad = find_paper_quad(bgr)
-    cropped = landscape(warp_quad(bgr, quad) if quad is not None else bgr)
+    # หมุนให้เป็นแนวนอนเฉพาะตอน crop สำเร็จ เพราะรู้แน่ว่าภาพที่ได้คือตัวใบ
+    # ถ้าหาไม่เจอแล้วไปหมุนทั้งเฟรม ใบที่ถ่ายมาตรง ๆ จะกลายเป็นตะแคงแทน
+    cropped = landscape(warp_quad(bgr, quad)) if quad is not None else bgr
 
     return PreprocessResult(
         raw=raw_pil,
