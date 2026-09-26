@@ -48,7 +48,10 @@
   <div class="rev-img">
     <a href="/image/{{ slip.id }}?kind=original" target="_blank" title="คลิกเพื่อดูรูปต้นฉบับเต็ม">
       <img src="/image/{{ slip.id }}?kind=processed" alt="ใบฝากรถ"></a>
-    <p class="muted" style="margin:.4rem 0 0">คลิกที่รูปเพื่อดูต้นฉบับก่อน crop ·
+    <p class="muted" style="margin:.4rem 0 0">
+       อัปโดย <strong>{{ slip.uploaded_by or '—' }}</strong>{% if slip.photographer and slip.photographer != slip.uploaded_by %}
+       · ถ่ายโดย <strong>{{ slip.photographer }}</strong>{% endif %} ·
+       คลิกที่รูปเพื่อดูต้นฉบับก่อน crop ·
        อ่านโดย <code>{{ slip.ocr_model }}</code>
        {% if slip.ocr_cost_usd %}· ใบนี้ {{ '%.3f'|format(slip.ocr_cost_usd|float * usd_thb) }} บาท{% endif %}
        {% if slip.ocr_latency_s %}· {{ slip.ocr_latency_s }} วิ{% endif %}</p>

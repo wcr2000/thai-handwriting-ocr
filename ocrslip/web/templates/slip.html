@@ -17,6 +17,12 @@
         <tr><th>ที่จอด</th><td>{{ slip.location or '—' }}</td></tr>
         <tr><th>วันที่ฝาก</th><td>{{ slip.deposit_date or '—' }}</td></tr>
         <tr><th>สถานะตรวจ</th><td>{{ slip.review_status }}</td></tr>
+        <tr><th>คนอัปโหลด</th><td>{{ slip.uploaded_by or '—' }}
+            <span class="muted">(บัญชี {{ slip.created_by or '—' }})</span></td></tr>
+        <tr><th>คนถ่ายรูป</th><td>{{ slip.photographer or slip.uploaded_by or '—' }}</td></tr>
+        <tr><th>คนตรวจ</th><td>{{ slip.reviewed_by or '—' }}
+            {% if slip.reviewed_at %}<span class="muted">{{ slip.reviewed_at.strftime('%d/%m/%Y %H:%M') }}</span>{% endif %}</td></tr>
+        <tr><th>บันทึกเมื่อ</th><td>{{ slip.created_at.strftime('%d/%m/%Y %H:%M') if slip.created_at else '—' }}</td></tr>
         <tr><th>สถานะรถ</th><td>{{ slip.car_status }}{% if slip.returned_at %} เมื่อ {{ slip.returned_at.strftime('%d/%m/%Y %H:%M') }} โดย {{ slip.returned_by or '—' }}{% endif %}</td></tr>
       </table>
     </div>

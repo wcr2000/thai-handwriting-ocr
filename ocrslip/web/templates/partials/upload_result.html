@@ -1,5 +1,9 @@
+{% if error %}
+<div class="card"><div class="err">{{ error }}</div></div>
+{% else %}
 <div class="card">
   <h3>ผลการอ่าน {{ results|length }} ใบ</h3>
+  <p class="muted">บันทึกในชื่อ: <strong>{{ uploader or "—" }}</strong>{% if shooter and shooter != uploader %} · ถ่ายโดย <strong>{{ shooter }}</strong>{% endif %}</p>
   <table>
     <tr><th>ไฟล์</th><th>ชื่อ</th><th>เบอร์</th><th>ทะเบียน</th><th>สถานะ</th><th></th></tr>
     {% for r in results %}
@@ -24,3 +28,4 @@
   </table>
   <p><a href="/review">ไปที่คิวตรวจสอบ →</a></p>
 </div>
+{% endif %}

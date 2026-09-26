@@ -47,7 +47,7 @@
     <tr>
       {{ sorth('name', 'ชื่อ') }}{{ sorth('tel', 'เบอร์โทร') }}{{ sorth('plate', 'ทะเบียน') }}
       {{ sorth('brand', 'ยี่ห้อ') }}<th>ประเภท</th><th>ที่จอด</th>{{ sorth('date', 'วันที่ฝาก') }}
-      {{ sorth('review_status', 'ตรวจ') }}{{ sorth('car_status', 'รถ') }}<th></th>
+      {{ sorth('uploaded_by', 'คนอัป') }}{{ sorth('review_status', 'ตรวจ') }}{{ sorth('car_status', 'รถ') }}<th></th>
     </tr>
     {% for r in rows %}
     <tr>
@@ -58,6 +58,8 @@
       <td>{{ r.car_type or '—' }}</td>
       <td>{{ r.location or '—' }}</td>
       <td>{{ r.deposit_date or '—' }}</td>
+      <td>{{ r.uploaded_by or '—' }}{% if r.photographer and r.photographer != r.uploaded_by %}
+          <span class="muted">/ ถ่าย {{ r.photographer }}</span>{% endif %}</td>
       <td>
         {% if r.review_status == 'approved' %}<span class="badge ok">อนุมัติ</span>
         {% elif r.review_status == 'rejected' %}<span class="badge bad">ตีกลับ</span>
@@ -70,7 +72,7 @@
           {% if r.review_status == 'pending' %} · <a href="/review/{{ r.id }}">ตรวจ</a>{% endif %}</td>
     </tr>
     {% else %}
-    <tr><td colspan="10" class="muted">ไม่พบข้อมูลตามเงื่อนไขนี้</td></tr>
+    <tr><td colspan="11" class="muted">ไม่พบข้อมูลตามเงื่อนไขนี้</td></tr>
     {% endfor %}
   </table>
   {% if pages > 1 %}

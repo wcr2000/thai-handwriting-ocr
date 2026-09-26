@@ -72,6 +72,8 @@ def insert_slip(
     usage: dict[str, Any] | None = None,
     latency_s: float = 0.0,
     created_by: str | None = None,
+    uploaded_by: str | None = None,
+    photographer: str | None = None,
     review_status: str = "pending",
 ) -> str:
     row = build_row(fields)
@@ -88,6 +90,9 @@ def insert_slip(
         ocr_latency_s=round(latency_s, 2),
         raw_ocr=json.dumps(raw_ocr, ensure_ascii=False),
         created_by=created_by,
+        uploaded_by=uploaded_by,
+        # ถ้าไม่ได้ระบุคนถ่าย ให้ถือว่าเป็นคนเดียวกับคนอัปโหลด
+        photographer=photographer or uploaded_by,
     )
     cols = ", ".join(row)
     holders = ", ".join(f"%({c})s" for c in row)
@@ -212,6 +217,45 @@ def list_slips(
     return cur.fetchall()
 
 
+def known_people(conn: psycopg.Connection) -> list[str]:
+    """รายชื่อที่ยังใช้งานอยู่ ไว้ให้เลือกตอนอัปโหลด"""
+    cur = conn.execute(
+        f"SELECT name FROM {DB_SCHEMA}.staff_members WHERE active ORDER BY name"
+    )
+    return [r["name"] for r in cur.fetchall()]
+
+
+def list_staff(conn: psycopg.Connection) -> list[dict[str, Any]]:
+    """รายชื่อทั้งหมดพร้อมจำนวนใบที่แต่ละคนอัปโหลดไป (ไว้ให้ admin ดูว่าใครทำอะไรไปเท่าไร)"""
+    cur = conn.execute(
+        f"""SELECT m.*,
+                   (SELECT count(*) FROM {DB_SCHEMA}.slips s WHERE s.uploaded_by = m.name) AS slips
+            FROM {DB_SCHEMA}.staff_members m
+            ORDER BY m.active DESC, m.name"""
+    )
+    return cur.fetchall()
+
+
+def add_staff(conn: psycopg.Connection, name: str, created_by: str | None = None) -> bool:
+    """เพิ่มชื่อเข้ารายการ คืน False ถ้าชื่อซ้ำ (เทียบแบบไม่สนตัวพิมพ์และช่องว่างหัวท้าย)"""
+    name = (name or "").strip()
+    if not name:
+        return False
+    cur = conn.execute(
+        f"""INSERT INTO {DB_SCHEMA}.staff_members (name, created_by) VALUES (%s, %s)
+            ON CONFLICT DO NOTHING RETURNING id""",
+        (name, created_by),
+    )
+    return cur.fetchone() is not None
+
+
+def set_staff_active(conn: psycopg.Connection, staff_id: int, active: bool) -> None:
+    """ปิดการใช้งานแทนการลบ เพื่อให้ใบเก่าที่อ้างชื่อนี้ยังตามรอยได้"""
+    conn.execute(
+        f"UPDATE {DB_SCHEMA}.staff_members SET active = %s WHERE id = %s", (active, staff_id)
+    )
+
+
 def review_counts(conn: psycopg.Connection) -> dict[str, int]:
     cur = conn.execute(
         f"""SELECT
@@ -231,7 +275,8 @@ def export_rows(conn: psycopg.Connection, filters: tuple[str, dict] | None = Non
     where, params = filters or ("TRUE", {})
     cur = conn.execute(
         f"""SELECT name, tel, plate_raw, province, brand, car_type, location, deposit_date,
-                   review_status, car_status, returned_at, returned_by, ocr_model, created_at
+                   review_status, car_status, returned_at, returned_by,
+                   uploaded_by, photographer, reviewed_by, ocr_model, created_at
             FROM {DB_SCHEMA}.slips WHERE {where} ORDER BY created_at""",
         params,
     )
@@ -273,6 +318,7 @@ def build_filters(
 
 SORTABLE = {
     "created_at": "created_at", "name": "name_norm", "tel": "tel_digits",
+    "uploaded_by": "uploaded_by",
     "plate": "plate_norm", "brand": "brand_norm", "date": "deposit_date",
     "car_status": "car_status", "review_status": "review_status",
 }
@@ -290,7 +336,8 @@ def query_slips(
     rows = conn.execute(
         f"""SELECT id, name, tel, plate_raw, province, brand, car_type, location,
                    deposit_date, review_status, needs_review, review_reason,
-                   car_status, returned_at, returned_by, ocr_model, created_at
+                   car_status, returned_at, returned_by, uploaded_by, photographer,
+                   reviewed_by, ocr_model, created_at
             FROM {DB_SCHEMA}.slips WHERE {where}
             ORDER BY {order} {'DESC' if desc else 'ASC'} NULLS LAST
             LIMIT %(limit)s OFFSET %(offset)s""",
@@ -352,6 +399,7 @@ def dashboard_stats(conn: psycopg.Connection) -> dict[str, Any]:
         "by_type": group("car_type"),
         "by_brand": group("brand_norm"),
         "by_location": group("location"),
+        "by_uploader": group("uploaded_by"),
         "by_day": list(reversed(by_day)),
         "edits": edits,
         "reviewed": reviewed,

@@ -32,7 +32,14 @@ def count_duplicates(conn: psycopg.Connection, fields: dict[str, Any]) -> int:
     return cur.fetchone()["n"]
 
 
-def ingest(conn: psycopg.Connection, raw: bytes, *, created_by: str | None = None) -> dict[str, Any]:
+def ingest(
+    conn: psycopg.Connection,
+    raw: bytes,
+    *,
+    created_by: str | None = None,
+    uploaded_by: str | None = None,
+    photographer: str | None = None,
+) -> dict[str, Any]:
     """ประมวลผลรูป 1 ใบแล้วบันทึกเป็น pending คืนสรุปไว้แสดงผล"""
     pre = preprocess(raw)
     processed_jpeg = encode_jpeg(pre.cropped)
@@ -57,6 +64,8 @@ def ingest(conn: psycopg.Connection, raw: bytes, *, created_by: str | None = Non
         usage=res.usage,
         latency_s=res.latency_s,
         created_by=created_by,
+        uploaded_by=uploaded_by,
+        photographer=photographer,
     )
     add_image(conn, slip_id, "processed", processed_jpeg, pre.cropped.size)
     add_image(conn, slip_id, "original", original_jpeg, pre.raw.size)
