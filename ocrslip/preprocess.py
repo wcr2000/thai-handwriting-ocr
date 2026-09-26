@@ -39,16 +39,22 @@ def _order_quad(pts: np.ndarray) -> np.ndarray:
     )
 
 
-# รูปร่างของใบฝากรถจริง วัดจากใบที่ crop สำเร็จ: อัตราส่วนด้านยาว/ด้านสั้น 1.96-2.25
-# และกินพื้นที่ 20-35% ของเฟรม เผื่อช่วงให้กว้างกว่าที่วัดได้พอสมควร กันใบที่ถ่ายใกล้/ไกลผิดปกติ
+# รูปร่างของใบฝากรถจริง วัดจาก 169 ใบในระบบ: อัตราส่วนด้านยาว/ด้านสั้น 1.7-2.8
+# และกินพื้นที่ 17-45% ของเฟรม เผื่อช่วงให้กว้างกว่าที่วัดได้ กันใบที่ถ่ายใกล้/ไกลผิดปกติ
 SLIP_AR = 2.1
 AR_RANGE = (1.45, 3.4)
-AREA_RANGE = (0.03, 0.55)
+AREA_RANGE = (0.05, 0.55)
+AREA_TYPICAL = 0.25
 MIN_RECTANGULARITY = 0.8    # convex hull ต้องเต็ม minAreaRect เกินเท่านี้ ไม่งั้นไม่ใช่กระดาษสี่เหลี่ยม
 
-# texture_mask จับได้แค่บริเวณที่มีหมึก ซึ่งอยู่ในกรอบพิมพ์ที่เว้นจากขอบกระดาษเข้ามา
-# จึงต้องขยาย quad ออกเล็กน้อยเพื่อดึงขอบกระดาษจริงกลับมา ไม่งั้นตัวหนังสือริมขอบจะโดนตัด
-TEXTURE_GROW = 0.12
+# สัดส่วนพิกเซลที่เป็นหมึกขั้นต่ำในบริเวณที่จะ crop — ใบที่กรอกแล้วมี 0.040-0.108
+# ส่วนของที่ไม่ใช่ใบ (ผ้า/พื้นเรียบ) มี 0.002 จึงตั้งไว้ต่ำ ๆ แค่กันของที่ "ว่างเปล่าชัดเจน"
+MIN_INK = 0.02
+
+# ขยาย quad ออกจากจุดกึ่งกลางก่อน warp — กันตัวหนังสือริมขอบโดนตัด
+# กินพื้นหลังเข้ามานิดหน่อยไม่เป็นไร แต่ตัดตัวหนังสือหายคือข้อมูลหาย
+PAPER_GROW = 0.06     # mask จากสี: ได้ขอบกระดาษอยู่แล้ว เผื่อเฉพาะส่วนที่เงาบังจน mask กินไม่ถึงขอบ
+TEXTURE_GROW = 0.14   # mask จากลวดลาย: จับได้แค่บริเวณหมึกซึ่งอยู่ในกรอบพิมพ์ ต้องเผื่อมากกว่า
 
 
 def paper_mask(bgr: np.ndarray) -> np.ndarray:
@@ -58,12 +64,23 @@ def paper_mask(bgr: np.ndarray) -> np.ndarray:
     """
     hsv = cv2.cvtColor(cv2.GaussianBlur(bgr, (7, 7), 0), cv2.COLOR_BGR2HSV)
     s, v = hsv[:, :, 1], hsv[:, :, 2]
+
     # ใช้ Otsu หา threshold เองจากการกระจายของภาพ แทนการ hardcode ค่าคงที่
     v_thr, _ = cv2.threshold(v, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     s_thr, _ = cv2.threshold(s, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     mask = ((v >= max(v_thr, 110)) & (s <= max(s_thr * 0.9, 60))).astype(np.uint8) * 255
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((15, 15), np.uint8))
     return cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((9, 9), np.uint8))
+
+
+def ink_mask(bgr: np.ndarray) -> np.ndarray:
+    """พิกเซลที่เข้มกว่าพื้นรอบ ๆ อย่างชัดเจน = เส้นพิมพ์ + ลายมือ
+
+    เทียบกับ background ที่ได้จาก median blur แทนค่าคงที่ จะได้ไม่แพ้เงาหรือกระดาษสีครีม
+    """
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY).astype(np.int16)
+    bg = cv2.medianBlur(cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY), 31).astype(np.int16)
+    return ((bg - gray) > 28).astype(np.uint8)
 
 
 def texture_mask(bgr: np.ndarray) -> np.ndarray:
@@ -132,13 +149,25 @@ def _score_quad(quad: np.ndarray, hull: np.ndarray, area_total: float) -> float 
     if rectangularity < MIN_RECTANGULARITY:
         return None
 
-    # ยิ่งสัดส่วนใกล้ใบจริง และยิ่งเป็นสี่เหลี่ยมเต็ม ๆ ยิ่งได้คะแนนสูง
+    # ยิ่งสัดส่วนและขนาดใกล้ใบจริง และยิ่งเป็นสี่เหลี่ยมเต็ม ๆ ยิ่งได้คะแนนสูง
+    #
+    # ขนาดต้องอยู่ในคะแนนด้วย ไม่ใช่แค่ผ่าน/ไม่ผ่าน: เคยเจอมุมของปึกกระดาษเปล่าข้าง ๆ
+    # ที่บังเอิญมีสัดส่วน 2:1 พอดีเลยได้คะแนนสูงกว่าตัวใบจริงที่เอียงนิดหน่อย
     ar_fit = 1.0 / (1.0 + abs(np.log(ar / SLIP_AR)) * 3)
-    return float(ar_fit * rectangularity)
+    area_fit = 1.0 / (1.0 + abs(np.log(quad_area / (AREA_TYPICAL * area_total))) * 1.2)
+    return float(ar_fit * area_fit * rectangularity)
+
+
+def _ink_ratio(quad: np.ndarray, ink: np.ndarray) -> float:
+    """สัดส่วนพิกเซลหมึกภายใน quad"""
+    region = np.zeros(ink.shape, np.uint8)
+    cv2.fillConvexPoly(region, quad.astype(np.int32), 1)
+    return float((ink * region).sum() / max(int(region.sum()), 1))
 
 
 def _quad_candidates(
-    mask: np.ndarray, shape: tuple[int, int], *, grow: float = 0.0
+    mask: np.ndarray, shape: tuple[int, int], *, grow: float = 0.0,
+    ink: np.ndarray | None = None,
 ) -> list[tuple[float, np.ndarray]]:
     """ทุกก้อนใน mask ที่ผ่านเกณฑ์รูปร่าง พร้อมคะแนน
 
@@ -158,8 +187,13 @@ def _quad_candidates(
         hull = cv2.convexHull(max(contours, key=cv2.contourArea))
         quad = _quad_from_contour(hull)
         score = _score_quad(quad, hull, area_total)
-        if score is not None:
-            out.append((score, _expand_quad(quad, grow, shape)))
+        if score is None:
+            continue
+        quad = _expand_quad(quad, grow, shape)
+        # ใบที่กรอกแล้วต้องมีหมึกอยู่ข้างใน — กันไปจับผ้า/พื้นเรียบที่บังเอิญได้รูปร่างเข้าเกณฑ์
+        if ink is not None and _ink_ratio(quad, ink) < MIN_INK:
+            continue
+        out.append((score, quad))
     return out
 
 
@@ -169,9 +203,10 @@ def find_paper_quad(bgr: np.ndarray) -> np.ndarray | None:
     ลองทั้ง mask จากสีและ mask จากลวดลาย แล้วเลือกอันที่หน้าตาเหมือนใบฝากรถที่สุด
     """
     shape = bgr.shape[:2]
+    ink = ink_mask(bgr)
     candidates = (
-        _quad_candidates(paper_mask(bgr), shape)
-        + _quad_candidates(texture_mask(bgr), shape, grow=TEXTURE_GROW)
+        _quad_candidates(paper_mask(bgr), shape, grow=PAPER_GROW, ink=ink)
+        + _quad_candidates(texture_mask(bgr), shape, grow=TEXTURE_GROW, ink=ink)
     )
     if not candidates:
         return None
@@ -200,6 +235,15 @@ def landscape(bgr: np.ndarray) -> np.ndarray:
     """หมุนให้ด้านยาวเป็นแนวนอน (สลิปเป็นแนวนอน) เหลือความกำกวมแค่ 0 vs 180 องศา"""
     h, w = bgr.shape[:2]
     return cv2.rotate(bgr, cv2.ROTATE_90_CLOCKWISE) if h > w else bgr
+
+
+def upright(img: Image.Image, orientation: str) -> Image.Image:
+    """หมุนรูป 180 องศาถ้า model รายงานว่าใบกลับหัว คืนรูปเดิมถ้าไม่ต้องหมุน
+
+    landscape() แก้ได้แค่ 90 องศา เหลือความกำกวม 0 vs 180 ที่ดูจากรูปร่างกระดาษไม่ออก
+    ต้องอ่านตัวหนังสือถึงจะรู้ — ซึ่ง model ทำอยู่แล้ว จึงให้มันบอกมาเลยแทนการเดาเอง
+    """
+    return img.transpose(Image.ROTATE_180) if orientation == "upside_down" else img
 
 
 def enhance(bgr: np.ndarray) -> np.ndarray:

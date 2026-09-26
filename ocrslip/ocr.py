@@ -20,6 +20,7 @@ class OcrResult:
     fields: dict[str, Any]              # ค่าที่อ่านได้ (name, tel, ...)
     confidence: dict[str, float]
     latency_s: float
+    orientation: str = "upright"        # "upside_down" = ต้องหมุนรูป 180 องศาถึงจะอ่านได้ตามปกติ
     usage: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
     raw_text: str | None = None
@@ -117,9 +118,11 @@ def read_slip(
                     text = "".join(b.get("text", "") for b in text)
                 parsed = _extract_json(text)
                 conf = parsed.pop("confidence", None) or {}
+                orientation = parsed.pop("orientation", None)
                 return OcrResult(
                     model=model,
                     fields=canonicalize(parsed),
+                    orientation="upside_down" if orientation == "upside_down" else "upright",
                     confidence={k: float(v) for k, v in conf.items() if isinstance(v, (int, float))},
                     latency_s=round(time.monotonic() - started, 2),
                     usage=body.get("usage", {}),

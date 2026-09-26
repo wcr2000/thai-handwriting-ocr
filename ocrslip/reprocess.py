@@ -1,6 +1,6 @@
 """crop รูปที่เก็บไว้ใหม่ แล้ว OCR ซ้ำเฉพาะใบที่ยังไม่มีคนยืนยัน
 
-ใช้หลังแก้ตัวจับขอบกระดาษ: ใบที่ถ่ายบนพื้นหลังขาวเคยถูก crop ไปโดนพื้นหลังแทนตัวใบ
+ใช้หลังแก้ตัวจับขอบกระดาษ: ใบเก่าถูก crop ไปโดนพื้นหลัง/กระดาษเปล่า หรือโดนตัดขอบ
 ภาพที่ส่งเข้า model จึงเอียง/หมุน/ขอบขาด และอ่านผิดโดยไม่มีสัญญาณเตือน
 
     python -m ocrslip.reprocess            # ดูว่าจะกระทบใบไหนบ้าง (ไม่เขียนอะไร)
@@ -25,7 +25,7 @@ from .config import DB_SCHEMA, OCR_MODEL
 from .db import build_row, connect, get_image, replace_image
 from .imageio import encode_jpeg
 from .ocr import read_slip
-from .preprocess import preprocess
+from .preprocess import preprocess, upright
 from .review import evaluate
 from .web.pipeline import VARIANT, count_duplicates
 
@@ -41,6 +41,7 @@ class Candidate:
     quad_found: bool
     locked: bool          # คนยืนยัน/แก้ข้อมูลใบนี้แล้ว — ห้ามเขียนทับข้อมูล
     lock_reason: str
+    why: str              # เหตุที่ต้องทำใหม่: crop เปลี่ยน / ยังไม่เคยเช็คว่ากลับหัว
 
 
 def _same_size(a: tuple[int, int], b: tuple[int, int]) -> bool:
@@ -48,9 +49,14 @@ def _same_size(a: tuple[int, int], b: tuple[int, int]) -> bool:
 
 
 def find_candidates(conn: psycopg.Connection) -> list[Candidate]:
-    """ใบที่ crop ใหม่แล้วได้ภาพต่างจากเดิม = ใบที่ได้ประโยชน์จากการแก้"""
+    """ใบที่ควรทำใหม่ — crop ใหม่ได้ภาพต่างจากเดิม หรือยังไม่เคยเช็คว่าใบกลับหัวหรือไม่
+
+    การกลับหัว 180 องศาดูจากขนาดภาพไม่ออก ต้องอ่านตัวหนังสือถึงจะรู้ ใบที่เข้าระบบ
+    ก่อนมีการเช็คนี้จึงต้องยิง model ซ้ำ แม้ crop จะออกมาเท่าเดิมเป๊ะก็ตาม
+    """
     rows = conn.execute(
         f"""SELECT s.id::text AS id, s.review_status,
+                   s.raw_ocr ? 'orientation' AS orientation_checked,
                    (SELECT count(*) FROM {DB_SCHEMA}.slip_edits e WHERE e.slip_id = s.id) AS edits,
                    i.width, i.height
             FROM {DB_SCHEMA}.slips s
@@ -65,14 +71,18 @@ def find_candidates(conn: psycopg.Connection) -> list[Candidate]:
             continue
         pre = preprocess(original)
         old, new = (r["width"], r["height"]), pre.cropped.size
-        if _same_size(old, new):
+
+        why = "" if _same_size(old, new) else "crop เปลี่ยน"
+        if not why and not r["orientation_checked"]:
+            why = "ยังไม่เคยเช็คว่ากลับหัว"
+        if not why:
             continue
 
         locked = r["review_status"] != "pending" or r["edits"] > 0
         reason = "คนยืนยันแล้ว" if r["review_status"] != "pending" else (
             "คนแก้ข้อมูลแล้ว" if r["edits"] else ""
         )
-        out.append(Candidate(r["id"], old, new, pre.quad_found, locked, reason))
+        out.append(Candidate(r["id"], old, new, pre.quad_found, locked, reason, why))
     return out
 
 
@@ -81,14 +91,22 @@ def reprocess_one(conn: psycopg.Connection, cand: Candidate) -> dict[str, Any]:
     original = get_image(conn, cand.slip_id, "original")
     pre = preprocess(original)
     processed = encode_jpeg(pre.cropped)
-    replace_image(conn, cand.slip_id, "processed", processed, pre.cropped.size)
 
     if cand.locked:
+        # ใบที่คนยืนยันแล้ว: เปลี่ยนแค่รูปให้เห็นภาพที่ถูกต้อง ไม่ยิง model ซ้ำ
+        # จึงไม่รู้ว่ากลับหัวหรือไม่ ปล่อยตามที่ crop ได้
+        replace_image(conn, cand.slip_id, "processed", processed, pre.cropped.size)
         return {"id": cand.slip_id, "ocr": False, "note": cand.lock_reason}
 
     res = read_slip(processed, OCR_MODEL)
     if not res.ok:
+        replace_image(conn, cand.slip_id, "processed", processed, pre.cropped.size)
         return {"id": cand.slip_id, "ocr": False, "note": f"OCR ล้มเหลว: {res.error}"}
+
+    cropped = upright(pre.cropped, res.orientation)
+    if cropped is not pre.cropped:
+        processed = encode_jpeg(cropped)
+    replace_image(conn, cand.slip_id, "processed", processed, cropped.size)
 
     fields = dict(res.fields)
     reasons, problems = evaluate(fields, res.confidence, count_duplicates(conn, fields))
@@ -106,15 +124,15 @@ def reprocess_one(conn: psycopg.Connection, cand: Candidate) -> dict[str, Any]:
         ocr_tokens_out=(res.usage or {}).get("completion_tokens") or 0,
         ocr_latency_s=round(res.latency_s, 2),
         raw_ocr=json.dumps(
-            {"fields": res.fields, "quad_found": pre.quad_found,
-             "problems": problems, "reprocessed": True},
+            {"fields": res.fields, "quad_found": pre.quad_found, "problems": problems,
+             "orientation": res.orientation, "reprocessed": True},
             ensure_ascii=False,
         ),
     )
     sets = ", ".join(f"{c} = %({c})s" for c in row if c != "id")
     conn.execute(f"UPDATE {DB_SCHEMA}.slips SET {sets} WHERE id = %(id)s", row)
     return {"id": cand.slip_id, "ocr": True, "fields": fields, "reasons": reasons,
-            "cost": float(row["ocr_cost_usd"])}
+            "flipped": cropped is not pre.cropped, "cost": float(row["ocr_cost_usd"])}
 
 
 def main() -> None:
@@ -129,13 +147,15 @@ def main() -> None:
             cands = cands[: args.limit]
 
         locked = [c for c in cands if c.locked]
-        print(f"ใบที่ crop ใหม่แล้วได้ภาพต่างจากเดิม: {len(cands)} ใบ "
-              f"(อัปเดตรูป {len(cands)} ใบ, OCR ซ้ำ {len(cands) - len(locked)} ใบ, "
-              f"ข้ามข้อมูล {len(locked)} ใบเพราะมีคนยืนยัน/แก้แล้ว)")
+        recrop = [c for c in cands if c.why == "crop เปลี่ยน"]
+        print(f"ใบที่ต้องทำใหม่: {len(cands)} ใบ "
+              f"(crop เปลี่ยน {len(recrop)} ใบ, เช็คกลับหัวอย่างเดียว {len(cands) - len(recrop)} ใบ) "
+              f"— เขียนทับข้อมูลได้ {len(cands) - len(locked)} ใบ, "
+              f"อีก {len(locked)} ใบแก้แค่รูปเพราะมีคนยืนยัน/แก้แล้ว")
         for c in cands:
             note = f"  [{c.lock_reason}]" if c.locked else ""
             print(f"  {c.slip_id[:8]} {c.old_size[0]}x{c.old_size[1]} -> "
-                  f"{c.new_size[0]}x{c.new_size[1]} quad={c.quad_found}{note}")
+                  f"{c.new_size[0]}x{c.new_size[1]} quad={c.quad_found}  {c.why}{note}")
 
         if not args.apply:
             print("\n(ดูอย่างเดียว — ใส่ --apply เพื่อลงมือจริง)")
@@ -146,7 +166,8 @@ def main() -> None:
             r = reprocess_one(conn, c)
             conn.commit()
             cost += r.get("cost", 0.0)
-            print(f"[{i}/{len(cands)}] {c.slip_id[:8]} "
+            flip = " [หมุนกลับหัว 180]" if r.get("flipped") else ""
+            print(f"[{i}/{len(cands)}] {c.slip_id[:8]}{flip} "
                   + ("OCR ซ้ำแล้ว " + json.dumps(r["fields"], ensure_ascii=False)
                      if r["ocr"] else "อัปเดตรูปอย่างเดียว — " + r["note"]))
         print(f"\nเสร็จแล้ว ค่า OCR รวม ${cost:.4f}")

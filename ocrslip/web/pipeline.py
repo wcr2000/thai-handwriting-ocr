@@ -11,7 +11,7 @@ from ..db import add_image, image_seen, insert_slip
 from ..imageio import encode_jpeg
 from ..normalize import norm_phone, norm_plate
 from ..ocr import read_slip
-from ..preprocess import preprocess
+from ..preprocess import preprocess, upright
 from ..review import evaluate
 
 # bench ชี้ว่า crop อย่างเดียวแม่นกว่าการปรับสี (71% vs 68%) — การเพิ่ม contrast ทำให้เส้นปากกาบางเสียรูป
@@ -49,6 +49,12 @@ def ingest(
     if not res.ok:
         return {"ok": False, "error": res.error}
 
+    # model อ่านใบกลับหัวได้อยู่แล้ว แต่คนตรวจอ่านไม่ได้ จึงเก็บรูปที่หมุนกลับมาตรงแล้ว
+    # หมุนหลัง OCR ไม่ใช่ก่อน จะได้ไม่ต้องยิง model ซ้ำ
+    cropped = upright(pre.cropped, res.orientation)
+    if cropped is not pre.cropped:
+        processed_jpeg = encode_jpeg(cropped)
+
     fields = {k: v for k, v in res.fields.items()}
     reasons, problems = evaluate(fields, res.confidence, count_duplicates(conn, fields))
     if image_seen(conn, processed_jpeg):
@@ -67,7 +73,7 @@ def ingest(
         uploaded_by=uploaded_by,
         photographer=photographer,
     )
-    add_image(conn, slip_id, "processed", processed_jpeg, pre.cropped.size)
+    add_image(conn, slip_id, "processed", processed_jpeg, cropped.size)
     add_image(conn, slip_id, "original", original_jpeg, pre.raw.size)
     conn.commit()
 
