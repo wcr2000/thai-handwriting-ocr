@@ -9,8 +9,12 @@ main { max-width:1100px; margin:1.2rem auto; padding:0 1rem; }
 .row { display:flex; gap:1rem; flex-wrap:wrap; }
 .col { flex:1 1 320px; min-width:0; }
 label { display:block; font-size:.85rem; color:var(--muted); margin:.6rem 0 .2rem; }
-input[type=text], input[type=search], select, textarea {
-  width:100%; padding:.55rem .6rem; border:1px solid var(--line); border-radius:7px; font-size:1rem; background:#fff; }
+/* ครอบทุกชนิด input ที่ใช้จริง — ถ้าลิสต์ตกไปชนิดหนึ่ง ช่องนั้นจะหลุดไปใช้สไตล์ default ของเบราว์เซอร์ */
+input[type=text], input[type=search], input[type=password], input[type=number],
+input[type=date], input[type=tel], input[type=file], select, textarea {
+  width:100%; padding:.55rem .6rem; border:1px solid var(--line); border-radius:7px;
+  font-size:1rem; background:#fff; font-family:inherit; }
+input[type=file] { padding:.45rem .5rem; }
 input.warn { background:#fff8e1; border-color:#e6c300; }
 input.bad  { background:#fdecea; border-color:#e99; }
 button { padding:.6rem 1rem; border:0; border-radius:8px; background:#2557a7; color:#fff; font-size:1rem; cursor:pointer; }
@@ -29,3 +33,37 @@ th { color:var(--muted); font-weight:600; }
 .score { font-weight:700; color:var(--ok); }
 .muted { color:var(--muted); font-size:.85rem; }
 .err { background:#fdecea; border:1px solid #e99; padding:.6rem; border-radius:8px; margin-bottom:.8rem; }
+
+
+/* ---------- มือถือ / แท็บเล็ต ---------- */
+/* iOS Safari ซูมหน้าจอเองเมื่อโฟกัสช่องที่ font-size < 16px ทำให้ layout เพี้ยนทั้งหน้า
+   จึงบังคับ 16px ขึ้นไปเสมอบนจอเล็ก และขยายพื้นที่กดให้ถึง 44px ตามขนาดนิ้ว */
+@media (max-width: 820px) {
+  input[type=text], input[type=search], input[type=password], input[type=file],
+  select, textarea, button {
+    font-size: 16px;
+    min-height: 44px;
+  }
+  header { gap: .4rem .9rem; padding: .6rem .8rem; }
+  header nav { display: flex; flex-wrap: wrap; gap: .1rem .9rem; }
+  nav a { margin-right: 0; padding: .3rem 0; }
+  main { padding: 0 .7rem; margin-top: .8rem; }
+  .card { padding: .8rem; }
+  table { font-size: .88rem; }
+  /* ตารางกว้างกว่าจอ ให้เลื่อนในกรอบของตัวเอง ห้ามดันทั้งหน้าให้เลื่อนแนวนอน */
+  .card > table { display: block; overflow-x: auto; white-space: nowrap; }
+}
+
+/* จอโทรศัพท์: ชื่อระบบกับปุ่มออกจากระบบอยู่แถวบน เมนูลงมาเต็มความกว้างแถวล่าง
+   ไม่งั้น nav ที่ flex:1 จะดันชื่อระบบไปแทรกอยู่กลางเมนูจนอ่านไม่รู้เรื่อง
+   (แท็บเล็ตยังกว้างพอให้ทุกอย่างอยู่แถวเดียวแบบเดสก์ท็อป จึงไม่ต้องจัดใหม่) */
+@media (max-width: 620px) {
+  header .brand { order: 1; }
+  header > form { order: 2; margin-left: auto; }
+  header nav { order: 3; flex: 0 0 100%;
+               border-top: 1px solid var(--line); padding-top: .45rem; }
+}
+
+/* กันหน้าเลื่อนแนวนอนทั้งหน้าในทุกขนาดจอ */
+html, body { max-width: 100%; overflow-x: hidden; }
+img { max-width: 100%; }

@@ -2,11 +2,11 @@
 {% block content %}
 <div class="card">
   <h2>อัปโหลดใบฝากรถ</h2>
-  <p class="muted">ถ่ายจากมือถือได้เลย อัปโหลดหลายใบพร้อมกันได้ · รองรับ HEIC จาก iPhone · ทุกใบจะเข้าคิวรอคนตรวจก่อนเสมอ</p>
+  <p class="muted">ถ่ายจากมือถือหรือเลือกจากคลังรูปได้ อัปโหลดหลายใบพร้อมกันได้ · รองรับ HEIC จาก iPhone · ทุกใบจะเข้าคิวรอคนตรวจก่อนเสมอ</p>
   <form hx-post="/api/ocr" hx-target="#result" hx-encoding="multipart/form-data"
         hx-indicator="#busy" hx-disabled-elt="button">
     <label for="files">รูปใบฝากรถ</label>
-    <input type="file" id="files" name="files" accept="image/*" capture="environment" multiple required>
+    <input type="file" id="files" name="files" accept="image/*,.heic,.heif" multiple required>
     <p><button type="submit">อ่านด้วย AI แล้วเข้าคิวตรวจ</button>
        <span id="busy" class="htmx-indicator muted">⏳ กำลังอ่าน… (ราว 3 วินาทีต่อใบ)</span></p>
   </form>

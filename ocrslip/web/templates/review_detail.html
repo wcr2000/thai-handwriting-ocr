@@ -12,7 +12,7 @@
   /* หน้านี้ต้องจบในหน้าจอเดียว: ภาพซ้าย ฟอร์มขวา ปุ่มอนุมัติติดอยู่ล่างเสมอ */
   main { max-width:1500px; }
   .rev { display:grid; grid-template-columns:minmax(0,1.15fr) minmax(360px,.85fr); gap:1rem;
-         height:calc(100vh - 150px); min-height:520px; }
+         height:calc(100dvh - 150px); min-height:520px; }
   .rev-img { background:#fff; border:1px solid var(--line); border-radius:10px; padding:.6rem;
              display:flex; flex-direction:column; min-height:0; }
   /* ให้ <a> เป็นตัวยืด ไม่งั้นรูปจะสูงตามสัดส่วนภาพแล้วเหลือที่ว่างข้างล่างเยอะ */
@@ -33,7 +33,14 @@
   details.reject summary { cursor:pointer; color:var(--bad); font-size:.9rem; }
   details.reject .row { margin-top:.5rem; gap:.4rem }
   @media (max-width:900px) { .rev { grid-template-columns:1fr; height:auto; }
-                             .rev-img img { max-height:45vh; } }
+                             .rev-img img { max-height:42dvh; }
+                             /* บนมือถือ ให้แถบปุ่มอนุมัติลอยติดขอบล่างเสมอ จะได้ไม่ต้องเลื่อนหา */
+                             .actbar { position:sticky; bottom:0; z-index:5;
+                                       box-shadow:0 -2px 8px rgba(0,0,0,.06); }
+                             .grid2 { grid-template-columns:1fr; }
+                             /* ช่องที่ตั้ง grid-column:span 2 ไว้ (inline) จะบังคับให้ grid
+                                สร้างคอลัมน์ที่สองขึ้นมาเองแม้สั่งให้เหลือคอลัมน์เดียว ต้องล้างทิ้ง */
+                             .grid2 > .fld { grid-column: auto !important; } }
 </style>
 {% if error %}<div class="err">{{ error }}</div>{% endif %}
 
