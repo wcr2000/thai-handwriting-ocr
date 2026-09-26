@@ -10,12 +10,29 @@ from ..config import DB_SCHEMA, OCR_MODEL
 from ..db import add_image, image_seen, insert_slip
 from ..imageio import encode_jpeg
 from ..normalize import norm_phone, norm_plate
-from ..ocr import read_slip
+from ..ocr import OcrResult, read_slip
 from ..preprocess import preprocess, upright
 from ..review import evaluate
 
 # bench ชี้ว่า crop อย่างเดียวแม่นกว่าการปรับสี (71% vs 68%) — การเพิ่ม contrast ทำให้เส้นปากกาบางเสียรูป
 VARIANT = "v1_crop"
+
+
+def build_raw_ocr(
+    res: OcrResult, quad_found: bool, problems: dict[str, str], **extra: Any
+) -> dict[str, Any]:
+    """ร่องรอยของ OCR ที่เก็บไว้ตรวจย้อนหลัง — ใช้ร่วมกันระหว่างตอนอัปโหลดกับตอน reprocess
+
+    orientation ต้องอยู่ในนี้เสมอ เพราะ reprocess ใช้มันตัดสินว่าใบไหน "ยังไม่เคยเช็ค
+    ว่ากลับหัว" ถ้าไม่บันทึก ใบที่เพิ่งอัปโหลดจะถูกหยิบไปยิง model ซ้ำทุกครั้งที่รัน
+    """
+    return {
+        "fields": res.fields,
+        "quad_found": quad_found,
+        "problems": problems,
+        "orientation": res.orientation,
+        **extra,
+    }
 
 
 def count_duplicates(conn: psycopg.Connection, fields: dict[str, Any]) -> int:
@@ -63,7 +80,7 @@ def ingest(
     slip_id = insert_slip(
         conn, fields,
         confidence=res.confidence,
-        raw_ocr={"fields": res.fields, "quad_found": pre.quad_found, "problems": problems},
+        raw_ocr=build_raw_ocr(res, pre.quad_found, problems),
         review_reason=reasons,
         ocr_model=res.model,
         ocr_variant=VARIANT,
