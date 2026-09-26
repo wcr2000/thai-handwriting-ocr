@@ -67,7 +67,9 @@ model ไม่มั่นใจ, ช่องบังคับว่าง, �
 ```
 ocrslip/
   imageio.py     อ่านไฟล์จาก magic bytes (ไฟล์ตัวอย่างเป็น HEIC ทั้งหมดแม้นามสกุลจะเป็น .png/.jpg)
-  preprocess.py  จับขอบกระดาษด้วย HSV mask -> perspective warp -> หมุนให้แนวนอน
+  preprocess.py  จับขอบกระดาษ (HSV mask + texture mask, ให้คะแนนตามรูปร่างใบ) -> warp -> หมุนแนวนอน
+                 ถ้าไม่มี candidate ไหนหน้าตาเหมือนใบ จะไม่ crop เลย แล้วส่งภาพเต็มให้ model แทน
+  reprocess.py   crop รูปที่เก็บไว้ใหม่ + OCR ซ้ำใบที่ยังไม่มีคนยืนยัน (ใช้หลังแก้ตัวจับขอบ)
   schema.py      JSON schema + prompt ที่ใช้ทั้ง bench และ production
   ocr.py         เรียก OpenRouter (structured output + fallback ถ้า model ไม่รองรับ)
   normalize.py   normalize ชื่อ/เบอร์/ทะเบียน/ยี่ห้อ/วันที่ (พ.ศ. -> ค.ศ., เลขไทย -> อารบิก)

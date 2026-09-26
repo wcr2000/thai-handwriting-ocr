@@ -39,7 +39,21 @@ PUBLIC_PATHS = ("/login", "/static", "/health", "/favicon.ico")
 # หน้าที่เฉพาะ admin เท่านั้น — จุดที่ย้อนกลับไม่ได้ หรือเป็นข้อมูลส่วนตัวทั้งก้อน
 ADMIN_ONLY = ("/table", "/dashboard", "/export.xlsx", "/staff")
 ADMIN_ONLY_SUFFIX = ("/return", "/reject")
-app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
+class NoCacheStatic(StaticFiles):
+    """บังคับให้เบราว์เซอร์เช็กกับ server ก่อนใช้ไฟล์เก่าเสมอ
+
+    ไฟล์ CSS เล็กมากและเปลี่ยนทุกครั้งที่ deploy ถ้าปล่อยให้ cache แบบเดาเอง
+    หน้าเว็บจะเพี้ยนหลัง deploy จนกว่าผู้ใช้จะล้าง cache เอง
+    no-cache ไม่ได้แปลว่าห้ามเก็บ — ยังใช้ ETag ตอบ 304 ได้ ไม่เปลืองเน็ต
+    """
+
+    def file_response(self, *args, **kwargs):
+        resp = super().file_response(*args, **kwargs)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
+app.mount("/static", NoCacheStatic(directory=HERE / "static"), name="static")
 templates = Jinja2Templates(directory=HERE / "templates")
 templates.env.globals["reason_labels"] = REASON_LABELS
 templates.env.globals["usd_thb"] = USD_THB
@@ -50,6 +64,22 @@ FORM_FIELDS = ("name", "tel", "date", "noplate", "province", "brand", "typecar",
 def current_user(request: Request) -> User | None:
     token = request.cookies.get(COOKIE_NAME, "")
     return read_token(token, _SECRET) if token else None
+
+
+@app.middleware("http")
+async def no_stale_html(request: Request, call_next):
+    """ห้ามเบราว์เซอร์ cache หน้า HTML
+
+    ก่อนหน้านี้ไม่ได้ส่ง Cache-Control มาเลย เบราว์เซอร์ (โดยเฉพาะ Safari บน iOS)
+    จึงใช้ heuristic caching เดาเอาเองว่าเก็บได้ ผลคือหลัง deploy ผู้ใช้ยังเห็นฟอร์มเวอร์ชันเก่า
+    ขณะที่ server เป็นเวอร์ชันใหม่ — ฟอร์มเก่าไม่มีช่องที่ server ใหม่บังคับ กดแล้วพังทันที
+    ข้อมูลในหน้าเว็บนี้เปลี่ยนตลอด (คิวตรวจ ผลค้นหา) และเป็นข้อมูลส่วนบุคคล
+    จึงไม่ควรถูกเก็บไว้ในเครื่องอยู่แล้ว
+    """
+    response = await call_next(request)
+    if "text/html" in response.headers.get("content-type", ""):
+        response.headers["Cache-Control"] = "no-store, must-revalidate"
+    return response
 
 
 @app.middleware("http")
@@ -133,6 +163,8 @@ async def api_ocr(
     files: list[UploadFile],
     uploaded_by: str = Form(""),
     photographer: str = Form(""),
+    uploaded_by_new: str = Form(""),
+    photographer_new: str = Form(""),
 ):
     """อัปโหลดได้หลายใบพร้อมกัน — ทุกใบเข้าคิว pending รอคนตรวจเสมอ
 
@@ -141,8 +173,13 @@ async def api_ocr(
     """
     # created_by = บัญชีที่ล็อกอิน (ปลอมไม่ได้), uploaded_by/photographer = ชื่อคนจริงที่เลือกมา
     account = getattr(request.state, "user", None) and request.state.user.username
-    uploader = uploaded_by.strip() or None
-    shooter = photographer.strip() or uploader
+    # ค่า "__new__" คือผู้ใช้เลือก "+ ชื่อใหม่" ในรายการ แล้วไปพิมพ์ในช่องข้าง ๆ
+    def pick(choice: str, typed: str) -> str | None:
+        choice = choice.strip()
+        return (typed.strip() or None) if choice == "__new__" else (choice or None)
+
+    uploader = pick(uploaded_by, uploaded_by_new)
+    shooter = pick(photographer, photographer_new) or uploader
 
     # ต้องตรวจฝั่ง server ด้วย เพราะ required ใน HTML ข้ามได้ถ้ายิง API ตรง ๆ
     # ถ้าปล่อยผ่าน จะได้ใบที่ไม่รู้ว่าใครเป็นคนบันทึก ซึ่งเป็นสิ่งที่ feature นี้มีไว้กันพอดี
