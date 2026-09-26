@@ -12,7 +12,7 @@
   /* หน้านี้ต้องจบในหน้าจอเดียว: ภาพซ้าย ฟอร์มขวา ปุ่มอนุมัติติดอยู่ล่างเสมอ */
   main { max-width:1500px; }
   .rev { display:grid; grid-template-columns:minmax(0,1.15fr) minmax(360px,.85fr); gap:1rem;
-         height:calc(100dvh - 150px); min-height:520px; }
+         height:calc(100vh - 150px); height:calc(100dvh - 150px); min-height:520px; }
   .rev-img { background:#fff; border:1px solid var(--line); border-radius:10px; padding:.6rem;
              display:flex; flex-direction:column; min-height:0; }
   /* ให้ <a> เป็นตัวยืด ไม่งั้นรูปจะสูงตามสัดส่วนภาพแล้วเหลือที่ว่างข้างล่างเยอะ */
@@ -23,7 +23,10 @@
   .rev-form .body { flex:1; min-height:0; overflow:auto; padding:.9rem 1rem .4rem; }
   .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:.1rem .8rem; }
   .fld label { margin:.35rem 0 .15rem; font-size:.8rem; }
-  .fld input, .fld select { padding:.45rem .55rem; font-size:.98rem; }
+  .fld input, .fld select { padding:.45rem .55rem; }
+  /* ย่อตัวอักษรได้เฉพาะจอใหญ่ — ถ้าต่ำกว่า 16px บนมือถือ iOS Safari จะซูมทั้งหน้าทุกครั้งที่แตะช่อง
+     และหน้านี้คือหน้าที่ต้องแตะช่องบ่อยที่สุด (ทุกใบ) */
+  @media (min-width:821px) { .fld input, .fld select { font-size:.98rem; } }
   .actbar { border-top:1px solid var(--line); padding:.7rem 1rem; display:flex; gap:.6rem;
             align-items:center; flex-wrap:wrap; background:#fbfcfd; border-radius:0 0 10px 10px; }
   .actbar button.big { font-size:1.05rem; padding:.75rem 1.4rem; font-weight:600; }
@@ -33,7 +36,7 @@
   details.reject summary { cursor:pointer; color:var(--bad); font-size:.9rem; }
   details.reject .row { margin-top:.5rem; gap:.4rem }
   @media (max-width:900px) { .rev { grid-template-columns:1fr; height:auto; }
-                             .rev-img img { max-height:42dvh; }
+                             .rev-img img { max-height:42vh; max-height:42dvh; }
                              /* บนมือถือ ให้แถบปุ่มอนุมัติลอยติดขอบล่างเสมอ จะได้ไม่ต้องเลื่อนหา */
                              .actbar { position:sticky; bottom:0; z-index:5;
                                        box-shadow:0 -2px 8px rgba(0,0,0,.06); }
