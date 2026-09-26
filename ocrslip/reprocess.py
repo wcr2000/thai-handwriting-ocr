@@ -13,21 +13,18 @@
 from __future__ import annotations
 
 import argparse
-import io
 import json
 from dataclasses import dataclass
 from typing import Any
 
 import psycopg
-from PIL import Image
 
-from .config import DB_SCHEMA, OCR_MODEL
+from .config import DB_SCHEMA
 from .db import build_row, connect, get_image, replace_image
 from .imageio import encode_jpeg
-from .ocr import read_slip
 from .preprocess import preprocess, upright
 from .review import evaluate
-from .web.pipeline import VARIANT, build_raw_ocr, count_duplicates
+from .web.pipeline import VARIANT, build_raw_ocr, count_duplicates, read_with_fallback
 
 # ถือว่า crop เดิมพัง ถ้าขนาดต่างจาก crop ใหม่เกินเท่านี้ (สัดส่วนของด้าน)
 SIZE_TOLERANCE = 0.02
@@ -90,20 +87,17 @@ def reprocess_one(conn: psycopg.Connection, cand: Candidate) -> dict[str, Any]:
     """crop ใหม่ + หมุนถ้ากลับหัว + (ถ้าไม่ล็อก) เขียนทับข้อมูลที่ model เคยอ่านผิด"""
     original = get_image(conn, cand.slip_id, "original")
     pre = preprocess(original)
-    processed = encode_jpeg(pre.cropped)
 
     # ต้องยิง model แม้กับใบที่คนยืนยันแล้ว เพราะเป็นทางเดียวที่รู้ว่าใบกลับหัวหรือไม่
     # แต่ของใบพวกนั้นจะใช้แค่ orientation ไม่แตะข้อมูลที่คนยืนยันไว้
-    res = read_slip(processed, OCR_MODEL)
+    res, used, full_frame = read_with_fallback(pre)
     if not res.ok:
-        replace_image(conn, cand.slip_id, "processed", processed, pre.cropped.size)
+        replace_image(conn, cand.slip_id, "processed", encode_jpeg(pre.cropped), pre.cropped.size)
         return {"id": cand.slip_id, "ocr": False, "note": f"OCR ล้มเหลว: {res.error}"}
 
-    cropped = upright(pre.cropped, res.orientation)
-    if cropped is not pre.cropped:
-        processed = encode_jpeg(cropped)
-    replace_image(conn, cand.slip_id, "processed", processed, cropped.size)
-    flipped = cropped is not pre.cropped
+    cropped = upright(used, res.orientation)
+    flipped = cropped is not used
+    replace_image(conn, cand.slip_id, "processed", encode_jpeg(cropped), cropped.size)
 
     if cand.locked:
         # บันทึกไว้ว่าเช็ค orientation ของใบนี้แล้ว ไม่งั้นรอบหน้าจะถูกหยิบมาทำซ้ำไม่จบ
@@ -112,7 +106,7 @@ def reprocess_one(conn: psycopg.Connection, cand: Candidate) -> dict[str, Any]:
                 SET raw_ocr = raw_ocr || %s::jsonb WHERE id = %s""",
             (json.dumps({"orientation": res.orientation}), cand.slip_id),
         )
-        return {"id": cand.slip_id, "ocr": False, "flipped": flipped,
+        return {"id": cand.slip_id, "ocr": False, "flipped": flipped, "full_frame": full_frame,
                 "note": cand.lock_reason, "cost": float((res.usage or {}).get("cost") or 0)}
 
     fields = dict(res.fields)
@@ -131,13 +125,14 @@ def reprocess_one(conn: psycopg.Connection, cand: Candidate) -> dict[str, Any]:
         ocr_tokens_out=(res.usage or {}).get("completion_tokens") or 0,
         ocr_latency_s=round(res.latency_s, 2),
         raw_ocr=json.dumps(
-            build_raw_ocr(res, pre.quad_found, problems, reprocessed=True), ensure_ascii=False
+            build_raw_ocr(res, pre.quad_found and not full_frame, problems, reprocessed=True),
+            ensure_ascii=False,
         ),
     )
     sets = ", ".join(f"{c} = %({c})s" for c in row if c != "id")
     conn.execute(f"UPDATE {DB_SCHEMA}.slips SET {sets} WHERE id = %(id)s", row)
     return {"id": cand.slip_id, "ocr": True, "fields": fields, "reasons": reasons,
-            "flipped": flipped, "cost": float(row["ocr_cost_usd"])}
+            "flipped": flipped, "full_frame": full_frame, "cost": float(row["ocr_cost_usd"])}
 
 
 def main() -> None:
@@ -172,6 +167,7 @@ def main() -> None:
             conn.commit()
             cost += r.get("cost", 0.0)
             flip = " [หมุนกลับหัว 180]" if r.get("flipped") else ""
+            flip += " [crop พัง ใช้ภาพเต็มแทน]" if r.get("full_frame") else ""
             print(f"[{i}/{len(cands)}] {c.slip_id[:8]}{flip} "
                   + ("OCR ซ้ำแล้ว " + json.dumps(r["fields"], ensure_ascii=False)
                      if r["ocr"] else "อัปเดตรูปอย่างเดียว — " + r["note"]))
