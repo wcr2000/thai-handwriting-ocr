@@ -163,6 +163,8 @@ async def api_ocr(
     files: list[UploadFile],
     uploaded_by: str = Form(""),
     photographer: str = Form(""),
+    uploaded_by_new: str = Form(""),
+    photographer_new: str = Form(""),
 ):
     """อัปโหลดได้หลายใบพร้อมกัน — ทุกใบเข้าคิว pending รอคนตรวจเสมอ
 
@@ -171,8 +173,13 @@ async def api_ocr(
     """
     # created_by = บัญชีที่ล็อกอิน (ปลอมไม่ได้), uploaded_by/photographer = ชื่อคนจริงที่เลือกมา
     account = getattr(request.state, "user", None) and request.state.user.username
-    uploader = uploaded_by.strip() or None
-    shooter = photographer.strip() or uploader
+    # ค่า "__new__" คือผู้ใช้เลือก "+ ชื่อใหม่" ในรายการ แล้วไปพิมพ์ในช่องข้าง ๆ
+    def pick(choice: str, typed: str) -> str | None:
+        choice = choice.strip()
+        return (typed.strip() or None) if choice == "__new__" else (choice or None)
+
+    uploader = pick(uploaded_by, uploaded_by_new)
+    shooter = pick(photographer, photographer_new) or uploader
 
     # ต้องตรวจฝั่ง server ด้วย เพราะ required ใน HTML ข้ามได้ถ้ายิง API ตรง ๆ
     # ถ้าปล่อยผ่าน จะได้ใบที่ไม่รู้ว่าใครเป็นคนบันทึก ซึ่งเป็นสิ่งที่ feature นี้มีไว้กันพอดี

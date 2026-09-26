@@ -5,21 +5,31 @@
   <p class="muted">ถ่ายจากมือถือหรือเลือกจากคลังรูปได้ อัปโหลดหลายใบพร้อมกันได้ · รองรับ HEIC จาก iPhone · ทุกใบจะเข้าคิวรอคนตรวจก่อนเสมอ</p>
   <form hx-post="/api/ocr" hx-target="#result" hx-encoding="multipart/form-data"
         hx-indicator="#busy" hx-disabled-elt="button">
+
     <div class="row">
       <div class="col">
         <label for="uploaded_by">ชื่อคุณ (คนอัปโหลด)</label>
-        <input type="text" id="uploaded_by" name="uploaded_by" list="people" required
-               placeholder="พิมพ์ชื่อ หรือเลือกจากรายชื่อที่เคยใช้" autocomplete="off">
+        {# ใช้ <select> ไม่ใช่ <datalist> เพราะ Safari บน iOS ไม่รองรับ datalist
+           ช่องจะกลายเป็นกล่องพิมพ์เปล่า ๆ ไม่มีรายการให้เลือกเลย #}
+        <select id="uploaded_by" name="uploaded_by" required>
+          <option value="">— เลือกชื่อ —</option>
+          {% for person in people %}<option value="{{ person }}">{{ person }}</option>{% endfor %}
+          <option value="__new__">+ ชื่อใหม่ (พิมพ์เอง)</option>
+        </select>
+        <input type="text" id="uploaded_by_new" name="uploaded_by_new" hidden
+               placeholder="พิมพ์ชื่อคุณ" autocomplete="off" style="margin-top:.4rem">
       </div>
       <div class="col">
-        <label for="photographer">คนถ่ายรูป <span class="muted">(เว้นว่างถ้าเป็นคุณเอง)</span></label>
-        <input type="text" id="photographer" name="photographer" list="people"
-               placeholder="ชื่อคนที่ถ่ายรูปใบนี้" autocomplete="off">
+        <label for="photographer">คนถ่ายรูป</label>
+        <select id="photographer" name="photographer">
+          <option value="">— คนเดียวกับคนอัปโหลด —</option>
+          {% for person in people %}<option value="{{ person }}">{{ person }}</option>{% endfor %}
+          <option value="__new__">+ ชื่อใหม่ (พิมพ์เอง)</option>
+        </select>
+        <input type="text" id="photographer_new" name="photographer_new" hidden
+               placeholder="พิมพ์ชื่อคนถ่ายรูป" autocomplete="off" style="margin-top:.4rem">
       </div>
     </div>
-    <datalist id="people">
-      {% for person in people %}<option value="{{ person }}"></option>{% endfor %}
-    </datalist>
 
     <label for="files">รูปใบฝากรถ</label>
     <input type="file" id="files" name="files" accept="image/*,.heic,.heif" multiple required>
@@ -45,14 +55,36 @@
 <div id="result"></div>
 
 <script>
-  // จำชื่อคนอัปโหลดไว้ในเครื่องนี้ จะได้ไม่ต้องพิมพ์ใหม่ทุกครั้ง
-  // (staff ใช้บัญชีร่วมกัน แต่ละเครื่องมักเป็นของคนเดิม)
   (function () {
-    var box = document.getElementById('uploaded_by');
-    if (!box) return;
-    try { box.value = box.value || localStorage.getItem('uploaded_by') || ''; } catch (e) {}
-    box.form.addEventListener('submit', function () {
-      try { localStorage.setItem('uploaded_by', box.value.trim()); } catch (e) {}
+    // เลือก "+ ชื่อใหม่" แล้วค่อยโผล่ช่องพิมพ์ — ไม่ใช้ datalist เพราะ iOS Safari ไม่รองรับ
+    function link(selectId, inputId) {
+      var sel = document.getElementById(selectId), box = document.getElementById(inputId);
+      if (!sel || !box) return;
+      function sync() {
+        var isNew = sel.value === '__new__';
+        box.hidden = !isNew;
+        box.required = isNew;
+        if (isNew) box.focus();
+      }
+      sel.addEventListener('change', sync);
+      sync();
+    }
+    link('uploaded_by', 'uploaded_by_new');
+    link('photographer', 'photographer_new');
+
+    // จำชื่อคนอัปไว้ในเครื่องนี้ จะได้ไม่ต้องเลือกใหม่ทุกครั้ง (แต่ละเครื่องมักเป็นของคนเดิม)
+    var sel = document.getElementById('uploaded_by');
+    if (!sel) return;
+    try {
+      var saved = localStorage.getItem('uploaded_by');
+      if (saved && [].some.call(sel.options, function (o) { return o.value === saved; })) {
+        sel.value = saved;
+      }
+    } catch (e) {}
+    sel.form.addEventListener('submit', function () {
+      var name = sel.value === '__new__'
+        ? document.getElementById('uploaded_by_new').value.trim() : sel.value;
+      try { localStorage.setItem('uploaded_by', name); } catch (e) {}
     });
   })();
 </script>
