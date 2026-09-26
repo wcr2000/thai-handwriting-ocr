@@ -1,0 +1,57 @@
+# --- ความลับ / ค่าเฉพาะเครื่อง ---
+.env
+.env.*
+!.env.example
+
+# --- virtualenv / git ---
+.venv
+venv
+.git
+.gitignore
+.github
+
+# --- ข้อมูลจริง ห้ามติดไปใน image ---
+example/
+bench/out/
+*.heic
+*.HEIC
+
+# --- ของที่ไม่ต้องใช้ตอนรัน ---
+bench/
+tests/
+db/*.md
+start-project.py
+README.md
+LICENSE
+Dockerfile
+.dockerignore
+render.yaml
+
+# --- cache / build artifact ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+.coverage.*
+build/
+dist/
+*.egg-info/
+
+# --- editor / OS ---
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# --- ไฟล์ชั่วคราว ---
+scratch/
+scratch*
+tmp/
+*.log
+*.tmp
+*.bak

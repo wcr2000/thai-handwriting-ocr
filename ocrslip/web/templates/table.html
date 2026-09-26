@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% macro sorth(key, label) %}
+  {% set nd = 'asc' if f.sort == key and f.dir == 'desc' else 'desc' %}
+  <th><a href="/table?{{ qs|replace('sort=' ~ f.sort, '') }}&sort={{ key }}&dir={{ nd }}">
+    {{ label }}{% if f.sort == key %} {{ '▾' if f.dir == 'desc' else '▴' }}{% endif %}</a></th>
+{% endmacro %}
+{% block content %}
+<div class="card">
+  <h2>ตารางข้อมูลใบฝากรถ</h2>
+  <form method="get" action="/table" class="row" style="align-items:flex-end; gap:.7rem">
+    <div style="flex:2 1 240px">
+      <label for="q">ค้นหา (ชื่อ / เบอร์ / ทะเบียน / ยี่ห้อ / ที่จอด)</label>
+      <input type="search" id="q" name="q" value="{{ f.q }}" placeholder="พิมพ์คำที่ต้องการ">
+    </div>
+    <div style="flex:1 1 130px">
+      <label for="review_status">สถานะตรวจ</label>
+      <select id="review_status" name="review_status">
+        {% for v, t in [('', 'ทั้งหมด'), ('pending', 'รอตรวจ'), ('approved', 'อนุมัติแล้ว'), ('rejected', 'ตีกลับ')] %}
+        <option value="{{ v }}" {{ 'selected' if f.review_status == v }}>{{ t }}</option>{% endfor %}
+      </select>
+    </div>
+    <div style="flex:1 1 130px">
+      <label for="car_status">สถานะรถ</label>
+      <select id="car_status" name="car_status">
+        {% for v, t in [('', 'ทั้งหมด'), ('stored', 'ยังฝากอยู่'), ('returned', 'รับคืนแล้ว')] %}
+        <option value="{{ v }}" {{ 'selected' if f.car_status == v }}>{{ t }}</option>{% endfor %}
+      </select>
+    </div>
+    <div style="flex:1 1 120px">
+      <label for="car_type">ประเภทรถ</label>
+      <select id="car_type" name="car_type">
+        {% for v in ['', 'ตู้', 'กระบะ', 'เก๋ง', 'อื่นๆ'] %}
+        <option value="{{ v }}" {{ 'selected' if f.car_type == v }}>{{ v or 'ทั้งหมด' }}</option>{% endfor %}
+      </select>
+    </div>
+    <div style="flex:0 0 auto"><button type="submit">กรอง</button></div>
+    <div style="flex:0 0 auto"><a href="/table"><button type="button" class="ghost">ล้าง</button></a></div>
+  </form>
+  <p style="margin-top:.8rem">
+    พบ <strong>{{ total }}</strong> ใบ
+    <a href="/export.xlsx?{{ qs }}"><button type="button" class="ghost">⬇ โหลด Excel ตามที่กรองอยู่</button></a>
+  </p>
+</div>
+
+<div class="card" style="overflow-x:auto">
+  <table>
+    <tr>
+      {{ sorth('name', 'ชื่อ') }}{{ sorth('tel', 'เบอร์โทร') }}{{ sorth('plate', 'ทะเบียน') }}
+      {{ sorth('brand', 'ยี่ห้อ') }}<th>ประเภท</th><th>ที่จอด</th>{{ sorth('date', 'วันที่ฝาก') }}
+      {{ sorth('review_status', 'ตรวจ') }}{{ sorth('car_status', 'รถ') }}<th></th>
+    </tr>
+    {% for r in rows %}
+    <tr>
+      <td>{{ r.name or '—' }}</td>
+      <td>{{ r.tel or '—' }}</td>
+      <td>{{ r.plate_raw or '—' }}{% if r.province %} <span class="muted">{{ r.province }}</span>{% endif %}</td>
+      <td>{{ r.brand or '—' }}</td>
+      <td>{{ r.car_type or '—' }}</td>
+      <td>{{ r.location or '—' }}</td>
+      <td>{{ r.deposit_date or '—' }}</td>
+      <td>
+        {% if r.review_status == 'approved' %}<span class="badge ok">อนุมัติ</span>
+        {% elif r.review_status == 'rejected' %}<span class="badge bad">ตีกลับ</span>
+        {% elif r.needs_review %}<span class="badge warn">ต้องตรวจ</span>
+        {% else %}<span class="badge">รอยืนยัน</span>{% endif %}
+      </td>
+      <td>{% if r.car_status == 'returned' %}<span class="badge bad">คืนแล้ว</span>
+          {% else %}<span class="badge ok">ยังฝาก</span>{% endif %}</td>
+      <td><a href="/slips/{{ r.id }}">ดู</a>
+          {% if r.review_status == 'pending' %} · <a href="/review/{{ r.id }}">ตรวจ</a>{% endif %}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="10" class="muted">ไม่พบข้อมูลตามเงื่อนไขนี้</td></tr>
+    {% endfor %}
+  </table>
+  {% if pages > 1 %}
+  <p class="filters" style="margin-top:.8rem">
+    {% for i in range(1, pages + 1) %}
+    <a href="/table?{{ qs }}&page={{ i }}" class="{{ 'active' if i == page }}">{{ i }}</a>
+    {% endfor %}
+  </p>
+  {% endif %}
+</div>
+{% endblock %}

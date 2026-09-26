@@ -1,0 +1,375 @@
+"""เชื่อมต่อ Postgres + คำสั่งที่เว็บใช้จริง
+
+รันสร้าง schema:  python -m ocrslip.db init
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from typing import Any, Iterable
+
+import psycopg
+from psycopg.rows import dict_row
+
+from .config import DATABASE_URL, DB_SCHEMA
+from .normalize import (
+    norm_brand, norm_cartype, norm_name, norm_phone, norm_plate, norm_province, parse_date,
+)
+
+ROOT = Path(__file__).resolve().parent.parent
+SCHEMA_SQL = ROOT / "db" / "schema.sql"
+
+
+def connect() -> psycopg.Connection:
+    if not DATABASE_URL:
+        raise RuntimeError("ยังไม่ได้ตั้ง DATABASE_URL ใน .env")
+    return psycopg.connect(DATABASE_URL, row_factory=dict_row)
+
+
+def init_schema() -> None:
+    sql = SCHEMA_SQL.read_text(encoding="utf-8")
+    if DB_SCHEMA != "ocr_dhammakaya":
+        sql = sql.replace("ocr_dhammakaya", DB_SCHEMA)
+    with connect() as conn:
+        conn.execute(sql)
+        conn.commit()
+
+
+# ---------- เขียนข้อมูล ----------
+
+def build_row(fields: dict[str, Any]) -> dict[str, Any]:
+    """แปลงค่าที่คนยืนยันแล้ว เป็นคอลัมน์ในตาราง พร้อมคำนวณคอลัมน์ *_norm สำหรับค้นหา"""
+    plate = fields.get("noplate")
+    province = fields.get("province")
+    date = parse_date(fields.get("date"))
+    return {
+        "name": fields.get("name"),
+        "name_norm": norm_name(fields.get("name")),
+        "tel": fields.get("tel"),
+        "tel_digits": norm_phone(fields.get("tel")),
+        "plate_raw": plate,
+        "plate_norm": norm_plate(plate),
+        "province": norm_province(province) or None,
+        "brand": fields.get("brand"),
+        "brand_norm": norm_brand(fields.get("brand")),
+        "car_type": norm_cartype(fields.get("typecar")) or None,
+        "location": fields.get("location"),
+        "deposit_date": date,
+    }
+
+
+def insert_slip(
+    conn: psycopg.Connection,
+    fields: dict[str, Any],
+    *,
+    confidence: dict[str, float],
+    raw_ocr: dict[str, Any],
+    review_reason: list[str],
+    ocr_model: str,
+    ocr_variant: str,
+    usage: dict[str, Any] | None = None,
+    latency_s: float = 0.0,
+    created_by: str | None = None,
+    review_status: str = "pending",
+) -> str:
+    row = build_row(fields)
+    row.update(
+        review_status=review_status,
+        needs_review=bool(review_reason),
+        review_reason=review_reason,
+        ocr_model=ocr_model,
+        ocr_variant=ocr_variant,
+        ocr_confidence=json.dumps(confidence, ensure_ascii=False),
+        ocr_cost_usd=(usage or {}).get("cost") or 0,
+        ocr_tokens_in=(usage or {}).get("prompt_tokens") or 0,
+        ocr_tokens_out=(usage or {}).get("completion_tokens") or 0,
+        ocr_latency_s=round(latency_s, 2),
+        raw_ocr=json.dumps(raw_ocr, ensure_ascii=False),
+        created_by=created_by,
+    )
+    cols = ", ".join(row)
+    holders = ", ".join(f"%({c})s" for c in row)
+    cur = conn.execute(
+        f"INSERT INTO {DB_SCHEMA}.slips ({cols}) VALUES ({holders}) RETURNING id", row
+    )
+    return str(cur.fetchone()["id"])
+
+
+def add_image(
+    conn: psycopg.Connection, slip_id: str, kind: str, jpeg: bytes, size: tuple[int, int]
+) -> None:
+    """เก็บรูปหลักฐานของใบนี้ — กันซ้ำเฉพาะภายในใบเดียวกันเท่านั้น
+
+    ห้ามกันซ้ำข้ามใบ ไม่งั้นการอัปโหลดรูปเดิมซ้ำจะได้เรคอร์ดที่ไม่มีรูปหลักฐานติดอยู่
+    """
+    conn.execute(
+        f"""INSERT INTO {DB_SCHEMA}.slip_images (slip_id, kind, sha256, width, height, bytes)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (slip_id, sha256) DO NOTHING""",
+        (slip_id, kind, hashlib.sha256(jpeg).hexdigest(), size[0], size[1], jpeg),
+    )
+
+
+def image_seen(conn: psycopg.Connection, jpeg: bytes) -> bool:
+    """เคยอัปโหลดรูปนี้ (byte ตรงกันเป๊ะ) มาก่อนหรือยัง"""
+    cur = conn.execute(
+        f"SELECT 1 FROM {DB_SCHEMA}.slip_images WHERE sha256 = %s LIMIT 1",
+        (hashlib.sha256(jpeg).hexdigest(),),
+    )
+    return cur.fetchone() is not None
+
+
+def update_slip(
+    conn: psycopg.Connection,
+    slip_id: str,
+    fields: dict[str, Any],
+    *,
+    edited_by: str | None,
+    review_status: str | None = None,
+    review_reason: list[str] | None = None,
+) -> int:
+    """บันทึกค่าที่คนแก้ + เขียน audit log เฉพาะ field ที่เปลี่ยนจริง คืนจำนวน field ที่แก้"""
+    before = get_slip(conn, slip_id)
+    row = build_row(fields)
+    if review_status is not None:
+        row["review_status"] = review_status
+        row["needs_review"] = bool(review_reason)
+        row["review_reason"] = review_reason or []
+        row["reviewed_by"] = edited_by
+        row["reviewed_at"] = "now()"
+
+    sets = ", ".join(f"{c} = %({c})s" for c in row if c != "reviewed_at")
+    if review_status is not None:
+        sets += ", reviewed_at = now()"
+    row.pop("reviewed_at", None)
+    conn.execute(f"UPDATE {DB_SCHEMA}.slips SET {sets} WHERE id = %(id)s", {**row, "id": slip_id})
+
+    changed = 0
+    for col in ("name", "tel", "plate_raw", "province", "brand", "car_type", "location", "deposit_date"):
+        old, new = before.get(col), row.get(col)
+        if str(old or "") != str(new or ""):
+            conn.execute(
+                f"""INSERT INTO {DB_SCHEMA}.slip_edits (slip_id, field, old_value, new_value, edited_by)
+                    VALUES (%s, %s, %s, %s, %s)""",
+                (slip_id, col, str(old) if old is not None else None,
+                 str(new) if new is not None else None, edited_by),
+            )
+            changed += 1
+    return changed
+
+
+def mark_returned(conn: psycopg.Connection, slip_id: str, by: str | None, note: str | None) -> None:
+    conn.execute(
+        f"""UPDATE {DB_SCHEMA}.slips
+            SET car_status = 'returned', returned_at = now(), returned_by = %s, returned_note = %s
+            WHERE id = %s""",
+        (by, note, slip_id),
+    )
+
+
+# ---------- อ่านข้อมูล ----------
+
+def get_slip(conn: psycopg.Connection, slip_id: str) -> dict[str, Any]:
+    cur = conn.execute(f"SELECT * FROM {DB_SCHEMA}.slips WHERE id = %s", (slip_id,))
+    return cur.fetchone() or {}
+
+
+def get_image(conn: psycopg.Connection, slip_id: str, kind: str = "processed") -> bytes | None:
+    cur = conn.execute(
+        f"""SELECT bytes FROM {DB_SCHEMA}.slip_images
+            WHERE slip_id = %s AND kind = %s ORDER BY created_at LIMIT 1""",
+        (slip_id, kind),
+    )
+    row = cur.fetchone()
+    return bytes(row["bytes"]) if row else None
+
+
+def list_slips(
+    conn: psycopg.Connection,
+    *,
+    review_status: str | None = None,
+    needs_review: bool | None = None,
+    car_status: str | None = None,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    where, params = [], []
+    if review_status:
+        where.append("review_status = %s")
+        params.append(review_status)
+    if needs_review is not None:
+        where.append("needs_review = %s")
+        params.append(needs_review)
+    if car_status:
+        where.append("car_status = %s")
+        params.append(car_status)
+    clause = f"WHERE {' AND '.join(where)}" if where else ""
+    cur = conn.execute(
+        f"SELECT * FROM {DB_SCHEMA}.slips {clause} ORDER BY created_at DESC LIMIT %s",
+        (*params, limit),
+    )
+    return cur.fetchall()
+
+
+def review_counts(conn: psycopg.Connection) -> dict[str, int]:
+    cur = conn.execute(
+        f"""SELECT
+              count(*) FILTER (WHERE review_status = 'pending' AND needs_review)       AS needs_review,
+              count(*) FILTER (WHERE review_status = 'pending' AND NOT needs_review)   AS quick_pass,
+              count(*) FILTER (WHERE review_status = 'approved')                       AS approved,
+              count(*) FILTER (WHERE review_status = 'rejected')                       AS rejected,
+              count(*) FILTER (WHERE car_status = 'stored' AND review_status='approved') AS stored,
+              count(*)                                                                 AS total
+            FROM {DB_SCHEMA}.slips"""
+    )
+    return dict(cur.fetchone())
+
+
+def export_rows(conn: psycopg.Connection, filters: tuple[str, dict] | None = None) -> Iterable[dict]:
+    """แถวสำหรับ Excel — ใช้ filter ชุดเดียวกับหน้าตาราง"""
+    where, params = filters or ("TRUE", {})
+    cur = conn.execute(
+        f"""SELECT name, tel, plate_raw, province, brand, car_type, location, deposit_date,
+                   review_status, car_status, returned_at, returned_by, ocr_model, created_at
+            FROM {DB_SCHEMA}.slips WHERE {where} ORDER BY created_at""",
+        params,
+    )
+    return cur.fetchall()
+
+# ---------- ตารางข้อมูล + dashboard ----------
+
+def build_filters(
+    q: str | None = None,
+    review_status: str | None = None,
+    car_status: str | None = None,
+    car_type: str | None = None,
+) -> tuple[str, dict]:
+    """สร้าง WHERE clause ที่ใช้ร่วมกันระหว่างหน้าตาราง, ตัวนับ และ Excel
+
+    ใช้ตัวเดียวกันทุกที่ เพื่อให้ปุ่ม 'โหลด Excel' ได้ข้อมูลตรงกับที่เห็นบนจอเสมอ
+    """
+    where, params = ["TRUE"], {}
+    if review_status:
+        where.append("review_status = %(review_status)s")
+        params["review_status"] = review_status
+    if car_status:
+        where.append("car_status = %(car_status)s")
+        params["car_status"] = car_status
+    if car_type:
+        where.append("car_type = %(car_type)s")
+        params["car_type"] = car_type
+    if q and q.strip():
+        parts = ["name ILIKE %(q)s", "plate_raw ILIKE %(q)s",
+                 "brand ILIKE %(q)s", "location ILIKE %(q)s"]
+        params["q"] = f"%{q.strip()}%"
+        digits = "".join(ch for ch in q if ch.isdigit())
+        if digits:  # ถ้าไม่มีตัวเลขเลย ห้ามใส่เงื่อนไขเบอร์ ไม่งั้น LIKE '%%' จะแมตช์ทุกแถว
+            parts.append("tel_digits LIKE %(qd)s")
+            params["qd"] = f"%{digits}%"
+        where.append(f"({' OR '.join(parts)})")
+    return " AND ".join(where), params
+
+
+SORTABLE = {
+    "created_at": "created_at", "name": "name_norm", "tel": "tel_digits",
+    "plate": "plate_norm", "brand": "brand_norm", "date": "deposit_date",
+    "car_status": "car_status", "review_status": "review_status",
+}
+
+
+def query_slips(
+    conn: psycopg.Connection, *, filters: tuple[str, dict],
+    sort: str = "created_at", desc: bool = True, page: int = 1, per_page: int = 50,
+) -> tuple[list[dict], int]:
+    where, params = filters
+    total = conn.execute(
+        f"SELECT count(*) AS n FROM {DB_SCHEMA}.slips WHERE {where}", params
+    ).fetchone()["n"]
+    order = SORTABLE.get(sort, "created_at")
+    rows = conn.execute(
+        f"""SELECT id, name, tel, plate_raw, province, brand, car_type, location,
+                   deposit_date, review_status, needs_review, review_reason,
+                   car_status, returned_at, returned_by, ocr_model, created_at
+            FROM {DB_SCHEMA}.slips WHERE {where}
+            ORDER BY {order} {'DESC' if desc else 'ASC'} NULLS LAST
+            LIMIT %(limit)s OFFSET %(offset)s""",
+        {**params, "limit": per_page, "offset": (page - 1) * per_page},
+    ).fetchall()
+    return rows, total
+
+
+def dashboard_stats(conn: psycopg.Connection) -> dict[str, Any]:
+    """สรุปตัวเลขทั้งหมดในการ query ไม่กี่ครั้ง — หน้า dashboard ต้องเบา"""
+    kpi = dict(conn.execute(
+        f"""SELECT count(*) AS total,
+                   count(*) FILTER (WHERE review_status='approved')            AS approved,
+                   count(*) FILTER (WHERE review_status='pending')             AS pending,
+                   count(*) FILTER (WHERE review_status='pending' AND needs_review) AS needs_review,
+                   count(*) FILTER (WHERE review_status='rejected')            AS rejected,
+                   count(*) FILTER (WHERE car_status='stored')                 AS stored,
+                   count(*) FILTER (WHERE car_status='returned')               AS returned,
+                   coalesce(sum(ocr_cost_usd), 0)                              AS cost_usd,
+                   coalesce(avg(ocr_cost_usd) FILTER (WHERE ocr_cost_usd > 0), 0) AS avg_cost_usd,
+                   coalesce(avg(ocr_latency_s) FILTER (WHERE ocr_latency_s > 0), 0) AS avg_latency
+            FROM {DB_SCHEMA}.slips"""
+    ).fetchone())
+
+    def group(col: str, limit: int = 8) -> list[dict]:
+        return conn.execute(
+            f"""SELECT coalesce(nullif({col}, ''), '— ไม่ระบุ —') AS label, count(*) AS n
+                FROM {DB_SCHEMA}.slips WHERE review_status <> 'rejected'
+                GROUP BY 1 ORDER BY n DESC LIMIT %s""",
+            (limit,),
+        ).fetchall()
+
+    by_day = conn.execute(
+        f"""SELECT deposit_date AS label,
+                   count(*) AS n,
+                   count(*) FILTER (WHERE car_status='returned') AS returned
+            FROM {DB_SCHEMA}.slips
+            WHERE deposit_date IS NOT NULL AND review_status <> 'rejected'
+            GROUP BY 1 ORDER BY 1 DESC LIMIT 14"""
+    ).fetchall()
+
+    # คุณภาพ OCR: ช่องไหนที่คนต้องแก้บ่อยที่สุด (มาจาก audit log ของการใช้งานจริง)
+    edits = conn.execute(
+        f"""SELECT field AS label, count(*) AS n FROM {DB_SCHEMA}.slip_edits
+            GROUP BY 1 ORDER BY n DESC LIMIT 8"""
+    ).fetchall()
+    reviewed = conn.execute(
+        f"SELECT count(*) AS n FROM {DB_SCHEMA}.slips WHERE reviewed_at IS NOT NULL"
+    ).fetchone()["n"]
+
+    reasons = conn.execute(
+        f"""SELECT unnest(review_reason) AS label, count(*) AS n
+            FROM {DB_SCHEMA}.slips WHERE cardinality(review_reason) > 0
+            GROUP BY 1 ORDER BY n DESC"""
+    ).fetchall()
+
+    return {
+        "kpi": kpi,
+        "by_type": group("car_type"),
+        "by_brand": group("brand_norm"),
+        "by_location": group("location"),
+        "by_day": list(reversed(by_day)),
+        "edits": edits,
+        "reviewed": reviewed,
+        "reasons": reasons,
+    }
+
+
+
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) > 1 and sys.argv[1] == "init":
+        init_schema()
+        with connect() as c:
+            cur = c.execute(
+                "SELECT tablename FROM pg_tables WHERE schemaname = %s ORDER BY tablename",
+                (DB_SCHEMA,),
+            )
+            print(f"schema {DB_SCHEMA} พร้อมใช้งาน:", [r["tablename"] for r in cur.fetchall()])
+    else:
+        print(__doc__)

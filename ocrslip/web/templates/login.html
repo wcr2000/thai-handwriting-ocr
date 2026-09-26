@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>เข้าสู่ระบบ · ระบบฝากรถ</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body style="display:grid; place-items:center; min-height:100vh">
+<form method="post" action="/login" class="card" style="width:min(380px, 92vw)">
+  <h2 style="margin-top:0">🚗 ระบบฝากรถน้ำท่วม</h2>
+  {% if error %}<div class="err">{{ error }}</div>{% endif %}
+  <label for="username">ชื่อผู้ใช้</label>
+  <input type="text" id="username" name="username" value="{{ username or '' }}" autofocus required
+         autocomplete="username" autocapitalize="off" spellcheck="false">
+  <label for="password">รหัสผ่าน</label>
+  <input type="password" id="password" name="password" required autocomplete="current-password">
+  <input type="hidden" name="next" value="{{ next }}">
+  <p><button type="submit" style="width:100%">เข้าสู่ระบบ</button></p>
+  <p class="muted">ถ้ากรอกผิดหลายครั้ง ระบบจะล็อกชั่วคราวและนานขึ้นเรื่อย ๆ</p>
+</form>
+</body>
+</html>

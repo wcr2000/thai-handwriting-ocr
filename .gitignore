@@ -216,3 +216,83 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+bench/out/
+.venv/
+out/
+
+# ============================================================================
+# SECURITY / PRIVACY — เพิ่มโดย security audit ก่อน push ขึ้น public repo
+# repo นี้เป็น PUBLIC — ไฟล์ด้านล่างมีทั้ง credential จริงและข้อมูลส่วนบุคคล
+# ของประชาชนจริง (ชื่อ-นามสกุล / เบอร์โทร / ทะเบียนรถ) ที่เก็บตอนน้ำท่วม
+# ห้าม commit เด็ดขาด
+# ============================================================================
+
+# --- Credentials -----------------------------------------------------------
+# .env มี OPENROUTER_API_KEY จริง + Postgres connection string จริง (มี password)
+.env
+.env.*
+!.env.example
+*.env
+.envrc
+secrets.json
+*.pem
+*.key
+*.p12
+*.pfx
+
+# --- PII: รูปใบฝากรถจริง + ground truth -----------------------------------
+# example/ = ภาพถ่ายใบฝากรถลายมือของเจ้าของรถจริง + label.json (ชื่อ/เบอร์/ทะเบียน)
+example/
+!example/.gitkeep
+
+# --- PII: ผลลัพธ์ LLM (มีข้อมูลเดียวกับ example/ + usage/cost data) --------
+bench/out/
+out/
+**/out/
+
+# --- รูปภาพ/ไฟล์สแกนทุกชนิด (กันรูปใบฝากรถหลุดโดยไม่ตั้งใจ) --------------
+*.HEIC
+*.heic
+*.HEIF
+*.heif
+*.jpg
+*.JPG
+*.jpeg
+*.JPEG
+*.png
+*.PNG
+*.webp
+*.tif
+*.tiff
+*.pdf
+
+# --- ข้อมูล export / dump ที่อาจมี PII ------------------------------------
+*.xlsx
+*.xls
+*.csv
+*.sqlite
+*.sqlite3
+*.db
+*.sql.gz
+*.dump
+dump.rdb
+uploads/
+storage/
+media/
+data/
+
+# --- Local env / caches / scratch -----------------------------------------
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.DS_Store
+scratchpad/
+tmp/
+*.tmp
+*.bak
+*.orig
+*.log

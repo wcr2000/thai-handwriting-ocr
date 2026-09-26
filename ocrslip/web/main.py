@@ -1,0 +1,336 @@
+"""เว็บแอปฝากรถน้ำท่วม: อัปโหลด -> OCR -> คิวตรวจสอบ -> ค้นหา -> คืนรถ
+
+รัน:  uvicorn ocrslip.web.main:app --reload
+"""
+
+from __future__ import annotations
+
+import io
+import secrets
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from urllib.parse import quote, urlencode
+from typing import Any
+
+from fastapi import FastAPI, Form, HTTPException, Request, UploadFile
+from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+
+from ..auth import COOKIE_NAME, SESSION_TTL, User, authenticate, make_token, read_token
+from ..config import COOKIE_SECURE, OCR_MODEL, SECRET_KEY, USD_THB
+from ..db import (
+    build_filters, connect, dashboard_stats, export_rows, get_image, get_slip,
+    list_slips, mark_returned, query_slips, review_counts, update_slip,
+)
+from ..review import REASON_LABELS, evaluate
+from ..search import search as fuzzy_search
+from .pipeline import ingest
+
+HERE = Path(__file__).resolve().parent
+app = FastAPI(title="ระบบฝากรถน้ำท่วม")
+
+# ถ้าไม่ได้ตั้ง SECRET_KEY ให้สุ่มขึ้นมาใช้ในรอบนี้ — ปลอดภัย แต่รีสตาร์ตแล้วทุกคนต้องล็อกอินใหม่
+_SECRET = SECRET_KEY or secrets.token_urlsafe(32)
+
+# หน้าที่เข้าได้โดยไม่ต้องล็อกอิน
+PUBLIC_PATHS = ("/login", "/static", "/health", "/favicon.ico")
+# หน้าที่เฉพาะ admin เท่านั้น — จุดที่ย้อนกลับไม่ได้ หรือเป็นข้อมูลส่วนตัวทั้งก้อน
+ADMIN_ONLY = ("/table", "/dashboard", "/export.xlsx")
+ADMIN_ONLY_SUFFIX = ("/return", "/reject")
+app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
+templates = Jinja2Templates(directory=HERE / "templates")
+templates.env.globals["reason_labels"] = REASON_LABELS
+templates.env.globals["usd_thb"] = USD_THB
+
+FORM_FIELDS = ("name", "tel", "date", "noplate", "province", "brand", "typecar", "location")
+
+
+def current_user(request: Request) -> User | None:
+    token = request.cookies.get(COOKIE_NAME, "")
+    return read_token(token, _SECRET) if token else None
+
+
+@app.middleware("http")
+async def auth_gate(request: Request, call_next):
+    """ปิดทุกหน้าที่ไม่ได้อยู่ใน PUBLIC_PATHS และบังคับสิทธิ์ admin ในหน้าที่กำหนด"""
+    path = request.url.path
+    if path.startswith(PUBLIC_PATHS):
+        return await call_next(request)
+
+    user = current_user(request)
+    if user is None:
+        if request.headers.get("HX-Request"):  # คำขอจาก HTMX ให้สั่งเบราว์เซอร์เด้งไปหน้า login
+            return Response(status_code=401, headers={"HX-Redirect": "/login"})
+        return RedirectResponse(f"/login?next={quote(str(request.url.path))}", status_code=303)
+
+    if not user.is_admin and (path.startswith(ADMIN_ONLY) or path.endswith(ADMIN_ONLY_SUFFIX)):
+        return HTMLResponse(
+            "<h3 style='font-family:sans-serif;padding:2rem'>หน้านี้สำหรับผู้ดูแลระบบเท่านั้น"
+            " · <a href='/'>กลับหน้าแรก</a></h3>", status_code=403)
+
+    request.state.user = user
+    return await call_next(request)
+
+
+def render(request: Request, name: str, **ctx) -> HTMLResponse:
+    ctx.setdefault("user", getattr(request.state, "user", None))
+    return templates.TemplateResponse(request, name, ctx)
+
+
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_form(request: Request, next: str = "/", error: str = ""):
+    if current_user(request):
+        return RedirectResponse("/", status_code=303)
+    return templates.TemplateResponse(request, "login.html", {"next": next, "error": error})
+
+
+@app.post("/login")
+async def login(request: Request):
+    form = await request.form()
+    client_ip = (request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+                 or (request.client.host if request.client else "unknown"))
+    user, error = authenticate(str(form.get("username", "")), str(form.get("password", "")), client_ip)
+    nxt = str(form.get("next") or "/")
+    if not nxt.startswith("/"):  # กัน open redirect
+        nxt = "/"
+    if user is None:
+        return templates.TemplateResponse(
+            request, "login.html", {"next": nxt, "error": error, "username": form.get("username", "")},
+            status_code=401,
+        )
+    resp = RedirectResponse(nxt, status_code=303)
+    resp.set_cookie(
+        COOKIE_NAME, make_token(user, _SECRET), max_age=SESSION_TTL,
+        httponly=True, samesite="lax", secure=COOKIE_SECURE,
+    )
+    return resp
+
+
+@app.post("/logout")
+def logout():
+    resp = RedirectResponse("/login", status_code=303)
+    resp.delete_cookie(COOKIE_NAME)
+    return resp
+
+
+@app.get("/", response_class=HTMLResponse)
+def home(request: Request):
+    with connect() as conn:
+        return render(request, "index.html", counts=review_counts(conn), model=OCR_MODEL)
+
+
+@app.post("/api/ocr", response_class=HTMLResponse)
+async def api_ocr(request: Request, files: list[UploadFile], created_by: str = Form("")):
+    """อัปโหลดได้หลายใบพร้อมกัน — ทุกใบเข้าคิว pending รอคนตรวจเสมอ
+
+    ประมวลผลขนานกัน เพราะเวลาเกือบทั้งหมดหมดไปกับการรอ LLM ตอบ
+    (คีย์ย้อนหลังเป็นร้อยใบแบบทีละใบจะช้าเกินใช้งาน)
+    """
+    created_by = created_by or getattr(request.state, "user", None) and request.state.user.username
+    uploads = [(f.filename, await f.read()) for f in files]
+    uploads = [(name, raw) for name, raw in uploads if raw]
+
+    def one(item: tuple[str, bytes]) -> dict[str, Any]:
+        name, raw = item
+        try:
+            with connect() as conn:  # หนึ่ง connection ต่อหนึ่ง thread
+                return {**ingest(conn, raw, created_by=created_by or None), "filename": name}
+        except Exception as exc:  # ใบเดียวพังต้องไม่ทำให้ทั้ง batch ล่ม
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "filename": name}
+
+    with ThreadPoolExecutor(max_workers=min(6, max(1, len(uploads)))) as pool:
+        results = list(pool.map(one, uploads))
+    return render(request, "partials/upload_result.html", results=results)
+
+
+@app.get("/review", response_class=HTMLResponse)
+def review_queue(request: Request, filter: str = "needs"):
+    criteria = {
+        "needs": dict(review_status="pending", needs_review=True),
+        "quick": dict(review_status="pending", needs_review=False),
+        "approved": dict(review_status="approved"),
+        "rejected": dict(review_status="rejected"),
+        "all": {},
+    }.get(filter, {})
+    with connect() as conn:
+        return render(
+            request, "review_list.html",
+            slips=list_slips(conn, **criteria), counts=review_counts(conn), active=filter,
+        )
+
+
+@app.get("/review/{slip_id}", response_class=HTMLResponse)
+def review_one(request: Request, slip_id: str):
+    with connect() as conn:
+        slip = get_slip(conn, slip_id)
+        if not slip:
+            return HTMLResponse("ไม่พบใบนี้", status_code=404)
+        # ใบถัดไปในคิว: เอาที่ต้องตรวจก่อน ถ้าหมดค่อยไล่ใบที่รอยืนยันเฉย ๆ
+        queue = [s for s in list_slips(conn, review_status="pending", limit=200)
+                 if str(s["id"]) != slip_id]
+        queue.sort(key=lambda s: (not s["needs_review"], s["created_at"]))
+        return render(
+            request, "review_detail.html",
+            slip=slip, problems=(slip.get("raw_ocr") or {}).get("problems", {}),
+            next_id=str(queue[0]["id"]) if queue else None, remaining=len(queue),
+        )
+
+
+def _form_fields(form) -> dict[str, Any]:
+    return {f: (form.get(f) or "").strip() or None for f in FORM_FIELDS}
+
+
+@app.post("/review/{slip_id}/approve")
+async def approve(request: Request, slip_id: str):
+    form = await request.form()
+    fields = _form_fields(form)
+    reviewer = ((form.get("reviewed_by") or "").strip()
+                or getattr(request.state, "user", None) and request.state.user.username)
+    # ตรวจซ้ำหลังคนแก้ แต่บล็อกเฉพาะ "ช่องบังคับที่ยังว่าง" เท่านั้น
+    # ส่วนรูปแบบแปลก ๆ (ทะเบียนไม่มีหมวดอักษร, วันที่เขียนแค่ '26') เป็นแค่คำเตือน
+    # เพราะคนตรวจเห็นรูปใบจริงแล้ว และของจริงก็มีใบแบบนั้นอยู่จริง
+    reasons, problems = evaluate(fields, {})
+    blocking = {f: msg for f, msg in problems.items() if not fields.get(f)}
+    with connect() as conn:
+        if blocking:
+            slip = get_slip(conn, slip_id)
+            return render(
+                request, "review_detail.html",
+                slip={**slip, **{k: v for k, v in fields.items() if v}},
+                problems=blocking, next_id=None, remaining=0,
+                error="ยังมีช่องบังคับที่ว่างอยู่ (ชื่อ / เบอร์โทร / ทะเบียน) กรอกให้ครบก่อนอนุมัติ",
+            )
+        update_slip(conn, slip_id, fields, edited_by=reviewer,
+                    review_status="approved", review_reason=[])
+        conn.commit()
+    nxt = (form.get("next_id") or "").strip()
+    return RedirectResponse(f"/review/{nxt}" if nxt else "/review", status_code=303)
+
+
+@app.post("/review/{slip_id}/reject")
+async def reject(request: Request, slip_id: str):
+    form = await request.form()
+    with connect() as conn:
+        conn.execute(
+            "UPDATE ocr_dhammakaya.slips SET review_status='rejected', needs_review=false,"
+            " review_reason=%s, reviewed_by=%s, reviewed_at=now() WHERE id=%s",
+            ([(form.get("reason") or "รูปอ่านไม่ได้")], (form.get("reviewed_by") or None), slip_id),
+        )
+        conn.commit()
+    return RedirectResponse("/review", status_code=303)
+
+
+@app.get("/search", response_class=HTMLResponse)
+def search_page(request: Request):
+    return render(request, "search.html")
+
+
+@app.get("/api/search", response_class=HTMLResponse)
+def api_search(request: Request, q: str = "", include_pending: bool = False):
+    with connect() as conn:
+        rows = fuzzy_search(conn, q, include_pending=include_pending) if q else []
+    return render(request, "partials/results.html", rows=rows, q=q)
+
+
+@app.get("/slips/{slip_id}", response_class=HTMLResponse)
+def slip_detail(request: Request, slip_id: str):
+    with connect() as conn:
+        slip = get_slip(conn, slip_id)
+        if not slip:
+            return HTMLResponse("ไม่พบใบนี้", status_code=404)
+        edits = conn.execute(
+            "SELECT * FROM ocr_dhammakaya.slip_edits WHERE slip_id=%s ORDER BY edited_at DESC",
+            (slip_id,),
+        ).fetchall()
+    return render(request, "slip.html", slip=slip, edits=edits)
+
+
+@app.post("/slips/{slip_id}/return")
+async def do_return(request: Request, slip_id: str):
+    form = await request.form()
+    with connect() as conn:
+        mark_returned(conn, slip_id, (form.get("returned_by") or None), (form.get("note") or None))
+        conn.commit()
+    return RedirectResponse(f"/slips/{slip_id}", status_code=303)
+
+
+@app.get("/image/{slip_id}")
+def image(slip_id: str, kind: str = "processed"):
+    with connect() as conn:
+        data = get_image(conn, slip_id, kind)
+    if not data:
+        return Response(status_code=404)
+    return Response(data, media_type="image/jpeg",
+                    headers={"Cache-Control": "private, max-age=86400"})
+
+
+@app.get("/table", response_class=HTMLResponse)
+def table_view(
+    request: Request,
+    q: str = "", review_status: str = "", car_status: str = "", car_type: str = "",
+    sort: str = "created_at", dir: str = "desc", page: int = 1,
+):
+    """ตารางข้อมูลทั้งหมด พร้อมตัวกรอง/เรียง/แบ่งหน้า — ไม่โหลดรูปเพื่อให้หน้าเบา"""
+    filters = build_filters(q=q, review_status=review_status,
+                            car_status=car_status, car_type=car_type)
+    per_page = 50
+    with connect() as conn:
+        rows, total = query_slips(conn, filters=filters, sort=sort,
+                                  desc=(dir != "asc"), page=max(1, page), per_page=per_page)
+    qs = urlencode({k: v for k, v in
+                    {"q": q, "review_status": review_status, "car_status": car_status,
+                     "car_type": car_type, "sort": sort, "dir": dir}.items() if v})
+    return render(
+        request, "table.html", rows=rows, total=total, page=max(1, page),
+        per_page=per_page, pages=max(1, -(-total // per_page)), qs=qs,
+        f={"q": q, "review_status": review_status, "car_status": car_status,
+           "car_type": car_type, "sort": sort, "dir": dir},
+    )
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard(request: Request):
+    with connect() as conn:
+        return render(request, "dashboard.html", **dashboard_stats(conn))
+
+
+@app.get("/export.xlsx")
+def export_xlsx(
+    q: str = "", review_status: str = "", car_status: str = "", car_type: str = "",
+):
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "ใบฝากรถ"
+    headers = ["ชื่อ", "เบอร์โทร", "ทะเบียน", "จังหวัด", "ยี่ห้อ", "ประเภท", "ที่จอด",
+               "วันที่ฝาก", "สถานะตรวจ", "สถานะรถ", "คืนเมื่อ", "ผู้คืน", "model", "บันทึกเมื่อ"]
+    ws.append(headers)
+    filters = build_filters(q=q, review_status=review_status,
+                            car_status=car_status, car_type=car_type)
+    with connect() as conn:
+        for r in export_rows(conn, filters):
+            ws.append([
+                r["name"], r["tel"], r["plate_raw"], r["province"], r["brand"], r["car_type"],
+                r["location"], r["deposit_date"], r["review_status"], r["car_status"],
+                r["returned_at"].replace(tzinfo=None) if r["returned_at"] else None,
+                r["returned_by"], r["ocr_model"],
+                r["created_at"].replace(tzinfo=None) if r["created_at"] else None,
+            ])
+    for i, h in enumerate(headers, 1):
+        ws.column_dimensions[ws.cell(1, i).column_letter].width = max(12, len(h) + 4)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="slips.xlsx"'},
+    )

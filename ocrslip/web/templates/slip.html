@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row">
+  <div class="col" style="flex:1 1 480px">
+    <div class="card">
+      <img class="slip-img" src="/image/{{ slip.id }}" alt="ใบฝากรถ">
+      <p class="muted"><a href="/image/{{ slip.id }}?kind=original" target="_blank">ดูรูปต้นฉบับ</a></p>
+    </div>
+  </div>
+  <div class="col">
+    <div class="card">
+      <h2>{{ slip.name or '—' }}</h2>
+      <table>
+        <tr><th>เบอร์โทร</th><td>{{ slip.tel or '—' }}</td></tr>
+        <tr><th>ทะเบียน</th><td>{{ slip.plate_raw or '—' }} {{ slip.province or '' }}</td></tr>
+        <tr><th>ยี่ห้อ</th><td>{{ slip.brand or '—' }} ({{ slip.car_type or '—' }})</td></tr>
+        <tr><th>ที่จอด</th><td>{{ slip.location or '—' }}</td></tr>
+        <tr><th>วันที่ฝาก</th><td>{{ slip.deposit_date or '—' }}</td></tr>
+        <tr><th>สถานะตรวจ</th><td>{{ slip.review_status }}</td></tr>
+        <tr><th>สถานะรถ</th><td>{{ slip.car_status }}{% if slip.returned_at %} เมื่อ {{ slip.returned_at.strftime('%d/%m/%Y %H:%M') }} โดย {{ slip.returned_by or '—' }}{% endif %}</td></tr>
+      </table>
+    </div>
+    {% if slip.car_status == 'stored' and user and user.is_admin %}
+    <form method="post" action="/slips/{{ slip.id }}/return" class="card">
+      <h3>ยืนยันการรับรถคืน</h3>
+      <p class="muted">เทียบรูปใบจริงกับผู้มารับก่อนกดยืนยัน</p>
+      <label for="returned_by">เจ้าหน้าที่ผู้ส่งมอบ</label>
+      <input type="text" id="returned_by" name="returned_by" required>
+      <label for="note">หมายเหตุ</label>
+      <input type="text" id="note" name="note">
+      <p><button type="submit">✓ รับรถคืนแล้ว</button></p>
+    </form>
+    {% endif %}
+    {% if slip.car_status == 'stored' and user and not user.is_admin %}
+    <div class="card muted">การรับรถคืนต้องทำโดยผู้ดูแลระบบ</div>
+    {% endif %}
+    {% if edits %}
+    <div class="card">
+      <h3>ประวัติการแก้ไข</h3>
+      <table>
+        <tr><th>ช่อง</th><th>จาก AI</th><th>แก้เป็น</th><th>โดย</th></tr>
+        {% for e in edits %}
+        <tr><td>{{ e.field }}</td><td class="muted">{{ e.old_value or '—' }}</td><td>{{ e.new_value or '—' }}</td><td>{{ e.edited_by or '—' }}</td></tr>
+        {% endfor %}
+      </table>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

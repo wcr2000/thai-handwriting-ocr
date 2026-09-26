@@ -1,0 +1,31 @@
+:root { --line:#d9dee5; --muted:#667; --bg:#f6f7f9; --ok:#0a7d34; --warn:#b8860b; --bad:#b3261e; }
+* { box-sizing:border-box; }
+body { margin:0; font-family:-apple-system,"Sarabun","Noto Sans Thai",sans-serif; background:var(--bg); color:#1a1a1a; }
+header { display:flex; gap:1.5rem; align-items:center; padding:.8rem 1.2rem; background:#fff; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+.brand { font-weight:700; text-decoration:none; color:inherit; }
+nav a { margin-right:1rem; color:#2557a7; text-decoration:none; }
+main { max-width:1100px; margin:1.2rem auto; padding:0 1rem; }
+.card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:1rem; margin-bottom:1rem; }
+.row { display:flex; gap:1rem; flex-wrap:wrap; }
+.col { flex:1 1 320px; min-width:0; }
+label { display:block; font-size:.85rem; color:var(--muted); margin:.6rem 0 .2rem; }
+input[type=text], input[type=search], select, textarea {
+  width:100%; padding:.55rem .6rem; border:1px solid var(--line); border-radius:7px; font-size:1rem; background:#fff; }
+input.warn { background:#fff8e1; border-color:#e6c300; }
+input.bad  { background:#fdecea; border-color:#e99; }
+button { padding:.6rem 1rem; border:0; border-radius:8px; background:#2557a7; color:#fff; font-size:1rem; cursor:pointer; }
+button.ghost { background:#eef1f6; color:#223; }
+button.danger { background:#b3261e; }
+table { width:100%; border-collapse:collapse; font-size:.92rem; }
+th, td { text-align:left; padding:.45rem .5rem; border-bottom:1px solid var(--line); vertical-align:top; }
+th { color:var(--muted); font-weight:600; }
+.badge { display:inline-block; padding:.1rem .45rem; border-radius:99px; font-size:.75rem; background:#eef1f6; margin-right:.25rem; }
+.badge.warn { background:#fff3cd; color:#7a5c00; }
+.badge.ok { background:#e3f5e9; color:var(--ok); }
+.badge.bad { background:#fdecea; color:var(--bad); }
+.filters a { display:inline-block; padding:.35rem .7rem; border-radius:99px; background:#eef1f6; color:#223; text-decoration:none; margin-right:.4rem; }
+.filters a.active { background:#2557a7; color:#fff; }
+.slip-img { width:100%; border:1px solid var(--line); border-radius:8px; background:#fff; }
+.score { font-weight:700; color:var(--ok); }
+.muted { color:var(--muted); font-size:.85rem; }
+.err { background:#fdecea; border:1px solid #e99; padding:.6rem; border-radius:8px; margin-bottom:.8rem; }

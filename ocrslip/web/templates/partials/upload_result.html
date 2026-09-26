@@ -1,0 +1,26 @@
+<div class="card">
+  <h3>ผลการอ่าน {{ results|length }} ใบ</h3>
+  <table>
+    <tr><th>ไฟล์</th><th>ชื่อ</th><th>เบอร์</th><th>ทะเบียน</th><th>สถานะ</th><th></th></tr>
+    {% for r in results %}
+    <tr>
+      <td>{{ r.filename }}</td>
+      {% if r.ok %}
+        <td>{{ r.fields.name or '—' }}</td>
+        <td>{{ r.fields.tel or '—' }}</td>
+        <td>{{ r.fields.noplate or '—' }}</td>
+        <td>
+          {% if r.reasons %}
+            {% for reason in r.reasons %}<span class="badge warn">{{ reason_labels.get(reason, reason) }}</span>{% endfor %}
+          {% else %}<span class="badge ok">พร้อมอนุมัติ</span>{% endif %}
+        </td>
+        <td><a href="/review/{{ r.id }}">ตรวจ →</a></td>
+      {% else %}
+        <td colspan="4"><span class="badge bad">อ่านไม่สำเร็จ</span> <span class="muted">{{ r.error }}</span></td>
+        <td></td>
+      {% endif %}
+    </tr>
+    {% endfor %}
+  </table>
+  <p><a href="/review">ไปที่คิวตรวจสอบ →</a></p>
+</div>

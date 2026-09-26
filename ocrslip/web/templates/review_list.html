@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>คิวตรวจสอบ</h2>
+  <p class="filters">
+    <a href="/review?filter=needs"    class="{{ 'active' if active=='needs' }}">ต้องตรวจ ({{ counts.needs_review }})</a>
+    <a href="/review?filter=quick"    class="{{ 'active' if active=='quick' }}">ผ่านเร็ว ({{ counts.quick_pass }})</a>
+    <a href="/review?filter=approved" class="{{ 'active' if active=='approved' }}">อนุมัติแล้ว ({{ counts.approved }})</a>
+    <a href="/review?filter=rejected" class="{{ 'active' if active=='rejected' }}">ตีกลับ ({{ counts.rejected }})</a>
+    <a href="/review?filter=all"      class="{{ 'active' if active=='all' }}">ทั้งหมด ({{ counts.total }})</a>
+  </p>
+  <table>
+    <tr><th>ชื่อ</th><th>เบอร์</th><th>ทะเบียน</th><th>ยี่ห้อ</th><th>ที่จอด</th><th>เหตุผลที่ต้องตรวจ</th><th></th></tr>
+    {% for s in slips %}
+    <tr>
+      <td>{{ s.name or '—' }}</td><td>{{ s.tel or '—' }}</td>
+      <td>{{ s.plate_raw or '—' }}{% if s.province %} <span class="muted">{{ s.province }}</span>{% endif %}</td>
+      <td>{{ s.brand or '—' }}</td><td>{{ s.location or '—' }}</td>
+      <td>{% for reason in s.review_reason %}<span class="badge warn">{{ reason_labels.get(reason, reason) }}</span>{% endfor %}</td>
+      <td><a href="/review/{{ s.id }}">ตรวจ →</a></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7" class="muted">ไม่มีใบในกองนี้</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

@@ -1,0 +1,43 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+# ค่าลับทุกตัวเป็น sync: false คือ "ให้ไปกรอกใน Render Dashboard" ไม่เก็บลง git
+services:
+  - type: web
+    name: ocr-dhammakaya
+    runtime: docker
+    plan: starter
+    region: singapore
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    # /static/app.css ตอบ 200 โดยไม่ต้องต่อ DB และไม่ติด login
+    healthCheckPath: /static/app.css
+    autoDeployTrigger: commit
+    envVars:
+      # --- OpenRouter ---
+      - key: OPENROUTER_API_KEY
+        sync: false
+      # --- Postgres ---
+      - key: DATABASE_URL
+        sync: false
+      - key: DB_SCHEMA
+        sync: false
+      # --- OCR ---
+      - key: OCR_MODEL
+        sync: false
+      - key: CONFIDENCE_THRESHOLD
+        sync: false
+      - key: USD_THB
+        sync: false
+      # --- ระบบล็อกอิน ---
+      - key: SECRET_KEY
+        sync: false
+      - key: ADMIN_USERNAME
+        sync: false
+      - key: ADMIN_PASSWORD_HASH
+        sync: false
+      - key: USER_USERNAME
+        sync: false
+      - key: USER_PASSWORD_HASH
+        sync: false
+      # Render เป็น HTTPS อยู่แล้ว — ตั้ง true เพื่อบังคับ Secure cookie
+      - key: COOKIE_SECURE
+        sync: false

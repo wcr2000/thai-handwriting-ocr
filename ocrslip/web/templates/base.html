@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}ระบบฝากรถน้ำท่วม{% endblock %}</title>
+<script src="https://unpkg.com/htmx.org@1.9.12"></script>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header>
+  <a class="brand" href="/">🚗 ระบบฝากรถ</a>
+  <nav style="flex:1">
+    <a href="/">อัปโหลด</a>
+    <a href="/review">คิวตรวจสอบ</a>
+    <a href="/search">ค้นหา{% if user and user.is_admin %} / คืนรถ{% endif %}</a>
+    {% if user and user.is_admin %}
+    <a href="/table">ตารางข้อมูล</a>
+    <a href="/dashboard">สรุปภาพรวม</a>
+    {% endif %}
+  </nav>
+  {% if user %}
+  <form method="post" action="/logout" style="display:flex; align-items:center; gap:.5rem">
+    <span class="muted">{{ user.username }}
+      <span class="badge {{ 'ok' if user.is_admin else '' }}">{{ 'ผู้ดูแล' if user.is_admin else 'เจ้าหน้าที่' }}</span></span>
+    <button type="submit" class="ghost" style="padding:.35rem .7rem">ออกจากระบบ</button>
+  </form>
+  {% endif %}
+</header>
+<main>{% block content %}{% endblock %}</main>
+</body>
+</html>

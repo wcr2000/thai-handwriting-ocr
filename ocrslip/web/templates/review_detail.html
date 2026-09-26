@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% macro f(name, label, value, problems, span=1) %}
+  <div class="fld" style="grid-column:span {{ span }}">
+    <label for="{{ name }}">{{ label }}{% if problems.get(name) %}
+      <span class="badge warn">{{ problems[name] }}</span>{% endif %}</label>
+    <input type="text" id="{{ name }}" name="{{ name }}" value="{{ value or '' }}"
+           class="{{ 'bad' if not value and name in ('name','tel','noplate') else ('warn' if problems.get(name) else '') }}">
+  </div>
+{% endmacro %}
+{% block content %}
+<style>
+  /* หน้านี้ต้องจบในหน้าจอเดียว: ภาพซ้าย ฟอร์มขวา ปุ่มอนุมัติติดอยู่ล่างเสมอ */
+  main { max-width:1500px; }
+  .rev { display:grid; grid-template-columns:minmax(0,1.15fr) minmax(360px,.85fr); gap:1rem;
+         height:calc(100vh - 150px); min-height:520px; }
+  .rev-img { background:#fff; border:1px solid var(--line); border-radius:10px; padding:.6rem;
+             display:flex; flex-direction:column; min-height:0; }
+  /* ให้ <a> เป็นตัวยืด ไม่งั้นรูปจะสูงตามสัดส่วนภาพแล้วเหลือที่ว่างข้างล่างเยอะ */
+  .rev-img a { flex:1; min-height:0; display:flex; align-items:center; justify-content:center; }
+  .rev-img img { max-height:100%; max-width:100%; object-fit:contain; cursor:zoom-in; }
+  .rev-form { background:#fff; border:1px solid var(--line); border-radius:10px;
+              display:flex; flex-direction:column; min-height:0; }
+  .rev-form .body { flex:1; min-height:0; overflow:auto; padding:.9rem 1rem .4rem; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:.1rem .8rem; }
+  .fld label { margin:.35rem 0 .15rem; font-size:.8rem; }
+  .fld input, .fld select { padding:.45rem .55rem; font-size:.98rem; }
+  .actbar { border-top:1px solid var(--line); padding:.7rem 1rem; display:flex; gap:.6rem;
+            align-items:center; flex-wrap:wrap; background:#fbfcfd; border-radius:0 0 10px 10px; }
+  .actbar button.big { font-size:1.05rem; padding:.75rem 1.4rem; font-weight:600; }
+  .kbd { font:.75rem ui-monospace,monospace; background:#eef1f6; border:1px solid var(--line);
+         border-radius:4px; padding:.05rem .3rem; }
+  details.reject { margin-left:auto; }
+  details.reject summary { cursor:pointer; color:var(--bad); font-size:.9rem; }
+  details.reject .row { margin-top:.5rem; gap:.4rem }
+  @media (max-width:900px) { .rev { grid-template-columns:1fr; height:auto; }
+                             .rev-img img { max-height:45vh; } }
+</style>
+{% if error %}<div class="err">{{ error }}</div>{% endif %}
+
+<form method="post" action="/review/{{ slip.id }}/approve" class="rev">
+  <div class="rev-img">
+    <a href="/image/{{ slip.id }}?kind=original" target="_blank" title="คลิกเพื่อดูรูปต้นฉบับเต็ม">
+      <img src="/image/{{ slip.id }}?kind=processed" alt="ใบฝากรถ"></a>
+    <p class="muted" style="margin:.4rem 0 0">คลิกที่รูปเพื่อดูต้นฉบับก่อน crop ·
+       อ่านโดย <code>{{ slip.ocr_model }}</code>
+       {% if slip.ocr_cost_usd %}· ใบนี้ {{ '%.3f'|format(slip.ocr_cost_usd|float * usd_thb) }} บาท{% endif %}
+       {% if slip.ocr_latency_s %}· {{ slip.ocr_latency_s }} วิ{% endif %}</p>
+  </div>
+
+  <div class="rev-form">
+    <div class="body">
+      <div style="margin-bottom:.3rem">
+        <strong style="display:block; margin-bottom:.2rem">ตรวจและแก้ข้อมูล</strong>
+        {% for reason in slip.review_reason %}<span class="badge warn">{{ reason_labels.get(reason, reason) }}</span>{% endfor %}
+        {% if not slip.review_reason %}<span class="badge ok">AI มั่นใจทุกช่อง</span>{% endif %}
+      </div>
+
+      <div class="grid2">
+        {{ f('name', 'ชื่อ-นามสกุล', slip.name, problems, 2) }}
+        {{ f('tel', 'เบอร์โทร', slip.tel, problems) }}
+        {{ f('date', 'วันที่ฝาก', slip.deposit_date, problems) }}
+        {{ f('noplate', 'ทะเบียนรถ', slip.plate_raw, problems) }}
+        {{ f('province', 'จังหวัด', slip.province, problems) }}
+        {{ f('brand', 'ยี่ห้อ / รุ่น / สี', slip.brand, problems) }}
+        <div class="fld">
+          <label for="typecar">ประเภทรถ</label>
+          <select id="typecar" name="typecar">
+            {% for t in ['', 'ตู้', 'กระบะ', 'เก๋ง', 'อื่นๆ'] %}
+            <option value="{{ t }}" {{ 'selected' if slip.car_type == t }}>{{ t or '— ไม่ระบุ —' }}</option>{% endfor %}
+          </select>
+        </div>
+        {{ f('location', 'ที่จอดรถ', slip.location, problems, 2) }}
+        {{ f('reviewed_by', 'ผู้ตรวจ', user.username if user else '', {}, 2) }}
+      </div>
+
+      <p class="muted" style="margin:.6rem 0 0">ความมั่นใจของ AI:
+        {% for k, v in (slip.ocr_confidence or {}).items() %}<span
+          class="{{ 'badge warn' if v < 0.85 else '' }}">{{ k }} {{ '%.2f'|format(v) }}</span>{{ ' · ' if not loop.last }}{% endfor %}</p>
+    </div>
+
+    <div class="actbar">
+      <input type="hidden" name="next_id" value="{{ next_id or '' }}">
+      <button type="submit" class="big">✓ อนุมัติ{% if next_id %} → ใบถัดไป{% endif %}</button>
+      <span class="muted">กด <span class="kbd">Enter</span> ก็ได้{% if remaining %} · เหลืออีก {{ remaining }} ใบ{% endif %}</span>
+    </div>
+  </div>
+</form>
+
+{% if user and user.is_admin %}
+<form method="post" action="/review/{{ slip.id }}/reject" class="card" style="margin-top:.8rem; padding:.7rem 1rem">
+  <div class="row" style="align-items:flex-end; gap:.6rem">
+    <div style="flex:1 1 320px">
+      <label for="reason" style="margin-top:0">ตีกลับ — รูปเบลอ / ไม่ใช่ใบฝากรถ / ข้อมูลใช้ไม่ได้</label>
+      <input type="text" id="reason" name="reason" placeholder="เหตุผล">
+    </div>
+    <div><button type="submit" class="danger">ตีกลับ</button></div>
+  </div>
+</form>
+{% endif %}
+{% endblock %}
