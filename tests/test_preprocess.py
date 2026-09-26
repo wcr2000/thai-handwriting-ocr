@@ -120,3 +120,20 @@ def test_upright_rotates_only_when_model_says_upside_down(orientation, rotated):
     assert (out is not img) == rotated
     if rotated:
         assert np.array_equal(np.asarray(out), np.asarray(img)[::-1, ::-1])
+
+
+def test_raw_ocr_always_records_orientation():
+    """raw_ocr ต้องมี orientation เสมอ
+
+    reprocess ใช้ฟิลด์นี้ตัดสินว่าใบไหน "ยังไม่เคยเช็คว่ากลับหัว" ถ้าไม่บันทึกไว้
+    ใบที่เพิ่งอัปโหลดจะถูกหยิบไปยิง model ซ้ำทุกครั้งที่รัน reprocess
+    """
+    from ocrslip.ocr import OcrResult
+    from ocrslip.web.pipeline import build_raw_ocr
+
+    res = OcrResult(model="m", fields={"name": "ก"}, confidence={}, latency_s=1.0,
+                    orientation="upside_down")
+    raw = build_raw_ocr(res, True, {}, reprocessed=True)
+    assert raw["orientation"] == "upside_down"
+    assert raw["quad_found"] is True
+    assert raw["reprocessed"] is True

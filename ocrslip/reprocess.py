@@ -27,7 +27,7 @@ from .imageio import encode_jpeg
 from .ocr import read_slip
 from .preprocess import preprocess, upright
 from .review import evaluate
-from .web.pipeline import VARIANT, count_duplicates
+from .web.pipeline import VARIANT, build_raw_ocr, count_duplicates
 
 # ถือว่า crop เดิมพัง ถ้าขนาดต่างจาก crop ใหม่เกินเท่านี้ (สัดส่วนของด้าน)
 SIZE_TOLERANCE = 0.02
@@ -87,17 +87,13 @@ def find_candidates(conn: psycopg.Connection) -> list[Candidate]:
 
 
 def reprocess_one(conn: psycopg.Connection, cand: Candidate) -> dict[str, Any]:
-    """crop ใหม่ + (ถ้าไม่ล็อก) OCR ซ้ำแล้วเขียนทับข้อมูลที่ model เคยอ่านผิด"""
+    """crop ใหม่ + หมุนถ้ากลับหัว + (ถ้าไม่ล็อก) เขียนทับข้อมูลที่ model เคยอ่านผิด"""
     original = get_image(conn, cand.slip_id, "original")
     pre = preprocess(original)
     processed = encode_jpeg(pre.cropped)
 
-    if cand.locked:
-        # ใบที่คนยืนยันแล้ว: เปลี่ยนแค่รูปให้เห็นภาพที่ถูกต้อง ไม่ยิง model ซ้ำ
-        # จึงไม่รู้ว่ากลับหัวหรือไม่ ปล่อยตามที่ crop ได้
-        replace_image(conn, cand.slip_id, "processed", processed, pre.cropped.size)
-        return {"id": cand.slip_id, "ocr": False, "note": cand.lock_reason}
-
+    # ต้องยิง model แม้กับใบที่คนยืนยันแล้ว เพราะเป็นทางเดียวที่รู้ว่าใบกลับหัวหรือไม่
+    # แต่ของใบพวกนั้นจะใช้แค่ orientation ไม่แตะข้อมูลที่คนยืนยันไว้
     res = read_slip(processed, OCR_MODEL)
     if not res.ok:
         replace_image(conn, cand.slip_id, "processed", processed, pre.cropped.size)
@@ -107,6 +103,17 @@ def reprocess_one(conn: psycopg.Connection, cand: Candidate) -> dict[str, Any]:
     if cropped is not pre.cropped:
         processed = encode_jpeg(cropped)
     replace_image(conn, cand.slip_id, "processed", processed, cropped.size)
+    flipped = cropped is not pre.cropped
+
+    if cand.locked:
+        # บันทึกไว้ว่าเช็ค orientation ของใบนี้แล้ว ไม่งั้นรอบหน้าจะถูกหยิบมาทำซ้ำไม่จบ
+        conn.execute(
+            f"""UPDATE {DB_SCHEMA}.slips
+                SET raw_ocr = raw_ocr || %s::jsonb WHERE id = %s""",
+            (json.dumps({"orientation": res.orientation}), cand.slip_id),
+        )
+        return {"id": cand.slip_id, "ocr": False, "flipped": flipped,
+                "note": cand.lock_reason, "cost": float((res.usage or {}).get("cost") or 0)}
 
     fields = dict(res.fields)
     reasons, problems = evaluate(fields, res.confidence, count_duplicates(conn, fields))
@@ -124,15 +131,13 @@ def reprocess_one(conn: psycopg.Connection, cand: Candidate) -> dict[str, Any]:
         ocr_tokens_out=(res.usage or {}).get("completion_tokens") or 0,
         ocr_latency_s=round(res.latency_s, 2),
         raw_ocr=json.dumps(
-            {"fields": res.fields, "quad_found": pre.quad_found, "problems": problems,
-             "orientation": res.orientation, "reprocessed": True},
-            ensure_ascii=False,
+            build_raw_ocr(res, pre.quad_found, problems, reprocessed=True), ensure_ascii=False
         ),
     )
     sets = ", ".join(f"{c} = %({c})s" for c in row if c != "id")
     conn.execute(f"UPDATE {DB_SCHEMA}.slips SET {sets} WHERE id = %(id)s", row)
     return {"id": cand.slip_id, "ocr": True, "fields": fields, "reasons": reasons,
-            "flipped": cropped is not pre.cropped, "cost": float(row["ocr_cost_usd"])}
+            "flipped": flipped, "cost": float(row["ocr_cost_usd"])}
 
 
 def main() -> None:
