@@ -29,27 +29,34 @@ class PreprocessResult:
 
 
 def _order_quad(pts: np.ndarray) -> np.ndarray:
-    """เรียงจุด 4 มุมเป็น [top-left, top-right, bottom-right, bottom-left]"""
+    """เรียงจุด 4 มุมเป็น [top-left, top-right, bottom-right, bottom-left]
+
+    เรียงตามมุมรอบจุดกึ่งกลาง ไม่ใช่ตาม min/max ของผลบวก/ผลต่างพิกัด — วิธีนั้นเลือก
+    จุดเดิมซ้ำได้เมื่อสี่เหลี่ยมเอียงมาก ทำให้ quad เหลือ 3 มุมแล้ว warp ออกมาเป็นภาพเละ
+    """
     pts = pts.reshape(4, 2).astype(np.float32)
-    s = pts.sum(axis=1)
-    d = np.diff(pts, axis=1).ravel()
-    return np.array(
-        [pts[np.argmin(s)], pts[np.argmin(d)], pts[np.argmax(s)], pts[np.argmax(d)]],
-        dtype=np.float32,
-    )
+    center = pts.mean(axis=0)
+    # แกน y ชี้ลง การเรียงตามมุมที่เพิ่มขึ้นจึงได้ลำดับตามเข็มนาฬิกา
+    pts = pts[np.argsort(np.arctan2(pts[:, 1] - center[1], pts[:, 0] - center[0]))]
+    return np.roll(pts, -int(np.argmin(pts.sum(axis=1))), axis=0)
 
 
-# รูปร่างของใบฝากรถจริง วัดจาก 169 ใบในระบบ: อัตราส่วนด้านยาว/ด้านสั้น 1.7-2.8
-# และกินพื้นที่ 17-45% ของเฟรม เผื่อช่วงให้กว้างกว่าที่วัดได้ กันใบที่ถ่ายใกล้/ไกลผิดปกติ
+# รูปร่างของใบฝากรถจริง: อัตราส่วนด้านยาว/ด้านสั้นราว 2.1
+# ส่วน "ขนาด" ใช้เป็นเกณฑ์ไม่ได้ เพราะแต่ละคนถ่ายห่างไม่เท่ากัน — วัดจากของจริงได้ตั้งแต่
+# กินพื้นที่ 5% ไปจนถึง 65% ของเฟรม จึงเปิดช่วงกว้างแล้วไปตัดสินด้วยหลักฐานอื่นแทน
 SLIP_AR = 2.1
 AR_RANGE = (1.45, 3.4)
-AREA_RANGE = (0.05, 0.55)
-AREA_TYPICAL = 0.25
-MIN_RECTANGULARITY = 0.8    # convex hull ต้องเต็ม minAreaRect เกินเท่านี้ ไม่งั้นไม่ใช่กระดาษสี่เหลี่ยม
+AREA_RANGE = (0.02, 0.70)
+MIN_RECTANGULARITY = 0.7    # convex hull ต้องเต็ม minAreaRect เกินเท่านี้ ไม่งั้นไม่ใช่กระดาษสี่เหลี่ยม
 
 # สัดส่วนพิกเซลที่เป็นหมึกขั้นต่ำในบริเวณที่จะ crop — ใบที่กรอกแล้วมี 0.040-0.108
 # ส่วนของที่ไม่ใช่ใบ (ผ้า/พื้นเรียบ) มี 0.002 จึงตั้งไว้ต่ำ ๆ แค่กันของที่ "ว่างเปล่าชัดเจน"
 MIN_INK = 0.02
+
+# จำนวนชิ้นหมึกขนาด "ตัวอักษร" ขั้นต่ำ — หลักฐานที่ไม่ขึ้นกับว่าถ่ายใกล้หรือไกล
+# ใบที่กรอกแล้วนับได้หลักร้อย ส่วนมุมปึกกระดาษเปล่านับได้ 8 (เป็นแค่เส้นขอบระหว่างแผ่น)
+MIN_CHARS = 40
+CHAR_HALF = 150   # จำนวนชิ้นที่ให้คะแนนครึ่งหนึ่ง — ใบเต็มใบได้ 400-700 เศษไม้ได้ราวร้อยเดียว
 
 # ขยาย quad ออกจากจุดกึ่งกลางก่อน warp — กันตัวหนังสือริมขอบโดนตัด
 # กินพื้นหลังเข้ามานิดหน่อยไม่เป็นไร แต่ตัดตัวหนังสือหายคือข้อมูลหาย
@@ -83,10 +90,11 @@ def ink_mask(bgr: np.ndarray) -> np.ndarray:
     return ((bg - gray) > 28).astype(np.uint8)
 
 
-def texture_mask(bgr: np.ndarray) -> np.ndarray:
+def texture_mask(bgr: np.ndarray, close_px: float) -> np.ndarray:
     """mask จากลวดลาย: ในใบมีเส้นประพิมพ์ + ลายมือ ส่วนโต๊ะ/ผนังเรียบ
 
     ใช้ได้แม้พื้นหลังจะขาวพอ ๆ กับกระดาษ เพราะแยกด้วย "ความไม่เรียบ" ไม่ใช่ความสว่าง
+    close_px คือระยะที่ยอมเชื่อมรอยหมึกที่อยู่ห่างกันให้เป็นก้อนเดียว
     """
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
     # ความต่างของ local max/min ในหน้าต่างเล็ก ๆ — สูงตรงที่มีเส้น ต่ำตรงพื้นเรียบ
@@ -96,11 +104,20 @@ def texture_mask(bgr: np.ndarray) -> np.ndarray:
     mask = (detail >= max(thr, 24)).astype(np.uint8) * 255
 
     # เส้นในใบอยู่ห่างกัน ต้องเชื่อมให้เป็นก้อนเดียวก่อน แล้วค่อยลบจุดรบกวนเล็ก ๆ
-    long_side = max(bgr.shape[:2])
-    close = max(int(long_side * 0.04) | 1, 21)
+    close = max(int(close_px) | 1, 9)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((close, close), np.uint8))
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((9, 9), np.uint8))
     return mask
+
+
+def texture_masks(bgr: np.ndarray) -> list[np.ndarray]:
+    """texture_mask หลายสเกล เพราะไม่รู้ล่วงหน้าว่าคนถ่ายห่างแค่ไหน
+
+    ระยะเชื่อมที่พอดีกับใบที่ถ่ายเต็มเฟรม จะใหญ่เกินไปสำหรับใบที่ถ่ายไกล
+    จนเชื่อมตัวใบติดกับลายไม้รอบ ๆ กลายเป็นก้อนเดียว แล้วรูปร่างก็เพี้ยนจนตกเกณฑ์
+    """
+    long_side = max(bgr.shape[:2])
+    return [texture_mask(bgr, long_side * f) for f in (0.015, 0.03, 0.05)]
 
 
 def _expand_quad(quad: np.ndarray, frac: float, shape: tuple[int, int]) -> np.ndarray:
@@ -129,7 +146,9 @@ def _quad_from_contour(c: np.ndarray) -> np.ndarray:
     return cv2.boxPoints(cv2.minAreaRect(c)).astype(np.float32).reshape(4, 2)
 
 
-def _score_quad(quad: np.ndarray, hull: np.ndarray, area_total: float) -> float | None:
+def _score_quad(
+    quad: np.ndarray, hull: np.ndarray, area_total: float, chars: int = 0
+) -> float | None:
     """ให้คะแนนว่า quad นี้ "หน้าตาเหมือนใบฝากรถ" แค่ไหน คืน None ถ้าไม่ผ่านเกณฑ์
 
     เกณฑ์มาจากรูปร่างของใบจริง ไม่ใช่จากสีพื้นหลัง จึงใช้ได้กับทุกสถานที่ถ่าย
@@ -149,25 +168,38 @@ def _score_quad(quad: np.ndarray, hull: np.ndarray, area_total: float) -> float 
     if rectangularity < MIN_RECTANGULARITY:
         return None
 
-    # ยิ่งสัดส่วนและขนาดใกล้ใบจริง และยิ่งเป็นสี่เหลี่ยมเต็ม ๆ ยิ่งได้คะแนนสูง
+    # ยิ่งสัดส่วนใกล้ใบจริง เป็นสี่เหลี่ยมเต็ม ๆ และมีตัวหนังสืออยู่ข้างในเยอะ ยิ่งได้คะแนนสูง
     #
-    # ขนาดต้องอยู่ในคะแนนด้วย ไม่ใช่แค่ผ่าน/ไม่ผ่าน: เคยเจอมุมของปึกกระดาษเปล่าข้าง ๆ
-    # ที่บังเอิญมีสัดส่วน 2:1 พอดีเลยได้คะแนนสูงกว่าตัวใบจริงที่เอียงนิดหน่อย
+    # จำนวนตัวหนังสือสำคัญกว่าที่คิด: เศษพื้นไม้ชิ้นเล็ก ๆ ที่สัดส่วน 2:1 พอดีเคยชนะตัวใบจริง
+    # ทั้งที่นับชิ้นหมึกได้ 116 ส่วนตัวใบได้ 441 — รูปร่างอย่างเดียวแยกสองอย่างนี้ไม่ออก
     ar_fit = 1.0 / (1.0 + abs(np.log(ar / SLIP_AR)) * 3)
-    area_fit = 1.0 / (1.0 + abs(np.log(quad_area / (AREA_TYPICAL * area_total))) * 1.2)
-    return float(ar_fit * area_fit * rectangularity)
+    char_fit = chars / (chars + CHAR_HALF)
+    return float(ar_fit * rectangularity * char_fit)
 
 
-def _ink_ratio(quad: np.ndarray, ink: np.ndarray) -> float:
-    """สัดส่วนพิกเซลหมึกภายใน quad"""
+def ink_evidence(quad: np.ndarray, ink: np.ndarray) -> tuple[float, int]:
+    """หลักฐานว่าใน quad นี้มี "ข้อความที่กรอกไว้" จริง คืน (สัดส่วนหมึก, จำนวนชิ้นขนาดตัวอักษร)
+
+    จำนวนชิ้นขนาดตัวอักษรเป็นหลักฐานที่ไม่ขึ้นกับระยะถ่าย เพราะนับเทียบกับขนาดของ
+    quad เอง ไม่ใช่ขนาดภาพ — ใบเดียวกันถ่ายใกล้หรือไกลก็ได้จำนวนใกล้เคียงกัน
+    """
     region = np.zeros(ink.shape, np.uint8)
     cv2.fillConvexPoly(region, quad.astype(np.int32), 1)
-    return float((ink * region).sum() / max(int(region.sum()), 1))
+    inside = ink * region
+    area = max(int(region.sum()), 1)
+
+    side = np.sqrt(area)
+    n, _, stats, _ = cv2.connectedComponentsWithStats(inside, 8)
+    chars = sum(
+        1 for i in range(1, n)
+        # ไม่เล็กจนเป็นจุดรบกวน และไม่ยาวจนเป็นเส้นบรรทัด/ขอบกระดาษ
+        if 0.005 * side < max(stats[i, 2], stats[i, 3]) < 0.25 * side and stats[i, 4] > 4
+    )
+    return float(inside.sum() / area), chars
 
 
 def _quad_candidates(
-    mask: np.ndarray, shape: tuple[int, int], *, grow: float = 0.0,
-    ink: np.ndarray | None = None,
+    mask: np.ndarray, shape: tuple[int, int], ink: np.ndarray, *, grow: float = 0.0,
 ) -> list[tuple[float, np.ndarray]]:
     """ทุกก้อนใน mask ที่ผ่านเกณฑ์รูปร่าง พร้อมคะแนน
 
@@ -185,15 +217,18 @@ def _quad_candidates(
         if not contours:
             continue
         hull = cv2.convexHull(max(contours, key=cv2.contourArea))
-        quad = _quad_from_contour(hull)
-        score = _score_quad(quad, hull, area_total)
-        if score is None:
+        quad = _expand_quad(_quad_from_contour(hull), grow, shape)
+
+        # ใบที่กรอกแล้วต้องมีตัวหนังสืออยู่ข้างใน — กันไปจับผ้า/พื้นเรียบ/กระดาษเปล่า
+        # ที่บังเอิญได้รูปร่างเข้าเกณฑ์ ใช้แทนการจำกัดขนาด ซึ่งใช้ไม่ได้เพราะแต่ละคน
+        # ถ่ายห่างไม่เท่ากัน
+        ratio, chars = ink_evidence(quad, ink)
+        if ratio < MIN_INK or chars < MIN_CHARS:
             continue
-        quad = _expand_quad(quad, grow, shape)
-        # ใบที่กรอกแล้วต้องมีหมึกอยู่ข้างใน — กันไปจับผ้า/พื้นเรียบที่บังเอิญได้รูปร่างเข้าเกณฑ์
-        if ink is not None and _ink_ratio(quad, ink) < MIN_INK:
-            continue
-        out.append((score, quad))
+
+        score = _score_quad(quad, hull, area_total, chars)
+        if score is not None:
+            out.append((score, quad))
     return out
 
 
@@ -204,10 +239,9 @@ def find_paper_quad(bgr: np.ndarray) -> np.ndarray | None:
     """
     shape = bgr.shape[:2]
     ink = ink_mask(bgr)
-    candidates = (
-        _quad_candidates(paper_mask(bgr), shape, grow=PAPER_GROW, ink=ink)
-        + _quad_candidates(texture_mask(bgr), shape, grow=TEXTURE_GROW, ink=ink)
-    )
+    candidates = _quad_candidates(paper_mask(bgr), shape, ink, grow=PAPER_GROW)
+    for mask in texture_masks(bgr):
+        candidates += _quad_candidates(mask, shape, ink, grow=TEXTURE_GROW)
     if not candidates:
         return None
 

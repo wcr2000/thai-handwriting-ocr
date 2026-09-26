@@ -137,3 +137,60 @@ def test_raw_ocr_always_records_orientation():
     assert raw["orientation"] == "upside_down"
     assert raw["quad_found"] is True
     assert raw["reprocessed"] is True
+
+
+def test_order_quad_keeps_all_four_corners_when_tilted():
+    """เรียงมุมต้องไม่ทำให้เหลือ 3 มุม
+
+    regression: วิธีเดิมเรียงตาม min/max ของ x+y และ x-y ซึ่งเลือกจุดเดิมซ้ำได้เมื่อ
+    สี่เหลี่ยมเอียงมาก quad ที่ได้จึงเสียรูปแล้ว warp ออกมาเป็นภาพเบลอไม่มีอะไรเลย
+    """
+    for angle in range(0, 90, 7):
+        rect = cv2.boxPoints(((500.0, 400.0), (600.0, 280.0), float(angle)))
+        ordered = P._order_quad(rect.astype(np.float32))
+        assert len({tuple(np.round(p, 3)) for p in ordered}) == 4, f"มุมซ้ำที่ {angle} องศา"
+
+        tl, tr, br, bl = ordered
+        assert tl[0] < tr[0] or tl[1] < bl[1]          # เรียงตามเข็ม เริ่มจากซ้ายบน
+        assert cv2.contourArea(ordered) > 0.9 * 600 * 280
+
+
+def _ocr(**fields):
+    from ocrslip.ocr import OcrResult
+
+    return OcrResult(model="m", fields=fields, confidence={}, latency_s=0.1)
+
+
+def _fake_preprocess(quad_found: bool):
+    img = to_pil(fake_photo(WOOD))
+    return P.PreprocessResult(raw=img, cropped=img.crop((0, 0, 40, 20)),
+                              enhanced=img, quad_found=quad_found)
+
+
+@pytest.mark.parametrize("quad_found,reads,want_full,want_calls", [
+    # crop ดี อ่านได้ตั้งแต่ครั้งแรก — ห้ามยิงซ้ำ
+    (True, [_ocr(name="ก", tel="0812345678", noplate="กก1234")], False, 1),
+    # crop พัง อ่านไม่ได้เลย แล้วภาพเต็มอ่านได้ — ต้องใช้ผลจากภาพเต็ม
+    (True, [_ocr(), _ocr(name="ก", tel="0812345678")], True, 2),
+    # หาขอบไม่เจอตั้งแต่แรก ภาพที่ส่งไปคือภาพเต็มอยู่แล้ว — ยิงซ้ำไปก็ได้ผลเดิม
+    (False, [_ocr()], False, 1),
+    # ลองภาพเต็มแล้วก็ยังอ่านไม่ได้ — คืนผลแรกไป ไม่ใช่ทำให้แย่ลง
+    (True, [_ocr(), _ocr()], False, 2),
+])
+def test_read_with_fallback_retries_full_frame_only_when_crop_reads_nothing(
+    monkeypatch, quad_found, reads, want_full, want_calls
+):
+    """ตาข่ายกันตกเวลา crop ไปจับของผิด — model คืน null หมดคือสัญญาณเดียวที่เชื่อถือได้"""
+    from ocrslip.web import pipeline
+
+    calls = []
+    monkeypatch.setattr(pipeline, "read_slip",
+                        lambda jpeg, model: (calls.append(jpeg), reads[len(calls) - 1])[1])
+
+    pre = _fake_preprocess(quad_found)
+    res, used, full_frame = pipeline.read_with_fallback(pre)
+
+    assert len(calls) == want_calls
+    assert full_frame is want_full
+    assert used is (pre.raw if want_full else pre.cropped)
+    assert res is reads[len(calls) - 1 if want_full else 0]
