@@ -52,13 +52,23 @@
 
 {# ใบนี้มีคนตรวจไปแล้ว — ปิดปุ่มอนุมัติไว้ก่อน ไม่งั้นคนที่สองกดทับงานคนแรกได้ทันที
    และช่อง "ผู้ตรวจ" จะโชว์ชื่อคนแรกค้างอยู่ ทำให้เข้าใจผิดว่าระบบสลับชื่อเอง #}
+{# มีคนอื่นถือใบนี้อยู่ — เตือนเฉย ๆ ไม่บล็อก อาจเป็นคนเดียวกันเปิดจากอีกเครื่อง
+   และด่านจริงคือ require_status ตอนกดอนุมัติอยู่แล้ว #}
+{% if held_by %}
+<div class="err" style="background:#eef1f6; border-color:#c8d0dc; color:#42506b">
+  <strong>{{ held_by.claimed_name or 'อีกคน' }}กำลังตรวจใบนี้อยู่</strong>
+  {% if held_by.claimed_at %}(เปิดไว้ตั้งแต่ {{ held_by.claimed_at.strftime('%H:%M') }}){% endif %}
+  — ถ้าไม่ได้ตั้งใจเข้ามาดูใบนี้ <a href="/review/next">ขอใบอื่นที่ยังว่าง</a> ดีกว่า
+</div>
+{% endif %}
+
 {% if taken %}
 <div class="err" style="background:#fff3cd; border-color:#e6c300; color:#7a5c00">
   <strong>ใบนี้ตรวจไปแล้ว</strong> — {{ slip.review_status == 'approved' and 'อนุมัติโดย' or 'ตีกลับโดย' }}
   <strong>{{ slip.reviewed_by or 'ไม่ระบุชื่อ' }}</strong>{% if slip.reviewed_at %}
   เมื่อ {{ slip.reviewed_at.strftime('%d/%m %H:%M') }}{% endif %}
   <div style="margin-top:.5rem">
-    {% if next_id %}<a class="btn" href="/review/{{ next_id }}">ไปใบถัดไป{% if remaining %} (เหลือ {{ remaining }} ใบ){% endif %}</a>
+    {% if next_id %}<a class="btn" href="/review/next">ไปใบถัดไป{% if remaining %} (เหลือ {{ remaining }} ใบ){% endif %}</a>
     {% else %}<a class="btn" href="/review">กลับไปคิวตรวจ</a>{% endif %}
     <a href="/review/{{ slip.id }}?edit=1" style="margin-left:.6rem">แก้ไขใบนี้อยู่ดี</a>
   </div>
@@ -124,7 +134,6 @@
        แต่ไม่มีแถบปุ่ม — ถ้าจะแก้จริงต้องเข้ามาทาง ?edit=1 ให้รู้ตัวก่อน
        ส่วนการกด Enter ในช่องกรอกยังยิง POST ได้อยู่ ด่านจริงจึงอยู่ที่ require_status ฝั่ง server #}
     <div class="actbar"{% if taken %} hidden{% endif %}>
-      <input type="hidden" name="next_id" value="{{ next_id or '' }}">
       {# force = เจ้าของใบตั้งใจกลับมาแก้เอง (เข้ามาทาง ?edit=1) จึงข้าม optimistic lock ได้ #}
       {% if slip.review_status != 'pending' %}<input type="hidden" name="force" value="1">{% endif %}
       <button type="submit" class="big">✓ {{ slip.review_status == 'pending' and 'อนุมัติ' or 'บันทึกทับ' }}{% if next_id %} → ใบถัดไป{% endif %}</button>

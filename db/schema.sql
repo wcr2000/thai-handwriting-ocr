@@ -148,6 +148,21 @@ ALTER TABLE ocr_dhammakaya.slips ADD COLUMN IF NOT EXISTS ocr_tokens_in  integer
 ALTER TABLE ocr_dhammakaya.slips ADD COLUMN IF NOT EXISTS ocr_tokens_out integer NOT NULL DEFAULT 0;
 ALTER TABLE ocr_dhammakaya.slips ADD COLUMN IF NOT EXISTS ocr_latency_s  numeric(8, 2) NOT NULL DEFAULT 0;
 
+-- การจองใบในคิวตรวจ (advisory เท่านั้น — ตัวที่การันตีว่าข้อมูลไม่ทับกันคือ
+-- เงื่อนไข review_status ใน UPDATE ตอนอนุมัติ ไม่ใช่คอลัมน์พวกนี้)
+-- claimed_by = worker id จากคุกกี้ ไม่ใช่ชื่อบัญชี เพราะสามคนใช้บัญชีเดียวกันแยกไม่ออก
+ALTER TABLE ocr_dhammakaya.slips ADD COLUMN IF NOT EXISTS claimed_by   text;
+ALTER TABLE ocr_dhammakaya.slips ADD COLUMN IF NOT EXISTS claimed_name text;
+ALTER TABLE ocr_dhammakaya.slips ADD COLUMN IF NOT EXISTS claimed_at   timestamptz;
+
+-- คิวอ่านเฉพาะกอง pending ซึ่งเป็นส่วนน้อยของตาราง partial index จึงเล็กและตรงงาน
+-- เรียงตรงกับ ORDER BY ของคำสั่งจอง เพื่อให้หยิบใบหัวคิวได้โดยไม่ต้อง sort ใหม่
+CREATE INDEX IF NOT EXISTS slips_claimable_idx
+    ON ocr_dhammakaya.slips (needs_review DESC, created_at)
+    WHERE review_status = 'pending';
+CREATE INDEX IF NOT EXISTS slips_claimed_by_idx
+    ON ocr_dhammakaya.slips (claimed_by) WHERE claimed_by IS NOT NULL;
+
 ALTER TABLE ocr_dhammakaya.slips ADD COLUMN IF NOT EXISTS uploaded_by  text;
 ALTER TABLE ocr_dhammakaya.slips ADD COLUMN IF NOT EXISTS photographer text;
 CREATE INDEX IF NOT EXISTS slips_uploaded_by_idx  ON ocr_dhammakaya.slips (uploaded_by);

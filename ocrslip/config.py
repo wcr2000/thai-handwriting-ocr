@@ -20,6 +20,10 @@ DB_SCHEMA = os.getenv("DB_SCHEMA", "ocr_dhammakaya")
 OCR_MODEL = os.getenv("OCR_MODEL", "google/gemini-3-flash-preview")
 # เกณฑ์ confidence ที่ต่ำกว่านี้จะถูกส่งเข้าคิวตรวจสอบ
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.85"))
+# อายุการจองใบในคิวตรวจ — คนตรวจถือใบไว้ได้นานเท่านี้ก่อนใบหลุดกลับเข้าคิว
+# ตั้งไว้ยาวไว้ก่อนโดยตั้งใจ: ใบค้างสิบนาทีไม่มีผลอะไรเมื่อคิวมีเป็นพันใบ
+# แต่ถ้าสั้นไปคนตรวจที่ติดใบยาก ๆ จะโดนแย่งใบกลางคัน ซึ่งคือปัญหาเดิมที่กำลังแก้
+REVIEW_CLAIM_MINUTES = int(os.getenv("REVIEW_CLAIM_MINUTES", "10"))
 # ใช้แปลงค่าใช้จ่าย AI (OpenRouter คิดเป็น USD) ให้แสดงผลเป็นบาท
 USD_THB = float(os.getenv("USD_THB", "33"))
 

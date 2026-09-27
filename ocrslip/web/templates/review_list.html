@@ -47,7 +47,10 @@
       <td>{{ s.brand or '—' }}</td><td>{{ s.location or '—' }}</td>
       <td class="muted">{{ s.created_at.strftime('%d/%m %H:%M') if s.created_at else '—' }}</td>
       {% if show_reviewer %}<td>{{ s.reviewed_by or '—' }}</td>{% endif %}
-      <td>{% for reason in s.review_reason %}<span class="badge warn">{{ reason_labels.get(reason, reason) }}</span>{% endfor %}</td>
+      <td>{% for reason in s.review_reason %}<span class="badge warn">{{ reason_labels.get(reason, reason) }}</span>{% endfor %}
+        {# ป้ายบอกว่ามีคนถืออยู่ ไม่ซ่อนแถวทิ้ง เพราะยอดของกองกับจำนวนแถวจะไม่ตรงกันแล้วคนงง
+           การจองเป็นคำแนะนำ ไม่ใช่การล็อก ยังคลิกเข้าไปได้ถ้าจงใจ #}
+        {% if s.claim_live %}<span class="badge">{{ s.claimed_name or 'มีคน' }}กำลังตรวจ</span>{% endif %}</td>
       <td><a href="/review/{{ s.id }}">ตรวจ →</a></td>
     </tr>
     {% else %}

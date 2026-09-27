@@ -167,9 +167,10 @@ python -c "import secrets;print(secrets.token_urlsafe(32))"   # ได้ SECRET
 .venv/bin/python -m pytest tests -q
 ```
 
-เทสต์ส่วนใหญ่ไม่ต้องใช้ฐานข้อมูล ยกเว้น `tests/test_review_collision.py` ที่ตรวจเรื่อง
-สองคนตรวจใบเดียวกันพร้อมกัน — ของที่ทดสอบคือ rowcount ของ `UPDATE` ที่มีเงื่อนไข
-จึงต้องมี Postgres จริง ถ้าไม่ตั้งตัวแปรนี้ไว้ทั้งไฟล์จะถูก skip:
+เทสต์ส่วนใหญ่ไม่ต้องใช้ฐานข้อมูล ยกเว้นเรื่องคิวตรวจ — `test_review_claim.py`
+(การจองใบ) กับ `test_review_collision.py` (กันเขียนทับ) ทดสอบด้วย mock ไม่ได้
+เพราะของที่ทดสอบคือ `FOR UPDATE SKIP LOCKED` กับ rowcount ของ `UPDATE` ที่มีเงื่อนไข
+ซึ่งเป็นพฤติกรรมของ Postgres ล้วน ๆ ถ้าไม่ตั้งตัวแปรนี้ไว้ ทั้งสองไฟล์จะถูก skip:
 
 ```bash
 docker run -d --name ocrslip-test -e POSTGRES_PASSWORD=test \
@@ -180,8 +181,14 @@ OCRSLIP_TEST_DATABASE_URL=postgresql://postgres:test@127.0.0.1:55439/ocrslip \
 ```
 
 > ต้องชี้ไปฐานข้อมูลที่ทิ้งข้อมูลได้เท่านั้น เทสต์ `TRUNCATE` ตารางก่อนทุกครั้ง
-> (มันใช้ schema `ocr_test_collision` แยกต่างหาก และ assert ปลายทางก่อนเขียนทุกครั้ง
+> (มันใช้ schema `ocr_test_queue` แยกต่างหาก และ assert ปลายทางก่อนเขียนทุกครั้ง
 > แต่อย่าเสี่ยงชี้ใส่ฐานข้อมูลจริง)
+
+> **หมายเหตุ**: เทสต์อีกกลุ่ม (`test_review_queue.py`, `test_roles.py`,
+> `test_web_headers.py`, `test_dashboard*.py`) อ่านฐานข้อมูลตาม `DATABASE_URL` ใน `.env`
+> ตรง ๆ ถ้า `.env` ชี้ production อยู่ เทสต์พวกนี้จะอ่าน production และจะพังถ้ายังไม่ได้
+> รัน `db init` ล่าสุด อยากรันให้หลุดจาก production ทั้งชุด ให้ชี้ `DATABASE_URL`
+> ใน `.env` ไปฐานข้อมูลทิ้งได้ก่อน แล้ว `python -m ocrslip.db init` หนึ่งครั้ง
 
 ## Deploy บน Render
 
@@ -236,6 +243,7 @@ process รันด้วย user `ocrslip` (uid 10001) ไม่ใช่ root
 | `OCR_MODEL` | `google/gemini-3-flash-preview` |
 | `CONFIDENCE_THRESHOLD` | `0.85` |
 | `USD_THB` | `33` |
+| `REVIEW_CLAIM_MINUTES` | `10` — คนตรวจถือใบไว้ได้นานเท่านี้ก่อนใบหลุดกลับเข้าคิว |
 | `SECRET_KEY` | ค่าที่สุ่มจากข้อ 2 — ถ้าไม่ตั้ง คนที่ล็อกอินอยู่จะหลุดทุกครั้งที่ deploy |
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD_HASH` | บัญชีแอดมิน (hash จากข้อ 2) |
 | `USER_USERNAME` / `USER_PASSWORD_HASH` | บัญชีพนักงานหน้างาน |
