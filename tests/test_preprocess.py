@@ -155,10 +155,11 @@ def test_order_quad_keeps_all_four_corners_when_tilted():
         assert cv2.contourArea(ordered) > 0.9 * 600 * 280
 
 
-def _ocr(**fields):
+def _ocr(fills_frame=True, **fields):
     from ocrslip.ocr import OcrResult
 
-    return OcrResult(model="m", fields=fields, confidence={}, latency_s=0.1)
+    return OcrResult(model="m", fields=fields, confidence={}, latency_s=0.1,
+                     fills_frame=fills_frame)
 
 
 def _fake_preprocess(quad_found: bool):
@@ -170,6 +171,10 @@ def _fake_preprocess(quad_found: bool):
 @pytest.mark.parametrize("quad_found,reads,want_full,want_calls", [
     # crop ดี อ่านได้ตั้งแต่ครั้งแรก — ห้ามยิงซ้ำ
     (True, [_ocr(name="ก", tel="0812345678", noplate="กก1234")], False, 1),
+    # อ่านออก แต่ model บอกว่าตัวใบไม่ได้กินพื้นที่เกือบทั้งภาพ = crop ไปโดนพื้นโต๊ะ
+    # ต้องลองภาพเต็ม แม้จะอ่านได้ครบแล้วก็ตาม
+    (True, [_ocr(fills_frame=False, name="ก", tel="0812345678"),
+            _ocr(name="ข", tel="0899999999")], True, 2),
     # crop พัง อ่านไม่ได้เลย แล้วภาพเต็มอ่านได้ — ต้องใช้ผลจากภาพเต็ม
     (True, [_ocr(), _ocr(name="ก", tel="0812345678")], True, 2),
     # หาขอบไม่เจอตั้งแต่แรก ภาพที่ส่งไปคือภาพเต็มอยู่แล้ว — ยิงซ้ำไปก็ได้ผลเดิม
@@ -180,7 +185,11 @@ def _fake_preprocess(quad_found: bool):
 def test_read_with_fallback_retries_full_frame_only_when_crop_reads_nothing(
     monkeypatch, quad_found, reads, want_full, want_calls
 ):
-    """ตาข่ายกันตกเวลา crop ไปจับของผิด — model คืน null หมดคือสัญญาณเดียวที่เชื่อถือได้"""
+    """ตาข่ายกันตกเวลา crop ไปจับของผิด
+
+    มีสองสัญญาณ: อ่านไม่ได้สักช่อง (ไปจับของที่ไม่มีตัวหนังสือ) และ model บอกว่า
+    ตัวใบไม่ได้กินพื้นที่เกือบทั้งภาพ (จับติดพื้นหลังมาเยอะจนตัวใบเล็กและเอียง)
+    """
     from ocrslip.web import pipeline
 
     calls = []

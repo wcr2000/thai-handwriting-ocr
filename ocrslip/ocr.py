@@ -21,6 +21,7 @@ class OcrResult:
     confidence: dict[str, float]
     latency_s: float
     orientation: str = "upright"        # "upside_down" = ต้องหมุนรูป 180 องศาถึงจะอ่านได้ตามปกติ
+    fills_frame: bool = True            # False = ภาพที่ส่งไปเห็นพื้นหลังเป็นส่วนใหญ่ แปลว่า crop มาผิดที่
     usage: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
     raw_text: str | None = None
@@ -119,10 +120,13 @@ def read_slip(
                 parsed = _extract_json(text)
                 conf = parsed.pop("confidence", None) or {}
                 orientation = parsed.pop("orientation", None)
+                fills = parsed.pop("slip_fills_frame", None)
                 return OcrResult(
                     model=model,
                     fields=canonicalize(parsed),
                     orientation="upside_down" if orientation == "upside_down" else "upright",
+                    # model ที่ไม่ตอบ field นี้มา ถือว่าภาพปกติ จะได้ไม่ยิงซ้ำโดยไม่จำเป็น
+                    fills_frame=fills is not False,
                     confidence={k: float(v) for k, v in conf.items() if isinstance(v, (int, float))},
                     latency_s=round(time.monotonic() - started, 2),
                     usage=body.get("usage", {}),

@@ -22,7 +22,7 @@ def _nullable(kind: str, desc: str) -> dict:
 SLIP_JSON_SCHEMA: dict = {
     "type": "object",
     "additionalProperties": False,
-    "required": FIELDS + ["orientation", "confidence"],
+    "required": FIELDS + ["orientation", "slip_fills_frame", "confidence"],
     "properties": {
         "name": _nullable("string", "ชื่อ-นามสกุลผู้ฝากรถ ตามที่เขียนในช่อง 'ชื่อ'"),
         "tel": _nullable("string", "เบอร์โทร เอาเฉพาะตัวเลข ไม่ต้องมีขีดหรือช่องว่าง"),
@@ -40,6 +40,10 @@ SLIP_JSON_SCHEMA: dict = {
             "type": "string",
             "enum": ["upright", "upside_down"],
             "description": "รูปที่ส่งมาวางถูกทางหรือกลับหัว 180 องศา — 'upside_down' เมื่อต้องหมุนรูป 180 องศาถึงจะอ่านได้ตามปกติ",
+        },
+        "slip_fills_frame": {
+            "type": "boolean",
+            "description": "ตัวใบกินพื้นที่เกือบทั้งภาพหรือไม่ — false เมื่อเห็นพื้นโต๊ะ/พื้นหลังเป็นส่วนใหญ่ แปลว่าภาพถูกตัดมาผิดที่",
         },
         "confidence": {
             "type": "object",
@@ -72,6 +76,8 @@ PROMPT = """คุณคืออ่านลายมือภาษาไท�
 8. วันที่ให้ตอบตามที่เขียนจริงแบบคำต่อคำ ห้ามแปลง พ.ศ./ค.ศ. เอง
 9. บอก orientation ด้วยว่ารูปที่ได้รับวางถูกทาง ("upright") หรือกลับหัว 180 องศา ("upside_down")
    — ตอบตามที่เห็นจริง และอ่านข้อมูลให้ครบถูกต้องเหมือนเดิมไม่ว่ารูปจะกลับหัวหรือไม่
+10. บอก slip_fills_frame ว่าตัวใบกินพื้นที่เกือบทั้งภาพไหม ถ้าเห็นพื้นโต๊ะ/พื้นหลังเป็นส่วนใหญ่
+   ให้ false — ใช้บอกว่าระบบตัดภาพมาผิดที่ ไม่เกี่ยวกับว่าอ่านออกหรือไม่
 
 ให้ค่า confidence 0-1 ของแต่ละ field ตามความชัดของลายมือจริง ๆ (ถ้าเดาไม่ออกให้ต่ำกว่า 0.5)"""
 

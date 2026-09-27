@@ -24,14 +24,15 @@ def build_raw_ocr(
 ) -> dict[str, Any]:
     """ร่องรอยของ OCR ที่เก็บไว้ตรวจย้อนหลัง — ใช้ร่วมกันระหว่างตอนอัปโหลดกับตอน reprocess
 
-    orientation ต้องอยู่ในนี้เสมอ เพราะ reprocess ใช้มันตัดสินว่าใบไหน "ยังไม่เคยเช็ค
-    ว่ากลับหัว" ถ้าไม่บันทึก ใบที่เพิ่งอัปโหลดจะถูกหยิบไปยิง model ซ้ำทุกครั้งที่รัน
+    orientation กับ fills_frame ต้องอยู่ในนี้เสมอ เพราะ reprocess ใช้สองตัวนี้ตัดสินว่า
+    ใบไหน "ยังไม่เคยเช็ค" ถ้าไม่บันทึก ใบที่เพิ่งอัปโหลดจะถูกหยิบไปยิง model ซ้ำทุกครั้งที่รัน
     """
     return {
         "fields": res.fields,
         "quad_found": quad_found,
         "problems": problems,
         "orientation": res.orientation,
+        "fills_frame": res.fills_frame,
         **extra,
     }
 
@@ -47,9 +48,19 @@ def read_with_fallback(
     และไปจับลายไม้บนโต๊ะ พอ crop ผิด model ก็คืน null ทุกช่องโดยไม่มีใครรู้ว่าเพราะอะไร
     การลองใหม่ด้วยภาพเต็มกู้เคสพวกนี้ได้หมดในคราวเดียว ไม่ต้องไล่จูน CV ทีละเคส
     และเสียค่าใช้จ่ายเพิ่มเฉพาะตอนที่พังจริง ๆ เท่านั้น
+
+    สัญญาณที่ใช้มีสองอย่าง เพราะ crop ผิดมีสองแบบ:
+      - อ่านไม่ได้สักช่อง = ไปจับของที่ไม่มีตัวหนังสือเลย (กระดาษเปล่า/พื้นโต๊ะ)
+      - model บอกว่าตัวใบไม่ได้กินพื้นที่เกือบทั้งภาพ = จับติดพื้นหลังมาเยอะจน
+        ตัวใบเล็กและเอียงอยู่ในมุมภาพ ซึ่งยังพออ่านออกแต่แม่นน้อยลงและคนตรวจดูลำบาก
+        แบบหลังนี้วัดจากฝั่ง CV ไม่ได้เลย ลองมาแล้วทุกสัญญาณ (ขนาด/สัดส่วน/ความเป็น
+        สี่เหลี่ยม/ความหนาแน่นหมึก/การชนขอบภาพ/ความอิ่มสี/คะแนนรวม) ค่าของ crop ที่ถูก
+        กับที่ไปจับโต๊ะทับกันหมด แต่ model ตอบได้ถูก 13/13 ใบตอนลองจริง
     """
     res = read_slip(encode_jpeg(pre.cropped), model)
-    if not res.ok or not pre.quad_found or _read_something(res):
+    if not res.ok or not pre.quad_found:
+        return res, pre.cropped, False
+    if _read_something(res) and res.fills_frame:
         return res, pre.cropped, False
 
     retry = read_slip(encode_jpeg(pre.raw), model)
