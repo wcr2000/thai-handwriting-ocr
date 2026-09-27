@@ -5,9 +5,12 @@
   <p class="filters">
     <a href="/review?filter=needs"    class="{{ 'active' if active=='needs' }}">ต้องตรวจ ({{ counts.needs_review }})</a>
     <a href="/review?filter=quick"    class="{{ 'active' if active=='quick' }}">ผ่านเร็ว ({{ counts.quick_pass }})</a>
+    {# approver เห็นเฉพาะกองที่ยังต้องทำ — กองที่ปิดงานแล้วเป็นคลังข้อมูลของทั้งระบบ #}
+    {% if not (user and user.is_approver) %}
     <a href="/review?filter=approved" class="{{ 'active' if active=='approved' }}">อนุมัติแล้ว ({{ counts.approved }})</a>
     <a href="/review?filter=rejected" class="{{ 'active' if active=='rejected' }}">ตีกลับ ({{ counts.rejected }})</a>
     <a href="/review?filter=all"      class="{{ 'active' if active=='all' }}">ทั้งหมด ({{ counts.total }})</a>
+    {% endif %}
   </p>
   <table>
     <tr><th>ชื่อ</th><th>เบอร์</th><th>ทะเบียน</th><th>ยี่ห้อ</th><th>ที่จอด</th><th>เหตุผลที่ต้องตรวจ</th><th></th></tr>

@@ -40,6 +40,10 @@ services:
         sync: false
       - key: USER_PASSWORD_HASH
         sync: false
+      - key: APPROVE_USERNAME
+        sync: false
+      - key: APPROVE_PASSWORD_HASH
+        sync: false
       # Render เป็น HTTPS อยู่แล้ว — ตั้ง true เพื่อบังคับ Secure cookie
       - key: COOKIE_SECURE
         sync: false

@@ -15,7 +15,9 @@
   <nav>
     <a href="/">อัปโหลด</a>
     <a href="/review">คิวตรวจสอบ</a>
+    {% if not (user and user.is_approver) %}
     <a href="/search">ค้นหา{% if user and user.is_admin %} / รับรถกลับ{% endif %}</a>
+    {% endif %}
     {% if user and user.is_admin %}
     <a href="/table">ตารางข้อมูล</a>
     <a href="/dashboard">สรุปภาพรวม</a>
@@ -25,7 +27,7 @@
   {% if user %}
   <form method="post" action="/logout" style="display:flex; align-items:center; gap:.5rem">
     <span class="muted">{{ user.username }}
-      <span class="badge {{ 'ok' if user.is_admin else '' }}">{{ 'ผู้ดูแล' if user.is_admin else 'เจ้าหน้าที่' }}</span></span>
+      <span class="badge {{ 'ok' if user.is_admin else '' }}">{{ 'ผู้ดูแล' if user.is_admin else ('ผู้ตรวจใบ' if user.is_approver else 'เจ้าหน้าที่') }}</span></span>
     <button type="submit" class="ghost" style="padding:.35rem .7rem">ออกจากระบบ</button>
   </form>
   {% endif %}
