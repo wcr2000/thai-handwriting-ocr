@@ -104,7 +104,10 @@ def send_back(conn: psycopg.Connection, slip_id: str) -> None:
                 review_reason = (SELECT array_agg(DISTINCT r)
                                  FROM unnest(array_append(review_reason,
                                                           'recheck_bad_crop')) r),
-                reviewed_by = NULL, reviewed_at = NULL
+                reviewed_by = NULL, reviewed_at = NULL,
+                -- ใบที่ดึงกลับเข้าคิวต้องไม่พกการจองเก่ามาด้วย ไม่งั้นมันถูกถือโดยคน
+                -- ที่ไม่ได้นั่งอยู่แล้ว และจะไม่ถูกจ่ายให้ใครจนกว่าการจองจะหมดอายุ
+                claimed_by = NULL, claimed_name = NULL, claimed_at = NULL
             WHERE id = %s""",
         (slip_id,),
     )

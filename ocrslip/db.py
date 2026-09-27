@@ -14,7 +14,7 @@ from typing import Any, Iterable
 import psycopg
 from psycopg.rows import dict_row
 
-from .config import DATABASE_URL, DB_SCHEMA
+from .config import DATABASE_URL, DB_SCHEMA, REVIEW_CLAIM_MINUTES
 from .normalize import (
     _base, norm_brand, norm_cartype, norm_name, norm_phone, norm_plate, norm_province, parse_date,
 )
@@ -239,6 +239,8 @@ def update_slip(
         row["review_reason"] = review_reason or []
         row["reviewed_by"] = edited_by
         row["reviewed_at"] = "now()"
+        # ใบที่ออกจากกอง pending แล้วไม่ต้องมีใครถืออีก ปล่อยคืนพร้อมกันในคำสั่งเดียว
+        row["claimed_by"] = row["claimed_name"] = row["claimed_at"] = None
 
     sets = ", ".join(f"{c} = %({c})s" for c in row if c != "reviewed_at")
     if review_status is not None:
@@ -339,6 +341,99 @@ def next_in_queue(conn: psycopg.Connection, slip_id: str) -> tuple[str | None, i
         {"id": slip_id},
     ).fetchone()
     return (str(row["next_id"]) if row["next_id"] else None), row["remaining"]
+
+
+# ---------- การจองใบในคิว ----------
+#
+# ปัญหาที่แก้: next_in_queue() ยื่นใบหัวแถวใบเดียวกันให้ทุกคน สามคนที่นั่งตรวจพร้อมกัน
+# จึงได้ใบเดียวกันเสมอ แล้วเสียเวลาทำซ้ำของกันและกัน
+#
+# การจองเป็นแค่คำแนะนำ ไม่ใช่การล็อก — คนถือใบแล้วปิดแท็บเกิดขึ้นตลอด ถ้าล็อกแข็ง
+# จะมีใบที่แตะไม่ได้ค้างเต็มคิว ตัวที่การันตีว่าข้อมูลไม่ทับกันยังเป็น require_status
+# ใน update_slip() เหมือนเดิม การจองแค่ทำให้ "ไม่ค่อยเจอกัน" ส่วน write guard
+# ทำให้ "เจอกันแล้วไม่พัง"
+
+CLAIM_COLS = "claimed_by = NULL, claimed_name = NULL, claimed_at = NULL"
+
+
+def release_claims(conn: psycopg.Connection, worker: str) -> None:
+    """ปล่อยใบที่คนนี้ถืออยู่ทั้งหมด — คนหนึ่งถือได้ทีละใบเสมอ
+
+    เรียกก่อนจองใบใหม่ทุกครั้ง ไม่งั้นคนที่กดข้ามไปเรื่อย ๆ จะทิ้งใบที่จองค้างไว้
+    เต็มคิว แล้วคนอื่นต้องรอจนหมดอายุทั้งที่ไม่มีใครตรวจอยู่จริง
+    """
+    conn.execute(
+        f"UPDATE {DB_SCHEMA}.slips SET {CLAIM_COLS}"
+        f" WHERE claimed_by = %s AND review_status = 'pending'",
+        (worker,),
+    )
+
+
+def claim_next(conn: psycopg.Connection, worker: str, name: str | None = None) -> str | None:
+    """ปล่อยใบเดิมแล้วจองใบถัดไปในคิว คืน id ที่จองได้ (None = คิวหมด)
+
+    ต้องมีทั้งสองเงื่อนไขในคำสั่งเดียว เพราะกันคนละกรณีกัน:
+
+    * claimed_at — กันใบที่คนอื่นจองไปแล้วและ commit แล้ว (การชนระดับนาที)
+    * FOR UPDATE SKIP LOCKED — กันสอง transaction ที่ยิงพร้อมกันแล้วยังไม่ commit
+      แย่งแถวเดียวกัน (การชนระดับมิลลิวินาที) ตัวนี้ไม่รู้จักใบที่จอง+commit ไปแล้ว
+      ส่วน claimed_at ก็ไม่เห็น transaction ที่ยังค้างอยู่ ขาดตัวใดตัวหนึ่งไม่ได้
+
+    เรียงเหมือน next_in_queue เดิม: ใบที่ต้องตรวจมาก่อน แล้วไล่จากใบเก่าสุด
+    """
+    release_claims(conn, worker)
+    row = conn.execute(
+        f"""UPDATE {DB_SCHEMA}.slips
+               SET claimed_by = %(me)s, claimed_name = %(name)s, claimed_at = now()
+             WHERE id = (SELECT id FROM {DB_SCHEMA}.slips
+                          WHERE review_status = 'pending'
+                            AND (claimed_at IS NULL
+                                 OR claimed_at < now() - %(lease)s * interval '1 minute')
+                          ORDER BY needs_review DESC, created_at ASC
+                          LIMIT 1 FOR UPDATE SKIP LOCKED)
+         RETURNING id::text AS id""",
+        {"me": worker, "name": name, "lease": REVIEW_CLAIM_MINUTES},
+    ).fetchone()
+    return row["id"] if row else None
+
+
+def claim_one(
+    conn: psycopg.Connection, slip_id: str, worker: str, name: str | None = None
+) -> dict[str, Any] | None:
+    """จองใบที่ระบุ (คนคลิกจากรายการคิว) คืน None ถ้าจองได้
+
+    ถ้าจองไม่ได้ คืนแถวของคนที่ถืออยู่ไว้เอาไปบอกบนหน้าจอ — เตือนเฉย ๆ ไม่บล็อก
+    เพราะอาจเป็นคนเดียวกันเปิดจากอีกเครื่อง หรือเขาตั้งใจเข้ามาดูใบนี้จริง ๆ
+    """
+    row = conn.execute(
+        f"""UPDATE {DB_SCHEMA}.slips
+               SET claimed_by = %(me)s, claimed_name = %(name)s, claimed_at = now()
+             WHERE id = %(id)s AND review_status = 'pending'
+               AND (claimed_at IS NULL
+                    OR claimed_at < now() - %(lease)s * interval '1 minute'
+                    OR claimed_by = %(me)s)
+         RETURNING id""",
+        {"id": slip_id, "me": worker, "name": name, "lease": REVIEW_CLAIM_MINUTES},
+    ).fetchone()
+    if row:
+        release_other_claims(conn, worker, keep=slip_id)
+        return None
+    held = conn.execute(
+        f"""SELECT claimed_name, claimed_at FROM {DB_SCHEMA}.slips
+             WHERE id = %(id)s AND review_status = 'pending'
+               AND claimed_at >= now() - %(lease)s * interval '1 minute'""",
+        {"id": slip_id, "lease": REVIEW_CLAIM_MINUTES},
+    ).fetchone()
+    return held
+
+
+def release_other_claims(conn: psycopg.Connection, worker: str, keep: str) -> None:
+    """ปล่อยใบอื่นที่คนนี้ถืออยู่ เหลือไว้ใบเดียวคือใบที่กำลังเปิด"""
+    conn.execute(
+        f"UPDATE {DB_SCHEMA}.slips SET {CLAIM_COLS}"
+        f" WHERE claimed_by = %s AND id <> %s AND review_status = 'pending'",
+        (worker, keep),
+    )
 
 
 def known_people(conn: psycopg.Connection) -> list[str]:
@@ -544,11 +639,17 @@ def query_slips(
         f"""SELECT id, name, tel, plate_raw, province, brand, car_type, location,
                    deposit_date, review_status, needs_review, review_reason,
                    car_status, returned_at, returned_by, uploaded_by, photographer,
-                   reviewed_by, ocr_model, created_at{counter}
+                   reviewed_by, ocr_model, created_at,
+                   claimed_name, claimed_at,
+                   -- คำนวณที่ฐานข้อมูลเพราะเวลาของ Postgres คือตัวเดียวกับที่ใช้ตัดสิน
+                   -- ว่าการจองหมดอายุหรือยัง ถ้าไปเทียบฝั่ง Python นาฬิกาคนละตัวกัน
+                   (claimed_at IS NOT NULL
+                    AND claimed_at >= now() - %(lease)s * interval '1 minute') AS claim_live{counter}
             FROM {DB_SCHEMA}.slips WHERE {where}
             ORDER BY {order} {'DESC' if desc else 'ASC'} NULLS LAST
             LIMIT %(limit)s OFFSET %(offset)s""",
-        {**params, "limit": per_page, "offset": (page - 1) * per_page},
+        {**params, "limit": per_page, "offset": (page - 1) * per_page,
+         "lease": REVIEW_CLAIM_MINUTES},
     ).fetchall()
     if total is None:
         if rows:

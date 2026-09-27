@@ -22,7 +22,8 @@ from ..auth import COOKIE_NAME, SESSION_TTL, User, authenticate, make_token, rea
 from ..config import COOKIE_SECURE, OCR_MODEL, SECRET_KEY, USD_THB
 from ..db import (
     add_staff, build_filters, clean_person_name, connect, dashboard_stats, export_rows, get_image, get_slip,
-    known_people, list_staff, mark_returned, next_in_queue, query_slips, review_counts,
+    claim_next, claim_one, known_people, list_staff, mark_returned, next_in_queue,
+    query_slips, release_claims, review_counts,
     set_staff_active, update_slip,
 )
 from ..review import REASON_LABELS, evaluate
@@ -108,6 +109,13 @@ def current_user(request: Request) -> User | None:
     return read_token(token, _SECRET) if token else None
 
 
+# คุกกี้ที่บอกว่า "เบราว์เซอร์นี้คือใคร" ใช้เป็นเจ้าของการจองใบในคิว
+# ใช้ session token ไม่ได้เพราะสามคนล็อกอินบัญชี staff เดียวกัน payload จึงเหมือนกันหมด
+# ไม่ต้องเซ็นเพราะปลอมไปก็ได้แค่แย่งใบที่ตัวเองก็เข้าถึงได้อยู่แล้ว ไม่ใช่ขอบเขตสิทธิ์
+WORKER_COOKIE = "ocrslip_worker"
+WORKER_TTL = 30 * 24 * 3600
+
+
 @app.middleware("http")
 async def auth_gate(request: Request, call_next):
     """ปิดทุกหน้าที่ไม่ได้อยู่ใน PUBLIC_PATHS และบังคับสิทธิ์ admin ในหน้าที่กำหนด"""
@@ -128,7 +136,16 @@ async def auth_gate(request: Request, call_next):
         return _forbidden("บัญชีนี้ใช้ได้เฉพาะหน้าอัปโหลดกับคิวตรวจสอบ")
 
     request.state.user = user
-    return await call_next(request)
+    worker = request.cookies.get(WORKER_COOKIE, "")
+    fresh = not (worker.isalnum() and len(worker) == 32)
+    if fresh:
+        worker = secrets.token_hex(16)
+    request.state.worker = worker
+    resp = await call_next(request)
+    if fresh:
+        resp.set_cookie(WORKER_COOKIE, worker, max_age=WORKER_TTL,
+                        httponly=True, samesite="lax", secure=COOKIE_SECURE)
+    return resp
 
 
 @app.middleware("http")
@@ -328,6 +345,20 @@ def review_queue(
     )
 
 
+@app.get("/review/next")
+def review_next(request: Request):
+    """จองใบถัดไปในคิว ณ ตอนนี้ แล้วพาไปที่ใบนั้น
+
+    เดิมปุ่ม "ใบถัดไป" พาไปตาม id ที่คำนวณไว้ตั้งแต่ตอน render ซึ่งเป็นภาพคิวเมื่อกี้
+    ไม่ใช่ตอนนี้ คนที่ตรวจช้ากว่าจึงเดินตาม id เก่าไปโผล่ใบที่เพื่อนเพิ่งตรวจเสร็จ
+    เปลี่ยนมาถามฐานข้อมูลสด ๆ ตอนกด และจองไว้ในคำสั่งเดียวกัน คนอื่นจะไม่ได้ใบนี้อีก
+    """
+    with connect() as conn:
+        nxt = claim_next(conn, request.state.worker)
+        conn.commit()
+    return RedirectResponse(f"/review/{nxt}" if nxt else "/review", status_code=303)
+
+
 @app.get("/review/{slip_id}", response_class=HTMLResponse)
 def review_one(request: Request, slip_id: str, edit: int = 0):
     """หน้าตรวจ 1 ใบ — edit=1 คือยืนยันว่าจะแก้ใบที่ตรวจไปแล้วจริง ๆ
@@ -341,6 +372,11 @@ def review_one(request: Request, slip_id: str, edit: int = 0):
         slip = get_slip(conn, slip_id)
         if not slip:
             return HTMLResponse("ไม่พบใบนี้", status_code=404)
+        # เปิดใบไหนก็จองใบนั้น เผื่อคนคลิกจากรายการคิวแทนที่จะกดปุ่มใบถัดไป
+        # ถ้าจองไม่ได้แปลว่ามีคนอื่นถืออยู่ — เตือนเฉย ๆ ไม่บล็อก เพราะอาจเป็น
+        # คนเดียวกันเปิดจากอีกเครื่อง และด่านจริงคือ require_status ตอนกดอนุมัติอยู่แล้ว
+        held = claim_one(conn, slip_id, request.state.worker)
+        conn.commit()
         # ใบถัดไปในคิว: เอาที่ต้องตรวจก่อน ถ้าหมดค่อยไล่ใบที่รอยืนยันเฉย ๆ
         next_id, remaining = next_in_queue(conn, slip_id)
         return render(
@@ -349,6 +385,7 @@ def review_one(request: Request, slip_id: str, edit: int = 0):
             next_id=next_id, remaining=remaining,
             people=known_people(conn),
             taken=(slip["review_status"] != "pending" and not edit),
+            held_by=held,
         )
 
 
@@ -413,8 +450,9 @@ async def approve(request: Request, slip_id: str):
                 people=known_people(conn), taken=True,
             )
         conn.commit()
-    nxt = (form.get("next_id") or "").strip()
-    return RedirectResponse(f"/review/{nxt}" if nxt else "/review", status_code=303)
+    # ไม่ใช้ next_id ที่ฝังมากับฟอร์มแล้ว — มันเป็นภาพคิวตอนเปิดหน้า ซึ่งอาจผ่านไปหลายนาที
+    # /review/next จองใบสด ๆ ให้ตอนนี้ คนอื่นจะไม่ได้ใบเดียวกัน
+    return RedirectResponse("/review/next", status_code=303)
 
 
 @app.post("/review/{slip_id}/reject")
@@ -426,7 +464,9 @@ async def reject(request: Request, slip_id: str):
     with connect() as conn:
         conn.execute(
             "UPDATE ocr_dhammakaya.slips SET review_status='rejected', needs_review=false,"
-            " review_reason=%s, reviewed_by=%s, reviewed_at=now() WHERE id=%s",
+            " review_reason=%s, reviewed_by=%s, reviewed_at=now(),"
+            # ใบที่ออกจากกอง pending แล้วไม่ต้องมีใครถืออีก
+            " claimed_by=NULL, claimed_name=NULL, claimed_at=NULL WHERE id=%s",
             ([(form.get("reason") or "รูปอ่านไม่ได้")], reviewer, slip_id),
         )
         conn.commit()

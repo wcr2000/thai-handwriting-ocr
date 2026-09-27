@@ -110,7 +110,12 @@ def test_approver_cannot_search_outside_their_piles(login):
 
 
 def test_review_detail_still_links_to_next_slip(login):
-    """หน้าตรวจต้องรู้ใบถัดไป + จำนวนที่เหลือ โดยไม่ต้องดึงคิวทั้งกองมานับ"""
+    """หน้าตรวจต้องพาไปใบถัดไปได้ โดยไม่ต้องดึงคิวทั้งกองมานับ
+
+    เดิมเช็ก input hidden ชื่อ next_id ซึ่งเป็น id ที่คำนวณไว้ตั้งแต่ตอน render
+    ตอนนี้เลิกใช้แล้ว เพราะมันเป็นภาพคิวเมื่อกี้ ไม่ใช่ตอนนี้ — ปลายทางคือ
+    /review/next ที่จองใบสด ๆ ให้ตอนกด
+    """
     import re
 
     c = login("admin")
@@ -119,7 +124,8 @@ def test_review_detail_still_links_to_next_slip(login):
         pytest.skip("ไม่มีใบในกอง 'ต้องตรวจ' ให้ทดสอบ")
     r = c.get(f"/review/{m.group(1)}")
     assert r.status_code == 200
-    assert 'name="next_id"' in r.text
+    assert "ใบถัดไป" in r.text
+    assert 'name="next_id"' not in r.text, "ไม่ควรฝัง id ใบถัดไปไว้ในฟอร์มอีกแล้ว"
 
 
 def test_pile_total_matches_the_tab_counter(login):
