@@ -29,13 +29,88 @@ def connect() -> psycopg.Connection:
     return psycopg.connect(DATABASE_URL, row_factory=dict_row)
 
 
-def init_schema() -> None:
+def split_sql(sql: str) -> list[str]:
+    """ตัด schema.sql เป็นคำสั่งย่อย โดยไม่ตัดกลาง string / comment / บล็อก $$...$$
+
+    ต้องรู้จัก dollar-quote เพราะ body ของ touch_updated_at() มี ";" อยู่ข้างใน
+    ถ้า split ด้วย ";" เฉย ๆ function จะขาดกลางแล้ว syntax error
+    """
+    stmts, buf = [], []
+    i, n = 0, len(sql)
+    while i < n:
+        ch = sql[i]
+        if ch == "-" and sql.startswith("--", i):           # comment ท้ายบรรทัด
+            j = sql.find("\n", i)
+            i = n if j == -1 else j + 1
+            continue
+        if ch == "'":                                        # string ธรรมดา
+            j = i + 1
+            while j < n:
+                if sql[j] == "'":
+                    if sql.startswith("''", j):
+                        j += 2
+                        continue
+                    break
+                j += 1
+            buf.append(sql[i : j + 1])
+            i = j + 1
+            continue
+        if ch == "$":                                        # dollar-quote: $$ หรือ $tag$
+            end_tag = sql.find("$", i + 1)
+            inner = sql[i + 1 : end_tag] if end_tag != -1 else None
+            if inner is not None and (inner == "" or inner.replace("_", "").isalnum()):
+                tag = sql[i : end_tag + 1]
+                close = sql.find(tag, end_tag + 1)
+                if close != -1:
+                    buf.append(sql[i : close + len(tag)])
+                    i = close + len(tag)
+                    continue
+        if ch == ";":
+            if (stmt := "".join(buf).strip()):
+                stmts.append(stmt)
+            buf = []
+            i += 1
+            continue
+        buf.append(ch)
+        i += 1
+    if (stmt := "".join(buf).strip()):
+        stmts.append(stmt)
+    return stmts
+
+
+def init_schema(*, verbose: bool = False) -> None:
+    """สร้าง/อัปเดต schema ทีละคำสั่ง commit ทีละคำสั่ง
+
+    เดิมยิงไฟล์ทั้งก้อนใน transaction เดียว ซึ่งพังทั้งหมดถ้า connection หลุดกลางทาง
+    (Postgres ฝั่ง Render ตัดสายเป็นระยะ) แล้ว rollback ทุกอย่างที่ทำไปแล้วด้วย
+    ทุกคำสั่งในไฟล์เขียนแบบรันซ้ำได้ (IF NOT EXISTS / CREATE OR REPLACE) จึงต่อสายใหม่
+    แล้วรันคำสั่งเดิมซ้ำได้อย่างปลอดภัย
+    """
     sql = SCHEMA_SQL.read_text(encoding="utf-8")
     if DB_SCHEMA != "ocr_dhammakaya":
         sql = sql.replace("ocr_dhammakaya", DB_SCHEMA)
-    with connect() as conn:
-        conn.execute(sql)
-        conn.commit()
+    stmts = split_sql(sql)
+    conn = connect()
+    try:
+        for idx, stmt in enumerate(stmts, 1):
+            for attempt in (1, 2, 3):
+                try:
+                    conn.execute(stmt)
+                    conn.commit()
+                    break
+                except psycopg.OperationalError as exc:
+                    if attempt == 3:
+                        raise
+                    print(f"[{idx}/{len(stmts)}] connection หลุด ({exc}) — ต่อใหม่แล้วลองอีกครั้ง")
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                    conn = connect()
+            if verbose:
+                print(f"[{idx}/{len(stmts)}] {' '.join(stmt.split())[:80]}")
+    finally:
+        conn.close()
 
 
 # ---------- เขียนข้อมูล ----------
