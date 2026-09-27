@@ -1,0 +1,155 @@
+/* ---------- หน้าสรุปภาพรวม ----------
+   โทเคนสีของกราฟแยกออกมาจาก app.css โดยตั้งใจ: สีในกราฟต้อง "ผ่านการวัด" ไม่ใช่เลือกตามชอบ
+   ชุดนี้ผ่าน validator ของ dataviz ครบทุกข้อบนพื้นขาว (ตาบอดสี/ระยะห่างสี/คอนทราสต์)
+   ถ้าจะเปลี่ยนสี ต้องรัน validator ใหม่ อย่าเปลี่ยนด้วยสายตา */
+.dash {
+  --surface:#fff;
+  --ink:#0b0b0b;
+  --ink-2:#52514e;
+  --muted:#898781;
+  --grid:#e8eaee;      /* เส้นกริด: จาง 1 ระดับจากพื้น ห้ามเป็นเส้นประ */
+  --ring:#e3e6eb;
+  --track:#eef1f6;     /* รางของแถบ = พื้นที่ว่างของค่าเดียวกัน */
+  --hover:#f5f7fa;
+  --s1:#2a78d6;        /* ซีรีส์ 1 — ยังจอดอยู่ / ค่าหลักของทุกกราฟแท่ง */
+  --s2:#1baf7a;        /* ซีรีส์ 2 — รับรถกลับแล้ว */
+  --warn:#fab219;
+  --serious:#ec835a;
+  --good:#0ca30c;
+}
+
+/* ---------- หัวหน้า ---------- */
+.dash-head { display:flex; align-items:flex-end; justify-content:space-between;
+             gap:1rem 1.5rem; flex-wrap:wrap; margin:.2rem 0 1.4rem; }
+.dash-head .eyebrow { margin:0 0 .15rem; font-size:.9rem; font-weight:600; color:var(--ink-2); }
+/* ตัวเลขนำของหน้า มีได้ตัวเดียว — ใช้ฟอนต์เดียวกับทั้งระบบ และเป็นเลขความกว้างปกติ
+   (tabular-nums ทำให้เลขใหญ่ดูหลวม จึงสงวนไว้ใช้กับคอลัมน์ตัวเลขที่ต้องตรงหลักกันเท่านั้น) */
+.dash-head .hero { font-size:3rem; font-weight:650; line-height:1; letter-spacing:-.02em; }
+.dash-head .hero small { font-size:1rem; font-weight:500; color:var(--ink-2); margin-left:.35rem; }
+.dash-head .asof { margin:.35rem 0 0; font-size:.85rem; color:var(--muted); }
+.dash-head .actions { display:flex; gap:.5rem; align-items:center; }
+
+/* ---------- บล็อกของหน้า ---------- */
+.block { margin:0 0 1.6rem; }
+.block > h3 { margin:0 0 .15rem; font-size:1rem; }
+.block > .hint { margin:0 0 .7rem; font-size:.83rem; color:var(--muted); }
+.panel { background:var(--surface); border:1px solid var(--ring); border-radius:12px; padding:1rem 1.1rem; }
+.panel > h4 { margin:0 0 .1rem; font-size:.95rem; }
+.panel > .hint { margin:0 0 .8rem; font-size:.8rem; color:var(--muted); }
+.panel > .foot { margin:.8rem 0 0; font-size:.78rem; color:var(--muted); }
+/* align-items:start — ปล่อยให้แต่ละการ์ดสูงเท่าเนื้อหาตัวเอง ไม่ยืดตามการ์ดที่ยาวที่สุด
+   จนเหลือช่องว่างก้อนใหญ่ใต้การ์ดสั้น */
+.grid2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr));
+         gap:1rem; align-items:start; }
+
+/* ---------- ไทล์ตัวเลข ---------- */
+/* ความกว้างขั้นต่ำต้องเผื่อให้จอ 390px ได้ 2 คอลัมน์: main เหลือพื้นที่จริง 367.6px
+   ดังนั้น 2 คอลัมน์ + gap ต้องไม่เกินนั้น (164×2 + 8 = 336 เหลือที่หายใจพอควร)
+   ถ้าคำนวณไม่ผ่านแม้แต่เศษ px auto-fit จะตกไปเหลือคอลัมน์เดียวทันที
+   แล้วไทล์ 4 ใบจะเรียงเป็นตับกินทั้งหน้าจอแรกจนต้องเลื่อนยาวกว่าจะเจอกราฟ
+   ตัวเลขนี้คู่กับ gap ใน media query ข้างล่าง — แก้ตัวใดตัวหนึ่งต้องคิดอีกตัวด้วย */
+.tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(164px,1fr)); gap:.75rem; }
+.tile { background:var(--surface); border:1px solid var(--ring); border-radius:12px;
+        padding:.85rem .95rem; display:flex; flex-direction:column; gap:.35rem; min-width:0; }
+.tile .t { font-size:.82rem; color:var(--ink-2); }
+.tile .t a { color:inherit; text-decoration:none; border-bottom:1px solid var(--ring); }
+.tile .t a:hover { border-bottom-color:var(--s1); color:var(--s1); }
+.tile .v { font-size:1.7rem; font-weight:650; line-height:1.05; letter-spacing:-.01em; }
+.tile .v .unit { font-size:.8rem; font-weight:500; color:var(--muted); margin-left:.25rem; letter-spacing:0; }
+.tile .sub { font-size:.78rem; color:var(--muted); margin-top:auto; }
+.tile.flag .v { color:#a06a00; }
+/* มิเตอร์: รางเป็นสีอ่อนของ ramp เดียวกับแถบ เพื่อให้อ่านสถานะได้ตลอดความยาว */
+.meter { height:6px; border-radius:99px; background:var(--track); overflow:hidden; }
+.meter > i { display:block; height:100%; border-radius:99px; background:var(--s1); }
+.meter.ok > i { background:var(--s2); }
+
+/* ---------- แถบเทียบสัดส่วน ---------- */
+.blist { display:flex; flex-direction:column; gap:.05rem; }
+.brow { display:grid; grid-template-columns:minmax(0,10.5rem) 1fr auto; align-items:center;
+        gap:.7rem; padding:.3rem .35rem; border-radius:7px; }
+.brow:hover { background:var(--hover); }
+/* ป้ายภาษาไทยยาวกว่าคอลัมน์บ่อย — ให้ขึ้นบรรทัดใหม่ ดีกว่าตัดท้ายทิ้งด้วย ellipsis
+   เพราะ "model ไม่มั่นใจใน..." อ่านแล้วไม่รู้ว่าไม่มั่นใจในอะไร */
+.brow .lbl { font-size:.88rem; line-height:1.35; overflow-wrap:anywhere; }
+.brow .lbl a { color:var(--ink); text-decoration:none; }
+.brow .lbl a:hover { color:var(--s1); text-decoration:underline; }
+.btrack { height:10px; border-radius:99px; background:var(--track); }
+/* min-width กันแถวค่าน้อยหายไปจนดูเหมือนไม่มีข้อมูล */
+.bfill { height:100%; border-radius:99px; background:var(--s1); min-width:3px; }
+.bfill.warn { background:var(--warn); }
+.bfill.serious { background:var(--serious); }
+.bn { font-size:.86rem; font-variant-numeric:tabular-nums; text-align:right; white-space:nowrap; }
+.bn .pct { color:var(--muted); font-size:.76rem; margin-left:.35rem; }
+.bn .ret { color:var(--muted); font-size:.76rem; margin-left:.3rem; text-decoration:none; }
+
+/* ---------- กราฟแท่งรายวัน ---------- */
+/* ความสูงรวมนับรวมแถบป้ายวันที่ไว้แล้ว ไม่ให้แกน x ตกขอบจนการ์ดมี scroll ซ้อนเล็ก ๆ */
+.chart { --plot-h:200px; padding-left:3.2rem; position:relative; }
+.plot { position:relative; height:var(--plot-h); }
+.gl { position:absolute; left:0; right:0; height:1px; background:var(--grid); }
+.gl.base { background:#c3c2b7; }
+.gl span { position:absolute; right:100%; margin-right:.5rem; transform:translateY(-50%);
+           font-size:.72rem; color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap; }
+.cols { position:absolute; inset:0; display:flex; align-items:flex-end; gap:2px; }
+.dcol { flex:1 1 0; min-width:0; height:100%; position:relative;
+        display:flex; flex-direction:column; justify-content:flex-end; }
+.dcol:hover { background:linear-gradient(var(--hover),var(--hover)); }
+.seg { width:100%; max-width:22px; margin:0 auto; background:var(--s1); }
+.seg.top { border-radius:4px 4px 0 0; }        /* ปลายด้านค่าโค้ง ฐานตรงเสมอ */
+.seg.ret { background:var(--s2); }
+.seg + .seg { margin-top:2px; }                 /* ช่องว่างสีพื้น 2px คั่นสองส่วน ไม่ใช่เส้นขอบ */
+.seg.v { min-height:2px; }   /* วันที่มีใบอยู่จริงต้องมองเห็น แม้ยอดจะเล็กกว่า 1px ของแกน */
+/* ป้ายค่าติดเฉพาะแท่งสูงสุด — ติดทุกแท่งแล้วจะอ่านไม่ออกและไม่มีใครอ่าน */
+.dcol .peak { font-size:.72rem; color:var(--ink-2); text-align:center; margin-bottom:3px;
+              font-variant-numeric:tabular-nums; }
+.tip { position:absolute; bottom:100%; left:50%; transform:translateX(-50%); margin-bottom:.4rem;
+       background:var(--ink); color:#fff; border-radius:7px; padding:.4rem .55rem; font-size:.75rem;
+       line-height:1.45; white-space:nowrap; opacity:0; pointer-events:none; transition:opacity .1s;
+       z-index:5; }
+/* :active ด้วย เพราะบนมือถือการแตะ div ที่มี tabindex ไม่ได้ทำให้เกิด :focus ทุกเบราว์เซอร์
+   ค่าตัวเลขยังอ่านได้จาก "ดูเป็นตาราง" อยู่ดี tooltip เป็นของแถมไม่ใช่ทางเดียวที่จะอ่านค่า */
+.dcol:hover .tip, .dcol:focus-within .tip, .dcol:active .tip { opacity:1; }
+/* แท่งริมซ้าย/ขวา: ป้ายที่จัดกึ่งกลางจะล้นออกนอกจอแล้วโดน overflow-x:hidden ของ html ตัดหาย
+   จึงให้ป้ายของแท่งริมยึดขอบของตัวเองแทนการจัดกึ่งกลาง */
+.dcol:nth-child(-n+4) .tip { left:0; transform:none; }
+.dcol:nth-last-child(-n+4) .tip { left:auto; right:0; transform:none; }
+.dcol:focus-visible { outline:2px solid var(--s1); outline-offset:-2px; }
+.xaxis { display:flex; gap:2px; margin-top:.35rem; }
+.xtick { flex:1 1 0; min-width:0; text-align:center; font-size:.7rem; color:var(--muted);
+         font-variant-numeric:tabular-nums; white-space:nowrap; }
+.legend { display:flex; gap:1rem; flex-wrap:wrap; margin:0 0 .8rem; font-size:.82rem; color:var(--ink-2); }
+.legend span { display:inline-flex; align-items:center; gap:.4rem; }
+.legend i { width:10px; height:10px; border-radius:3px; background:var(--s1); }
+.legend i.ret { background:var(--s2); }
+
+/* ---------- แถบเตือนเรื่องคุณภาพวันที่ ---------- */
+.callout { display:flex; gap:.6rem; align-items:flex-start; margin-top:.9rem; padding:.7rem .8rem;
+           background:#fff8e6; border:1px solid #f0dca8; border-radius:9px; font-size:.83rem; color:#6b5000; }
+.callout b { font-variant-numeric:tabular-nums; }
+
+/* ---------- มุมมองตาราง (ทุกกราฟต้องมี ค่าห้ามอ่านได้จาก hover อย่างเดียว) ---------- */
+.tableview { margin-top:.9rem; }
+.tableview > summary { cursor:pointer; font-size:.8rem; color:var(--ink-2); }
+.tableview table { margin-top:.5rem; font-size:.84rem; }
+.tableview td.n, .tableview th.n { text-align:right; font-variant-numeric:tabular-nums; }
+.tableview .scroll { max-height:260px; overflow:auto; }
+
+.empty { color:var(--muted); font-size:.85rem; margin:.4rem 0; }
+
+@media (max-width:620px) {
+  .dash-head .hero { font-size:2.4rem; }
+  .dash-head { margin-bottom:1rem; }
+  .tiles { gap:.5rem; }
+  .tile { padding:.7rem .75rem; }
+  .tile .v { font-size:1.4rem; }
+  .tile .t, .tile .sub { font-size:.75rem; }
+  .brow { grid-template-columns:minmax(0,7rem) 1fr auto; gap:.5rem; }
+  .brow .lbl { font-size:.82rem; }
+  .bn { font-size:.8rem; }
+  .panel { padding:.85rem .9rem; }
+  .chart { padding-left:2.4rem; --plot-h:170px; }
+  .gl span { font-size:.66rem; }
+  .xtick { font-size:.65rem; }
+  /* นิ้วแตะได้แน่นอน: แท่งกว้าง ~11px แต่พื้นที่แตะคือทั้งคอลัมน์เต็มความสูงกราฟ */
+  .tip { white-space:normal; max-width:11rem; }
+}

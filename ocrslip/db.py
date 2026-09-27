@@ -575,14 +575,34 @@ def dashboard_stats(conn: psycopg.Connection) -> dict[str, Any]:
             (limit,),
         ).fetchall()
 
+    # แกนวันต้องเป็น "ทุกวันใน 30 วันล่าสุด" ไม่ใช่ "14 วันที่บังเอิญมีใบ"
+    # ของเดิมเอาวันที่มีใบมาเรียงติดกัน วันว่างจึงหายไปจากแกน และวันที่ OCR อ่านผิดปี
+    # (2083, 2027) ถูกวาดเป็นแท่งข้าง ๆ 2026 โดยป้ายโชว์แค่ วว/ดด — อ่านแล้วเข้าใจผิดว่าเรียงกัน
     by_day = conn.execute(
-        f"""SELECT deposit_date AS label,
-                   count(*) AS n,
-                   count(*) FILTER (WHERE car_status='returned') AS returned
-            FROM {DB_SCHEMA}.slips
-            WHERE deposit_date IS NOT NULL AND review_status <> 'rejected'
-            GROUP BY 1 ORDER BY 1 DESC LIMIT 14"""
+        f"""WITH days AS (
+                SELECT generate_series(current_date - 29, current_date, '1 day')::date AS day
+            )
+            SELECT d.day AS label,
+                   count(s.id) AS n,
+                   count(s.id) FILTER (WHERE s.car_status='returned') AS returned
+            FROM days d
+            LEFT JOIN {DB_SCHEMA}.slips s
+                   ON s.deposit_date = d.day AND s.review_status <> 'rejected'
+            GROUP BY 1 ORDER BY 1"""
     ).fetchall()
+
+    # ใบที่ไม่ได้อยู่ในกราฟข้างบน ต้องบอกจำนวนไว้เสมอ ไม่งั้นกราฟจะดูเหมือนข้อมูลทั้งหมด
+    # ทั้งที่จริงมีใบตกขอบอยู่หลักร้อย (วันที่ว่าง / ปีที่เป็นไปไม่ได้ / วันที่เก่ากว่า 30 วัน)
+    date_health = dict(conn.execute(
+        f"""SELECT count(*) FILTER (WHERE deposit_date IS NULL) AS no_date,
+                   count(*) FILTER (WHERE deposit_date < current_date - 365
+                                       OR deposit_date > current_date + 1) AS odd_date,
+                   count(*) FILTER (WHERE deposit_date BETWEEN current_date - 365
+                                                           AND current_date - 30) AS older,
+                   count(*) FILTER (WHERE deposit_date BETWEEN current_date - 29
+                                                           AND current_date + 1) AS in_window
+            FROM {DB_SCHEMA}.slips WHERE review_status <> 'rejected'"""
+    ).fetchone())
 
     # คุณภาพ OCR: ช่องไหนที่คนต้องแก้บ่อยที่สุด (มาจาก audit log ของการใช้งานจริง)
     edits = conn.execute(
@@ -627,7 +647,8 @@ def dashboard_stats(conn: psycopg.Connection) -> dict[str, Any]:
                 GROUP BY lower(btrim(uploaded_by)) ORDER BY n DESC LIMIT 8"""
         ).fetchall(),
         "by_reviewer": by_reviewer,
-        "by_day": list(reversed(by_day)),
+        "by_day": by_day,
+        "date_health": date_health,
         "edits": edits,
         "reviewed": reviewed,
         "reasons": reasons,
