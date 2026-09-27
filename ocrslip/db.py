@@ -16,7 +16,7 @@ from psycopg.rows import dict_row
 
 from .config import DATABASE_URL, DB_SCHEMA
 from .normalize import (
-    norm_brand, norm_cartype, norm_name, norm_phone, norm_plate, norm_province, parse_date,
+    _base, norm_brand, norm_cartype, norm_name, norm_phone, norm_plate, norm_province, parse_date,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -29,13 +29,88 @@ def connect() -> psycopg.Connection:
     return psycopg.connect(DATABASE_URL, row_factory=dict_row)
 
 
-def init_schema() -> None:
+def split_sql(sql: str) -> list[str]:
+    """ตัด schema.sql เป็นคำสั่งย่อย โดยไม่ตัดกลาง string / comment / บล็อก $$...$$
+
+    ต้องรู้จัก dollar-quote เพราะ body ของ touch_updated_at() มี ";" อยู่ข้างใน
+    ถ้า split ด้วย ";" เฉย ๆ function จะขาดกลางแล้ว syntax error
+    """
+    stmts, buf = [], []
+    i, n = 0, len(sql)
+    while i < n:
+        ch = sql[i]
+        if ch == "-" and sql.startswith("--", i):           # comment ท้ายบรรทัด
+            j = sql.find("\n", i)
+            i = n if j == -1 else j + 1
+            continue
+        if ch == "'":                                        # string ธรรมดา
+            j = i + 1
+            while j < n:
+                if sql[j] == "'":
+                    if sql.startswith("''", j):
+                        j += 2
+                        continue
+                    break
+                j += 1
+            buf.append(sql[i : j + 1])
+            i = j + 1
+            continue
+        if ch == "$":                                        # dollar-quote: $$ หรือ $tag$
+            end_tag = sql.find("$", i + 1)
+            inner = sql[i + 1 : end_tag] if end_tag != -1 else None
+            if inner is not None and (inner == "" or inner.replace("_", "").isalnum()):
+                tag = sql[i : end_tag + 1]
+                close = sql.find(tag, end_tag + 1)
+                if close != -1:
+                    buf.append(sql[i : close + len(tag)])
+                    i = close + len(tag)
+                    continue
+        if ch == ";":
+            if (stmt := "".join(buf).strip()):
+                stmts.append(stmt)
+            buf = []
+            i += 1
+            continue
+        buf.append(ch)
+        i += 1
+    if (stmt := "".join(buf).strip()):
+        stmts.append(stmt)
+    return stmts
+
+
+def init_schema(*, verbose: bool = False) -> None:
+    """สร้าง/อัปเดต schema ทีละคำสั่ง commit ทีละคำสั่ง
+
+    เดิมยิงไฟล์ทั้งก้อนใน transaction เดียว ซึ่งพังทั้งหมดถ้า connection หลุดกลางทาง
+    (Postgres ฝั่ง Render ตัดสายเป็นระยะ) แล้ว rollback ทุกอย่างที่ทำไปแล้วด้วย
+    ทุกคำสั่งในไฟล์เขียนแบบรันซ้ำได้ (IF NOT EXISTS / CREATE OR REPLACE) จึงต่อสายใหม่
+    แล้วรันคำสั่งเดิมซ้ำได้อย่างปลอดภัย
+    """
     sql = SCHEMA_SQL.read_text(encoding="utf-8")
     if DB_SCHEMA != "ocr_dhammakaya":
         sql = sql.replace("ocr_dhammakaya", DB_SCHEMA)
-    with connect() as conn:
-        conn.execute(sql)
-        conn.commit()
+    stmts = split_sql(sql)
+    conn = connect()
+    try:
+        for idx, stmt in enumerate(stmts, 1):
+            for attempt in (1, 2, 3):
+                try:
+                    conn.execute(stmt)
+                    conn.commit()
+                    break
+                except psycopg.OperationalError as exc:
+                    if attempt == 3:
+                        raise
+                    print(f"[{idx}/{len(stmts)}] connection หลุด ({exc}) — ต่อใหม่แล้วลองอีกครั้ง")
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                    conn = connect()
+            if verbose:
+                print(f"[{idx}/{len(stmts)}] {' '.join(stmt.split())[:80]}")
+    finally:
+        conn.close()
 
 
 # ---------- เขียนข้อมูล ----------
@@ -231,6 +306,27 @@ def list_slips(
     return cur.fetchall()
 
 
+def next_in_queue(conn: psycopg.Connection, slip_id: str) -> tuple[str | None, int]:
+    """(id ใบถัดไปในคิว, จำนวนใบที่ยังค้าง) — ถามฐานข้อมูลตรง ๆ
+
+    เดิมดึงคิวทั้งกอง (SELECT * 200 แถว พร้อม jsonb ของ OCR) มาเรียงใน Python
+    เพื่อเอาแค่ใบแรกกับจำนวน ซึ่งหนักเกินเหตุเพราะหน้านี้เปิดทุกครั้งที่ตรวจ 1 ใบ
+
+    เรียงให้ใบที่ต้องตรวจมาก่อน แล้วไล่จากใบเก่าสุด (เคลียร์งานตกค้างให้หมดก่อน)
+    """
+    # สอง subquery ใน statement เดียว = คุยรอบเดียว แต่ไม่ต้องใช้ count(*) OVER ()
+    # ซึ่งบังคับให้อ่านแถวที่ sort แล้วทั้งกอง (วัดที่ 66,000 ใบ: 96 ms -> 25 ms)
+    row = conn.execute(
+        f"""SELECT (SELECT id FROM {DB_SCHEMA}.slips
+                     WHERE review_status = 'pending' AND id <> %(id)s
+                     ORDER BY needs_review DESC, created_at ASC LIMIT 1) AS next_id,
+                   (SELECT count(*) FROM {DB_SCHEMA}.slips
+                     WHERE review_status = 'pending' AND id <> %(id)s) AS remaining""",
+        {"id": slip_id},
+    ).fetchone()
+    return (str(row["next_id"]) if row["next_id"] else None), row["remaining"]
+
+
 def known_people(conn: psycopg.Connection) -> list[str]:
     """รายชื่อที่ยังใช้งานอยู่ ไว้ให้เลือกตอนอัปโหลด"""
     cur = conn.execute(
@@ -318,17 +414,24 @@ def export_rows(conn: psycopg.Connection, filters: tuple[str, dict] | None = Non
 def build_filters(
     q: str | None = None,
     review_status: str | None = None,
+    needs_review: bool | None = None,
     car_status: str | None = None,
     car_type: str | None = None,
 ) -> tuple[str, dict]:
-    """สร้าง WHERE clause ที่ใช้ร่วมกันระหว่างหน้าตาราง, ตัวนับ และ Excel
+    """สร้าง WHERE clause ที่ใช้ร่วมกันระหว่างหน้าตาราง, คิวตรวจ, ตัวนับ และ Excel
 
     ใช้ตัวเดียวกันทุกที่ เพื่อให้ปุ่ม 'โหลด Excel' ได้ข้อมูลตรงกับที่เห็นบนจอเสมอ
+
+    ค้นบนคอลัมน์ *_norm ไม่ใช่คอลัมน์ดิบ เพราะ trigram index อยู่บน *_norm
+    ถ้า ILIKE คอลัมน์ดิบ index ใช้ไม่ได้เลย ทุกการค้นจะกวาดทั้งตาราง
     """
     where, params = ["TRUE"], {}
     if review_status:
         where.append("review_status = %(review_status)s")
         params["review_status"] = review_status
+    if needs_review is not None:
+        where.append("needs_review = %(needs_review)s")
+        params["needs_review"] = needs_review
     if car_status:
         where.append("car_status = %(car_status)s")
         params["car_status"] = car_status
@@ -336,14 +439,24 @@ def build_filters(
         where.append("car_type = %(car_type)s")
         params["car_type"] = car_type
     if q and q.strip():
-        parts = ["name ILIKE %(q)s", "plate_raw ILIKE %(q)s",
-                 "brand ILIKE %(q)s", "location ILIKE %(q)s"]
-        params["q"] = f"%{q.strip()}%"
+        # normalize คำค้นแบบเดียวกับตอนบันทึก ไม่งั้นพิมพ์ "นายสมชาย" จะไม่เจอแถวที่เก็บ "สมชาย"
+        # ใส่เฉพาะช่องที่ normalize แล้วยังเหลือข้อความ ไม่งั้น LIKE '%%' จะแมตช์ทุกแถว
+        parts = []
+        for col, key, val in (
+            ("name_norm", "qname", norm_name(q)),
+            ("plate_norm", "qplate", norm_plate(q)),
+            ("brand_norm", "qbrand", norm_brand(q)),
+            ("location", "qloc", _base(q).strip()),   # ที่จอดไม่มีคอลัมน์ norm ใช้ trgm บนคอลัมน์ดิบ
+        ):
+            if val:
+                parts.append(f"{col} ILIKE %({key})s")
+                params[key] = f"%{val}%"
         digits = "".join(ch for ch in q if ch.isdigit())
         if digits:  # ถ้าไม่มีตัวเลขเลย ห้ามใส่เงื่อนไขเบอร์ ไม่งั้น LIKE '%%' จะแมตช์ทุกแถว
             parts.append("tel_digits LIKE %(qd)s")
             params["qd"] = f"%{digits}%"
-        where.append(f"({' OR '.join(parts)})")
+        if parts:
+            where.append(f"({' OR '.join(parts)})")
     return " AND ".join(where), params
 
 
@@ -358,22 +471,55 @@ SORTABLE = {
 def query_slips(
     conn: psycopg.Connection, *, filters: tuple[str, dict],
     sort: str = "created_at", desc: bool = True, page: int = 1, per_page: int = 50,
+    total: int | None = None,
 ) -> tuple[list[dict], int]:
+    """(แถวของหน้านี้, จำนวนทั้งหมดที่เข้าเงื่อนไข) ในการคุยกับฐานข้อมูลรอบเดียว
+
+    ส่ง total มาได้ถ้าผู้เรียกรู้ยอดอยู่แล้ว (หน้าคิวตรวจรู้จาก review_counts)
+    จะได้ไม่ต้องนับใหม่เลย
+
+    ฐานข้อมูลอยู่คนละเครื่องกับเว็บ RTT วัดได้ 60-550 ms ขณะที่งานฝั่ง Postgres
+    ใช้ไม่ถึง 1 ms ฉะนั้นตัวที่กินเวลาคือ "จำนวนรอบที่คุย" ไม่ใช่ความหนักของ query
+    count(*) OVER () จึงคุ้มกว่าการยิง COUNT(*) แยกอีกรอบ
+    แลกกับการที่ window ต้องอ่านแถวที่แมตช์ทั้งหมด วัดบน dataset สังเคราะห์แล้ว:
+
+        จำนวนใบ    count(*) OVER ()    COUNT(*) แยกรอบ (+1 RTT ~67 ms)
+        1,700              1.3 ms                      ~68 ms
+        33,000            96.5 ms                      ~92 ms
+        200,000          408.0 ms                      ~75 ms
+
+    จุดคุ้มทุนอยู่ราว 20,000-30,000 ใบ ต่ำกว่านั้น window ชนะ สูงกว่านั้นให้แยก COUNT
+    (ตอนนี้ของจริงมี ~1,700 ใบ) ส่วนหน้าคิวตรวจไม่ต้องใช้ทางไหนเลยถ้าไม่ได้ค้นหา
+    เพราะ review_counts() ให้ยอดของทุกกองมาอยู่แล้วในรอบที่ยิงไปแล้ว
+
+    ไม่ SELECT * เพราะจะลาก raw_ocr / ocr_confidence (jsonb ก้อนใหญ่) มาเปล่า ๆ
+    ทั้งที่หน้าตารางกับคิวตรวจไม่ได้ใช้ — วัดแล้วต่างกันหลายเท่าตัวบนสายจริง
+    """
     where, params = filters
-    total = conn.execute(
-        f"SELECT count(*) AS n FROM {DB_SCHEMA}.slips WHERE {where}", params
-    ).fetchone()["n"]
     order = SORTABLE.get(sort, "created_at")
+    counter = "" if total is not None else ", count(*) OVER () AS total_rows"
     rows = conn.execute(
         f"""SELECT id, name, tel, plate_raw, province, brand, car_type, location,
                    deposit_date, review_status, needs_review, review_reason,
                    car_status, returned_at, returned_by, uploaded_by, photographer,
-                   reviewed_by, ocr_model, created_at
+                   reviewed_by, ocr_model, created_at{counter}
             FROM {DB_SCHEMA}.slips WHERE {where}
             ORDER BY {order} {'DESC' if desc else 'ASC'} NULLS LAST
             LIMIT %(limit)s OFFSET %(offset)s""",
         {**params, "limit": per_page, "offset": (page - 1) * per_page},
     ).fetchall()
+    if total is None:
+        if rows:
+            total = rows[0]["total_rows"]
+            for r in rows:
+                del r["total_rows"]
+        elif page > 1:
+            # หน้าว่างเพราะเลยหน้าสุดท้ายไป ต้องถามจำนวนจริงเพื่อให้ปุ่มแบ่งหน้ายังถูก
+            total = conn.execute(
+                f"SELECT count(*) AS n FROM {DB_SCHEMA}.slips WHERE {where}", params
+            ).fetchone()["n"]
+        else:
+            total = 0
     return rows, total
 
 

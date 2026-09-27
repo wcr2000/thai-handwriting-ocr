@@ -21,7 +21,7 @@ from ..auth import COOKIE_NAME, SESSION_TTL, User, authenticate, make_token, rea
 from ..config import COOKIE_SECURE, OCR_MODEL, SECRET_KEY, USD_THB
 from ..db import (
     add_staff, build_filters, clean_person_name, connect, dashboard_stats, export_rows, get_image, get_slip,
-    known_people, list_slips, list_staff, mark_returned, query_slips, review_counts,
+    known_people, list_staff, mark_returned, next_in_queue, query_slips, review_counts,
     set_staff_active, update_slip,
 )
 from ..review import REASON_LABELS, evaluate
@@ -242,24 +242,51 @@ async def api_ocr(
 # กองที่ approver เปิดดูได้ — เฉพาะงานที่ยังค้างอยู่ ไม่ใช่คลังใบทั้งหมดที่ผ่านมา
 APPROVER_FILTERS = ("needs", "quick")
 
+# แต่ละ "กอง" คือ preset ของตัวกรองชุดเดียวกับหน้าตาราง ไม่ใช่ query คนละแบบ
+QUEUE_PILES = {
+    "needs": dict(review_status="pending", needs_review=True),
+    "quick": dict(review_status="pending", needs_review=False),
+    "approved": dict(review_status="approved"),
+    "rejected": dict(review_status="rejected"),
+    "all": {},
+}
+
+# ยอดของแต่ละกองตรงกับคอลัมน์ไหนใน review_counts() — ใช้แทนการนับใหม่ตอนไม่ได้ค้นหา
+PILE_TOTALS = {"needs": "needs_review", "quick": "quick_pass",
+               "approved": "approved", "rejected": "rejected", "all": "total"}
+
 
 @app.get("/review", response_class=HTMLResponse)
-def review_queue(request: Request, filter: str = "needs"):
+def review_queue(
+    request: Request, filter: str = "needs",
+    q: str = "", sort: str = "created_at", dir: str = "desc", page: int = 1,
+):
+    """คิวตรวจ — ใช้ตัวกรอง/ค้นหา/เรียง/แบ่งหน้าชุดเดียวกับหน้าตาราง
+
+    กองที่เลือกถูกบังคับทับคำค้นเสมอ เพื่อให้ approver ค้นได้แต่ไม่หลุดออกนอกกองของตัวเอง
+    """
     user = getattr(request.state, "user", None)
     if user and user.is_approver and filter not in APPROVER_FILTERS:
         filter = "needs"
-    criteria = {
-        "needs": dict(review_status="pending", needs_review=True),
-        "quick": dict(review_status="pending", needs_review=False),
-        "approved": dict(review_status="approved"),
-        "rejected": dict(review_status="rejected"),
-        "all": {},
-    }.get(filter, {})
+    pile = QUEUE_PILES.get(filter, {})
+    filters = build_filters(q=q, **pile)
+    per_page = 50
     with connect() as conn:
-        return render(
-            request, "review_list.html",
-            slips=list_slips(conn, **criteria), counts=review_counts(conn), active=filter,
-        )
+        # ถ้าไม่ได้ค้นหา ยอดรวมของกองมีอยู่ใน review_counts() ที่ยังไงก็ต้องยิงเพื่อทำแถบกองอยู่แล้ว
+        # จึงไม่ต้องให้ query_slips ไปนับซ้ำ — ที่ 33,000 ใบต่างกัน 0.2 ms กับ 96 ms
+        counts = review_counts(conn)
+        known_total = PILE_TOTALS.get(filter) if not (q and q.strip()) else None
+        slips, total = query_slips(conn, filters=filters, sort=sort,
+                                   desc=(dir != "asc"), page=max(1, page), per_page=per_page,
+                                   total=counts[known_total] if known_total else None)
+    qs = urlencode({k: v for k, v in
+                    {"filter": filter, "q": q, "sort": sort, "dir": dir}.items() if v})
+    return render(
+        request, "review_list.html", slips=slips, counts=counts, active=filter,
+        total=total, page=max(1, page), per_page=per_page,
+        pages=max(1, -(-total // per_page)), qs=qs,
+        f={"q": q, "sort": sort, "dir": dir},
+    )
 
 
 @app.get("/review/{slip_id}", response_class=HTMLResponse)
@@ -269,13 +296,11 @@ def review_one(request: Request, slip_id: str):
         if not slip:
             return HTMLResponse("ไม่พบใบนี้", status_code=404)
         # ใบถัดไปในคิว: เอาที่ต้องตรวจก่อน ถ้าหมดค่อยไล่ใบที่รอยืนยันเฉย ๆ
-        queue = [s for s in list_slips(conn, review_status="pending", limit=200)
-                 if str(s["id"]) != slip_id]
-        queue.sort(key=lambda s: (not s["needs_review"], s["created_at"]))
+        next_id, remaining = next_in_queue(conn, slip_id)
         return render(
             request, "review_detail.html",
             slip=slip, problems=(slip.get("raw_ocr") or {}).get("problems", {}),
-            next_id=str(queue[0]["id"]) if queue else None, remaining=len(queue),
+            next_id=next_id, remaining=remaining,
             people=known_people(conn),
         )
 

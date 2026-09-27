@@ -113,8 +113,19 @@ CREATE INDEX IF NOT EXISTS slips_name_trgm  ON ocr_dhammakaya.slips USING gin (n
 CREATE INDEX IF NOT EXISTS slips_plate_trgm ON ocr_dhammakaya.slips USING gin (plate_norm gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS slips_brand_trgm ON ocr_dhammakaya.slips USING gin (brand_norm gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS slips_tel_idx    ON ocr_dhammakaya.slips (tel_digits);
-CREATE INDEX IF NOT EXISTS slips_review_idx ON ocr_dhammakaya.slips (review_status, needs_review);
 CREATE INDEX IF NOT EXISTS slips_car_idx    ON ocr_dhammakaya.slips (car_status, deposit_date);
+
+-- คิวตรวจกรองด้วย (review_status, needs_review) แล้วเรียง created_at เสมอ
+-- ถ้า created_at ไม่อยู่ใน index Postgres ต้องอ่านทั้งกองออกมา sort ใหม่ทุกครั้งที่เปิดหน้า
+-- index ตัวนี้ครอบ slips_review_idx เดิมทั้งหมด (prefix เดียวกัน) จึงทิ้งตัวเก่าไป
+DROP INDEX IF EXISTS ocr_dhammakaya.slips_review_idx;
+CREATE INDEX IF NOT EXISTS slips_review_recent_idx
+    ON ocr_dhammakaya.slips (review_status, needs_review, created_at DESC);
+
+-- ช่องค้นหาใช้ ILIKE '%คำ%' ซึ่งมี wildcard นำหน้า btree ช่วยไม่ได้ ต้องเป็น trigram
+-- ที่จอดกับเบอร์โทรยังไม่มี index รองรับ ทำให้ทุกการค้นกวาดทั้งตาราง
+CREATE INDEX IF NOT EXISTS slips_location_trgm ON ocr_dhammakaya.slips USING gin (location gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS slips_tel_trgm      ON ocr_dhammakaya.slips USING gin (tel_digits gin_trgm_ops);
 
 CREATE INDEX IF NOT EXISTS slip_edits_slip_idx ON ocr_dhammakaya.slip_edits (slip_id, edited_at DESC);
 
