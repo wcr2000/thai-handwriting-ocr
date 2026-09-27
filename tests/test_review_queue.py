@@ -134,3 +134,28 @@ def test_pile_total_matches_the_tab_counter(login):
         found = re.search(r"พบ <strong>(\d+)</strong>", html)
         assert tab and found, f"อ่านเลขของกอง {pile} ไม่ได้"
         assert tab.group(1) == found.group(1), f"กอง {pile}: แถบบอก {tab.group(1)} แต่ยอดบอก {found.group(1)}"
+
+
+# ---------- แยกคนอัปโหลด / คนตรวจ ----------
+
+def test_person_filters_are_separate_columns():
+    """คนอัปกับคนตรวจต้องกรองแยกคอลัมน์ ไม่ใช่ตัวเดียวกัน"""
+    where, params = build_filters(uploaded_by="สมชาย", reviewed_by="สมหญิง")
+    assert "lower(btrim(uploaded_by)) = lower(btrim(%(uploaded_by)s))" in where
+    assert "lower(btrim(reviewed_by)) = lower(btrim(%(reviewed_by)s))" in where
+    assert params == {"uploaded_by": "สมชาย", "reviewed_by": "สมหญิง"}
+
+
+def test_person_filter_ignores_blank_and_sentinel():
+    """ชื่อว่าง/ค่า sentinel ต้องไม่กลายเป็นเงื่อนไข ไม่งั้นจะได้ผลลัพธ์ว่างเปล่าแบบไม่มีเหตุผล"""
+    for bad in ("", "   ", None, "__new__", "​"):
+        where, params = build_filters(uploaded_by=bad, reviewed_by=bad)
+        assert where == "TRUE"
+        assert params == {}
+
+
+def test_reviewed_by_is_sortable():
+    """ต้องเรียงตามคนตรวจได้ ไม่งั้นหัวตารางที่กดได้จะเงียบตกไปเป็น created_at"""
+    from ocrslip.db import SORTABLE
+
+    assert SORTABLE["reviewed_by"] == "reviewed_by"
