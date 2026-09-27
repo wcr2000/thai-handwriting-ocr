@@ -12,7 +12,7 @@ from ..db import add_image, image_seen, insert_slip
 from ..imageio import encode_jpeg
 from ..normalize import norm_phone, norm_plate
 from ..ocr import OcrResult, read_slip
-from ..preprocess import PreprocessResult, preprocess, upright
+from ..preprocess import PREPROCESS_VERSION, PreprocessResult, preprocess, upright
 from ..review import evaluate
 
 # bench ชี้ว่า crop อย่างเดียวแม่นกว่าการปรับสี (71% vs 68%) — การเพิ่ม contrast ทำให้เส้นปากกาบางเสียรูป
@@ -24,8 +24,9 @@ def build_raw_ocr(
 ) -> dict[str, Any]:
     """ร่องรอยของ OCR ที่เก็บไว้ตรวจย้อนหลัง — ใช้ร่วมกันระหว่างตอนอัปโหลดกับตอน reprocess
 
-    orientation กับ fills_frame ต้องอยู่ในนี้เสมอ เพราะ reprocess ใช้สองตัวนี้ตัดสินว่า
-    ใบไหน "ยังไม่เคยเช็ค" ถ้าไม่บันทึก ใบที่เพิ่งอัปโหลดจะถูกหยิบไปยิง model ซ้ำทุกครั้งที่รัน
+    orientation, fills_frame และ preprocess_version ต้องอยู่ในนี้เสมอ เพราะ reprocess
+    ใช้สามตัวนี้ตัดสินว่าใบไหนต้องทำใหม่ — ด้วย SQL ล้วน ๆ ไม่ต้องโหลดรูปมาดู
+    ถ้าไม่บันทึก ใบที่เพิ่งอัปโหลดจะถูกหยิบไปยิง model ซ้ำทุกครั้งที่รัน
     """
     return {
         "fields": res.fields,
@@ -33,6 +34,7 @@ def build_raw_ocr(
         "problems": problems,
         "orientation": res.orientation,
         "fills_frame": res.fills_frame,
+        "preprocess_version": PREPROCESS_VERSION,
         **extra,
     }
 

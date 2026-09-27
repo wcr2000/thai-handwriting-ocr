@@ -19,6 +19,13 @@ from PIL import Image
 
 from .imageio import load_image, to_bgr, to_pil
 
+# เลขเวอร์ชันของ "วิธีหาขอบกระดาษ" — ต้องบวกหนึ่งทุกครั้งที่แก้ตรรกะจนผล crop เปลี่ยน
+#
+# reprocess ใช้เลขนี้ตัดสินว่าใบไหนต้องทำใหม่ ด้วย SQL ล้วน ๆ ไม่ต้องโหลดรูปมาดู
+# ก่อนหน้านี้มันเทียบด้วยการ crop ใหม่ทุกใบแล้วดูว่าขนาดเปลี่ยนไหม ซึ่งต้องดึงรูป
+# ต้นฉบับทั้งฐานข้อมูลข้ามเน็ตมา (ระดับ GB) จน connection หลุดก่อนได้เริ่มทำงาน
+PREPROCESS_VERSION = 4
+
 
 @dataclass
 class PreprocessResult:
