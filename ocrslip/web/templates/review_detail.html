@@ -30,6 +30,9 @@
   .actbar { border-top:1px solid var(--line); padding:.7rem 1rem; display:flex; gap:.6rem;
             align-items:center; flex-wrap:wrap; background:#fbfcfd; border-radius:0 0 10px 10px; }
   .actbar button.big { font-size:1.05rem; padding:.75rem 1.4rem; font-weight:600; }
+  /* display:flex ข้างบนเป็น author style จึงชนะ [hidden]{display:none} ของเบราว์เซอร์
+     ต้องสั่งซ่อนเองตรง ๆ ไม่งั้นแถบปุ่มอนุมัติยังโผล่อยู่ทั้งที่ใส่ hidden ไว้แล้ว */
+  .actbar[hidden] { display:none; }
   .kbd { font:.75rem ui-monospace,monospace; background:#eef1f6; border:1px solid var(--line);
          border-radius:4px; padding:.05rem .3rem; }
   details.reject { margin-left:auto; }
@@ -46,6 +49,21 @@
                              .grid2 > .fld { grid-column: auto !important; } }
 </style>
 {% if error %}<div class="err">{{ error }}</div>{% endif %}
+
+{# ใบนี้มีคนตรวจไปแล้ว — ปิดปุ่มอนุมัติไว้ก่อน ไม่งั้นคนที่สองกดทับงานคนแรกได้ทันที
+   และช่อง "ผู้ตรวจ" จะโชว์ชื่อคนแรกค้างอยู่ ทำให้เข้าใจผิดว่าระบบสลับชื่อเอง #}
+{% if taken %}
+<div class="err" style="background:#fff3cd; border-color:#e6c300; color:#7a5c00">
+  <strong>ใบนี้ตรวจไปแล้ว</strong> — {{ slip.review_status == 'approved' and 'อนุมัติโดย' or 'ตีกลับโดย' }}
+  <strong>{{ slip.reviewed_by or 'ไม่ระบุชื่อ' }}</strong>{% if slip.reviewed_at %}
+  เมื่อ {{ slip.reviewed_at.strftime('%d/%m %H:%M') }}{% endif %}
+  <div style="margin-top:.5rem">
+    {% if next_id %}<a class="btn" href="/review/{{ next_id }}">ไปใบถัดไป{% if remaining %} (เหลือ {{ remaining }} ใบ){% endif %}</a>
+    {% else %}<a class="btn" href="/review">กลับไปคิวตรวจ</a>{% endif %}
+    <a href="/review/{{ slip.id }}?edit=1" style="margin-left:.6rem">แก้ไขใบนี้อยู่ดี</a>
+  </div>
+</div>
+{% endif %}
 
 <form method="post" action="/review/{{ slip.id }}/approve" class="rev">
   <div class="rev-img">
@@ -102,9 +120,14 @@
           class="{{ 'badge warn' if v < 0.85 else '' }}">{{ k }} {{ '%.2f'|format(v) }}</span>{{ ' · ' if not loop.last }}{% endfor %}</p>
     </div>
 
-    <div class="actbar">
+    {# ใบที่ตรวจไปแล้วยังแสดงข้อมูลกับรูปได้ (ไว้เทียบว่าเพื่อนกรอกอะไรไว้)
+       แต่ไม่มีแถบปุ่ม — ถ้าจะแก้จริงต้องเข้ามาทาง ?edit=1 ให้รู้ตัวก่อน
+       ส่วนการกด Enter ในช่องกรอกยังยิง POST ได้อยู่ ด่านจริงจึงอยู่ที่ require_status ฝั่ง server #}
+    <div class="actbar"{% if taken %} hidden{% endif %}>
       <input type="hidden" name="next_id" value="{{ next_id or '' }}">
-      <button type="submit" class="big">✓ อนุมัติ{% if next_id %} → ใบถัดไป{% endif %}</button>
+      {# force = เจ้าของใบตั้งใจกลับมาแก้เอง (เข้ามาทาง ?edit=1) จึงข้าม optimistic lock ได้ #}
+      {% if slip.review_status != 'pending' %}<input type="hidden" name="force" value="1">{% endif %}
+      <button type="submit" class="big">✓ {{ slip.review_status == 'pending' and 'อนุมัติ' or 'บันทึกทับ' }}{% if next_id %} → ใบถัดไป{% endif %}</button>
       <span class="muted">กด <span class="kbd">Enter</span> ก็ได้{% if remaining %} · เหลืออีก {{ remaining }} ใบ{% endif %}</span>
     </div>
   </div>

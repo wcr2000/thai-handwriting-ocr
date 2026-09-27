@@ -167,6 +167,22 @@ python -c "import secrets;print(secrets.token_urlsafe(32))"   # ได้ SECRET
 .venv/bin/python -m pytest tests -q
 ```
 
+เทสต์ส่วนใหญ่ไม่ต้องใช้ฐานข้อมูล ยกเว้น `tests/test_review_collision.py` ที่ตรวจเรื่อง
+สองคนตรวจใบเดียวกันพร้อมกัน — ของที่ทดสอบคือ rowcount ของ `UPDATE` ที่มีเงื่อนไข
+จึงต้องมี Postgres จริง ถ้าไม่ตั้งตัวแปรนี้ไว้ทั้งไฟล์จะถูก skip:
+
+```bash
+docker run -d --name ocrslip-test -e POSTGRES_PASSWORD=test \
+    -e POSTGRES_DB=ocrslip -p 55439:5432 postgres:15
+
+OCRSLIP_TEST_DATABASE_URL=postgresql://postgres:test@127.0.0.1:55439/ocrslip \
+    .venv/bin/python -m pytest tests -q
+```
+
+> ต้องชี้ไปฐานข้อมูลที่ทิ้งข้อมูลได้เท่านั้น เทสต์ `TRUNCATE` ตารางก่อนทุกครั้ง
+> (มันใช้ schema `ocr_test_collision` แยกต่างหาก และ assert ปลายทางก่อนเขียนทุกครั้ง
+> แต่อย่าเสี่ยงชี้ใส่ฐานข้อมูลจริง)
+
 ## Deploy บน Render
 
 ทั้ง `Dockerfile` และ `render.yaml` อยู่ใน repo แล้ว — Render จะ build image เองจาก Dockerfile

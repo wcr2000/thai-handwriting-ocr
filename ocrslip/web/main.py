@@ -329,7 +329,14 @@ def review_queue(
 
 
 @app.get("/review/{slip_id}", response_class=HTMLResponse)
-def review_one(request: Request, slip_id: str):
+def review_one(request: Request, slip_id: str, edit: int = 0):
+    """หน้าตรวจ 1 ใบ — edit=1 คือยืนยันว่าจะแก้ใบที่ตรวจไปแล้วจริง ๆ
+
+    คิวยื่นใบหัวแถวใบเดียวกันให้ทุกคน (next_in_queue) และปุ่ม "ใบถัดไป" พาไปตาม
+    id ที่คำนวณไว้ตอนเปิดหน้า คนที่ตรวจช้ากว่าจึงมาโผล่ใบที่เพื่อนเพิ่งตรวจเสร็จได้เสมอ
+    ถ้าปล่อยให้ฟอร์มขึ้นตามปกติ ช่อง "ผู้ตรวจ" จะถูก preselect เป็นชื่อคนที่ตรวจไปแล้ว
+    (เทมเพลตให้ค่าใน DB ชนะค่าที่จำไว้ในเครื่อง) แล้วถ้ากดอนุมัติต่อก็ทับงานเพื่อนทันที
+    """
     with connect() as conn:
         slip = get_slip(conn, slip_id)
         if not slip:
@@ -341,6 +348,7 @@ def review_one(request: Request, slip_id: str):
             slip=slip, problems=(slip.get("raw_ocr") or {}).get("problems", {}),
             next_id=next_id, remaining=remaining,
             people=known_people(conn),
+            taken=(slip["review_status"] != "pending" and not edit),
         )
 
 
@@ -366,6 +374,7 @@ async def approve(request: Request, slip_id: str):
     account = getattr(request.state, "user", None) and request.state.user.username
     # บังคับให้เลือกชื่อคนจริงแบบเดียวกับตอนอัปโหลด จะได้รู้ว่าใบนี้ใครอนุมัติ
     reviewer = _picked_reviewer(form)
+    force = (form.get("force") or "") == "1"
     # ตรวจซ้ำหลังคนแก้ แต่บล็อกเฉพาะ "ช่องบังคับที่ยังว่าง" เท่านั้น
     # ส่วนรูปแบบแปลก ๆ (ทะเบียนไม่มีหมวดอักษร, วันที่เขียนแค่ '26') เป็นแค่คำเตือน
     # เพราะคนตรวจเห็นรูปใบจริงแล้ว และของจริงก็มีใบแบบนั้นอยู่จริง
@@ -387,8 +396,22 @@ async def approve(request: Request, slip_id: str):
             )
         # ชื่อที่ยังไม่อยู่ในรายการ ให้เพิ่มเข้าไปเลย ไม่บล็อกคนตรวจตอนงานเข้าพร้อมกันเยอะ ๆ
         add_staff(conn, reviewer, created_by=account)
-        update_slip(conn, slip_id, fields, edited_by=reviewer,
-                    review_status="approved", review_reason=[])
+        # require_status กันสองคนที่เปิดใบเดียวกันค้างไว้ เขียนทับกันโดยไม่มีใครรู้
+        # ใบที่เจ้าของตั้งใจกลับมาแก้เองจะมาทาง ?edit=1 ซึ่งข้ามด่านนี้ได้
+        written = update_slip(conn, slip_id, fields, edited_by=reviewer,
+                              review_status="approved", review_reason=[],
+                              require_status=None if force else "pending")
+        if written is None:
+            conn.rollback()
+            slip = get_slip(conn, slip_id)
+            if not slip:
+                return HTMLResponse("ไม่พบใบนี้", status_code=404)
+            next_id, remaining = next_in_queue(conn, slip_id)
+            return render(
+                request, "review_detail.html",
+                slip=slip, problems={}, next_id=next_id, remaining=remaining,
+                people=known_people(conn), taken=True,
+            )
         conn.commit()
     nxt = (form.get("next_id") or "").strip()
     return RedirectResponse(f"/review/{nxt}" if nxt else "/review", status_code=303)
