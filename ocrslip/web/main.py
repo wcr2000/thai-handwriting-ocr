@@ -251,6 +251,10 @@ QUEUE_PILES = {
     "all": {},
 }
 
+# ยอดของแต่ละกองตรงกับคอลัมน์ไหนใน review_counts() — ใช้แทนการนับใหม่ตอนไม่ได้ค้นหา
+PILE_TOTALS = {"needs": "needs_review", "quick": "quick_pass",
+               "approved": "approved", "rejected": "rejected", "all": "total"}
+
 
 @app.get("/review", response_class=HTMLResponse)
 def review_queue(
@@ -264,12 +268,17 @@ def review_queue(
     user = getattr(request.state, "user", None)
     if user and user.is_approver and filter not in APPROVER_FILTERS:
         filter = "needs"
-    filters = build_filters(q=q, **QUEUE_PILES.get(filter, {}))
+    pile = QUEUE_PILES.get(filter, {})
+    filters = build_filters(q=q, **pile)
     per_page = 50
     with connect() as conn:
-        slips, total = query_slips(conn, filters=filters, sort=sort,
-                                   desc=(dir != "asc"), page=max(1, page), per_page=per_page)
+        # ถ้าไม่ได้ค้นหา ยอดรวมของกองมีอยู่ใน review_counts() ที่ยังไงก็ต้องยิงเพื่อทำแถบกองอยู่แล้ว
+        # จึงไม่ต้องให้ query_slips ไปนับซ้ำ — ที่ 33,000 ใบต่างกัน 0.2 ms กับ 96 ms
         counts = review_counts(conn)
+        known_total = PILE_TOTALS.get(filter) if not (q and q.strip()) else None
+        slips, total = query_slips(conn, filters=filters, sort=sort,
+                                   desc=(dir != "asc"), page=max(1, page), per_page=per_page,
+                                   total=counts[known_total] if known_total else None)
     qs = urlencode({k: v for k, v in
                     {"filter": filter, "q": q, "sort": sort, "dir": dir}.items() if v})
     return render(

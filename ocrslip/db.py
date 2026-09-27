@@ -314,13 +314,17 @@ def next_in_queue(conn: psycopg.Connection, slip_id: str) -> tuple[str | None, i
 
     เรียงให้ใบที่ต้องตรวจมาก่อน แล้วไล่จากใบเก่าสุด (เคลียร์งานตกค้างให้หมดก่อน)
     """
-    nxt = conn.execute(
-        f"SELECT id, count(*) OVER () AS remaining FROM {DB_SCHEMA}.slips"
-        " WHERE review_status = 'pending' AND id <> %s"
-        " ORDER BY needs_review DESC, created_at ASC LIMIT 1",
-        (slip_id,),
+    # สอง subquery ใน statement เดียว = คุยรอบเดียว แต่ไม่ต้องใช้ count(*) OVER ()
+    # ซึ่งบังคับให้อ่านแถวที่ sort แล้วทั้งกอง (วัดที่ 66,000 ใบ: 96 ms -> 25 ms)
+    row = conn.execute(
+        f"""SELECT (SELECT id FROM {DB_SCHEMA}.slips
+                     WHERE review_status = 'pending' AND id <> %(id)s
+                     ORDER BY needs_review DESC, created_at ASC LIMIT 1) AS next_id,
+                   (SELECT count(*) FROM {DB_SCHEMA}.slips
+                     WHERE review_status = 'pending' AND id <> %(id)s) AS remaining""",
+        {"id": slip_id},
     ).fetchone()
-    return (str(nxt["id"]), nxt["remaining"]) if nxt else (None, 0)
+    return (str(row["next_id"]) if row["next_id"] else None), row["remaining"]
 
 
 def known_people(conn: psycopg.Connection) -> list[str]:
@@ -467,42 +471,55 @@ SORTABLE = {
 def query_slips(
     conn: psycopg.Connection, *, filters: tuple[str, dict],
     sort: str = "created_at", desc: bool = True, page: int = 1, per_page: int = 50,
+    total: int | None = None,
 ) -> tuple[list[dict], int]:
     """(แถวของหน้านี้, จำนวนทั้งหมดที่เข้าเงื่อนไข) ในการคุยกับฐานข้อมูลรอบเดียว
+
+    ส่ง total มาได้ถ้าผู้เรียกรู้ยอดอยู่แล้ว (หน้าคิวตรวจรู้จาก review_counts)
+    จะได้ไม่ต้องนับใหม่เลย
 
     ฐานข้อมูลอยู่คนละเครื่องกับเว็บ RTT วัดได้ 60-550 ms ขณะที่งานฝั่ง Postgres
     ใช้ไม่ถึง 1 ms ฉะนั้นตัวที่กินเวลาคือ "จำนวนรอบที่คุย" ไม่ใช่ความหนักของ query
     count(*) OVER () จึงคุ้มกว่าการยิง COUNT(*) แยกอีกรอบ
-    (แลกกับการที่ window ต้องอ่านแถวที่แมตช์ทั้งหมด วัดที่ ~1,000 ใบได้ 1.3 ms
-    ยังถูกกว่า RTT หลายสิบเท่า — ถ้าวันหนึ่งใบเป็นแสนแล้วช้า ค่อยกลับมาแยก COUNT)
+    แลกกับการที่ window ต้องอ่านแถวที่แมตช์ทั้งหมด วัดบน dataset สังเคราะห์แล้ว:
+
+        จำนวนใบ    count(*) OVER ()    COUNT(*) แยกรอบ (+1 RTT ~67 ms)
+        1,700              1.3 ms                      ~68 ms
+        33,000            96.5 ms                      ~92 ms
+        200,000          408.0 ms                      ~75 ms
+
+    จุดคุ้มทุนอยู่ราว 20,000-30,000 ใบ ต่ำกว่านั้น window ชนะ สูงกว่านั้นให้แยก COUNT
+    (ตอนนี้ของจริงมี ~1,700 ใบ) ส่วนหน้าคิวตรวจไม่ต้องใช้ทางไหนเลยถ้าไม่ได้ค้นหา
+    เพราะ review_counts() ให้ยอดของทุกกองมาอยู่แล้วในรอบที่ยิงไปแล้ว
 
     ไม่ SELECT * เพราะจะลาก raw_ocr / ocr_confidence (jsonb ก้อนใหญ่) มาเปล่า ๆ
     ทั้งที่หน้าตารางกับคิวตรวจไม่ได้ใช้ — วัดแล้วต่างกันหลายเท่าตัวบนสายจริง
     """
     where, params = filters
     order = SORTABLE.get(sort, "created_at")
+    counter = "" if total is not None else ", count(*) OVER () AS total_rows"
     rows = conn.execute(
         f"""SELECT id, name, tel, plate_raw, province, brand, car_type, location,
                    deposit_date, review_status, needs_review, review_reason,
                    car_status, returned_at, returned_by, uploaded_by, photographer,
-                   reviewed_by, ocr_model, created_at,
-                   count(*) OVER () AS total_rows
+                   reviewed_by, ocr_model, created_at{counter}
             FROM {DB_SCHEMA}.slips WHERE {where}
             ORDER BY {order} {'DESC' if desc else 'ASC'} NULLS LAST
             LIMIT %(limit)s OFFSET %(offset)s""",
         {**params, "limit": per_page, "offset": (page - 1) * per_page},
     ).fetchall()
-    if rows:
-        total = rows[0]["total_rows"]
-        for r in rows:
-            del r["total_rows"]
-    elif page > 1:
-        # หน้าว่างเพราะเลยหน้าสุดท้ายไป ต้องถามจำนวนจริงเพื่อให้ปุ่มแบ่งหน้ายังถูก
-        total = conn.execute(
-            f"SELECT count(*) AS n FROM {DB_SCHEMA}.slips WHERE {where}", params
-        ).fetchone()["n"]
-    else:
-        total = 0
+    if total is None:
+        if rows:
+            total = rows[0]["total_rows"]
+            for r in rows:
+                del r["total_rows"]
+        elif page > 1:
+            # หน้าว่างเพราะเลยหน้าสุดท้ายไป ต้องถามจำนวนจริงเพื่อให้ปุ่มแบ่งหน้ายังถูก
+            total = conn.execute(
+                f"SELECT count(*) AS n FROM {DB_SCHEMA}.slips WHERE {where}", params
+            ).fetchone()["n"]
+        else:
+            total = 0
     return rows, total
 
 

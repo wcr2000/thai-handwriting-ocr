@@ -120,3 +120,17 @@ def test_review_detail_still_links_to_next_slip(login):
     r = c.get(f"/review/{m.group(1)}")
     assert r.status_code == 200
     assert 'name="next_id"' in r.text
+
+
+def test_pile_total_matches_the_tab_counter(login):
+    """ยอด 'พบ N ใบ' ต้องตรงกับเลขในแถบกอง — หน้านี้ใช้ยอดจาก review_counts แทนการนับใหม่"""
+    import re
+
+    c = login("admin")
+    for pile, label in (("needs", "ต้องตรวจ"), ("quick", "ผ่านเร็ว"),
+                        ("approved", "อนุมัติแล้ว"), ("all", "ทั้งหมด")):
+        html = c.get(f"/review?filter={pile}").text
+        tab = re.search(rf"{label} \((\d+)\)", html)
+        found = re.search(r"พบ <strong>(\d+)</strong>", html)
+        assert tab and found, f"อ่านเลขของกอง {pile} ไม่ได้"
+        assert tab.group(1) == found.group(1), f"กอง {pile}: แถบบอก {tab.group(1)} แต่ยอดบอก {found.group(1)}"
