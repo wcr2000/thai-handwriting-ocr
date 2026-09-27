@@ -46,14 +46,14 @@ def _same_size(a: tuple[int, int], b: tuple[int, int]) -> bool:
 
 
 def find_candidates(conn: psycopg.Connection) -> list[Candidate]:
-    """ใบที่ควรทำใหม่ — crop ใหม่ได้ภาพต่างจากเดิม หรือยังไม่เคยเช็คว่าใบกลับหัวหรือไม่
+    """ใบที่ควรทำใหม่ — crop ใหม่ได้ภาพต่างจากเดิม หรือยังไม่เคยผ่านการเช็คที่เพิ่มมาทีหลัง
 
-    การกลับหัว 180 องศาดูจากขนาดภาพไม่ออก ต้องอ่านตัวหนังสือถึงจะรู้ ใบที่เข้าระบบ
-    ก่อนมีการเช็คนี้จึงต้องยิง model ซ้ำ แม้ crop จะออกมาเท่าเดิมเป๊ะก็ตาม
+    ทั้ง "ใบกลับหัวไหม" และ "crop ครอบตัวใบครบไหม" ดูจากขนาดภาพไม่ออก ต้องให้ model
+    ดูถึงจะรู้ ใบที่เข้าระบบก่อนมีการเช็คพวกนี้จึงต้องยิงซ้ำ แม้ crop จะออกมาเท่าเดิมเป๊ะ
     """
     rows = conn.execute(
         f"""SELECT s.id::text AS id, s.review_status,
-                   s.raw_ocr ? 'orientation' AS orientation_checked,
+                   (s.raw_ocr ?& array['orientation', 'fills_frame']) AS all_checked,
                    (SELECT count(*) FROM {DB_SCHEMA}.slip_edits e WHERE e.slip_id = s.id) AS edits,
                    i.width, i.height
             FROM {DB_SCHEMA}.slips s
@@ -70,8 +70,8 @@ def find_candidates(conn: psycopg.Connection) -> list[Candidate]:
         old, new = (r["width"], r["height"]), pre.cropped.size
 
         why = "" if _same_size(old, new) else "crop เปลี่ยน"
-        if not why and not r["orientation_checked"]:
-            why = "ยังไม่เคยเช็คว่ากลับหัว"
+        if not why and not r["all_checked"]:
+            why = "ยังไม่เคยเช็คกลับหัว/crop ครอบครบ"
         if not why:
             continue
 
@@ -104,7 +104,8 @@ def reprocess_one(conn: psycopg.Connection, cand: Candidate) -> dict[str, Any]:
         conn.execute(
             f"""UPDATE {DB_SCHEMA}.slips
                 SET raw_ocr = raw_ocr || %s::jsonb WHERE id = %s""",
-            (json.dumps({"orientation": res.orientation}), cand.slip_id),
+            (json.dumps({"orientation": res.orientation, "fills_frame": res.fills_frame}),
+             cand.slip_id),
         )
         return {"id": cand.slip_id, "ocr": False, "flipped": flipped, "full_frame": full_frame,
                 "note": cand.lock_reason, "cost": float((res.usage or {}).get("cost") or 0)}
@@ -149,7 +150,7 @@ def main() -> None:
         locked = [c for c in cands if c.locked]
         recrop = [c for c in cands if c.why == "crop เปลี่ยน"]
         print(f"ใบที่ต้องทำใหม่: {len(cands)} ใบ "
-              f"(crop เปลี่ยน {len(recrop)} ใบ, เช็คกลับหัวอย่างเดียว {len(cands) - len(recrop)} ใบ) "
+              f"(crop เปลี่ยน {len(recrop)} ใบ, เช็คเพิ่มอย่างเดียว {len(cands) - len(recrop)} ใบ) "
               f"— เขียนทับข้อมูลได้ {len(cands) - len(locked)} ใบ, "
               f"อีก {len(locked)} ใบแก้แค่รูปเพราะมีคนยืนยัน/แก้แล้ว")
         for c in cands:
