@@ -276,6 +276,7 @@ def review_one(request: Request, slip_id: str):
             request, "review_detail.html",
             slip=slip, problems=(slip.get("raw_ocr") or {}).get("problems", {}),
             next_id=str(queue[0]["id"]) if queue else None, remaining=len(queue),
+            people=known_people(conn),
         )
 
 
@@ -287,22 +288,34 @@ def _form_fields(form) -> dict[str, Any]:
 async def approve(request: Request, slip_id: str):
     form = await request.form()
     fields = _form_fields(form)
-    reviewer = ((form.get("reviewed_by") or "").strip()
-                or getattr(request.state, "user", None) and request.state.user.username)
+    account = getattr(request.state, "user", None) and request.state.user.username
+    # บัญชี staff/approve ใช้กันหลายคน ถ้าบันทึกชื่อบัญชีไว้จะตามไม่ได้ว่าใครเป็นคนอนุมัติ
+    # จึงบังคับให้เลือกชื่อคนจริงแบบเดียวกับตอนอัปโหลด ("__new__" = ขอพิมพ์ชื่อใหม่)
+    reviewer = clean_person_name(
+        form.get("reviewed_by_new") if (form.get("reviewed_by") or "").strip() == "__new__"
+        else form.get("reviewed_by")
+    ) or None
     # ตรวจซ้ำหลังคนแก้ แต่บล็อกเฉพาะ "ช่องบังคับที่ยังว่าง" เท่านั้น
     # ส่วนรูปแบบแปลก ๆ (ทะเบียนไม่มีหมวดอักษร, วันที่เขียนแค่ '26') เป็นแค่คำเตือน
     # เพราะคนตรวจเห็นรูปใบจริงแล้ว และของจริงก็มีใบแบบนั้นอยู่จริง
     reasons, problems = evaluate(fields, {})
     blocking = {f: msg for f, msg in problems.items() if not fields.get(f)}
     with connect() as conn:
-        if blocking:
+        # ต้องเช็กฝั่ง server ด้วย เพราะ required ใน HTML ข้ามได้ถ้ายิง API ตรง ๆ
+        if blocking or not reviewer:
             slip = get_slip(conn, slip_id)
+            if not slip:  # ใบถูกลบ/ตีกลับไปแล้วระหว่างคนตรวจเปิดค้างไว้
+                return HTMLResponse("ไม่พบใบนี้", status_code=404)
             return render(
                 request, "review_detail.html",
                 slip={**slip, **{k: v for k, v in fields.items() if v}},
-                problems=blocking, next_id=None, remaining=0,
-                error="ยังมีช่องบังคับที่ว่างอยู่ (ชื่อ / เบอร์โทร / ทะเบียน) กรอกให้ครบก่อนอนุมัติ",
+                problems=blocking, next_id=None, remaining=0, people=known_people(conn),
+                error=("ยังมีช่องบังคับที่ว่างอยู่ (ชื่อ / เบอร์โทร / ทะเบียน) กรอกให้ครบก่อนอนุมัติ"
+                       if blocking else
+                       "ต้องระบุชื่อผู้ตรวจก่อน จะได้รู้ว่าใบนี้ใครเป็นคนอนุมัติ"),
             )
+        # ชื่อที่ยังไม่อยู่ในรายการ ให้เพิ่มเข้าไปเลย ไม่บล็อกคนตรวจตอนงานเข้าพร้อมกันเยอะ ๆ
+        add_staff(conn, reviewer, created_by=account)
         update_slip(conn, slip_id, fields, edited_by=reviewer,
                     review_status="approved", review_reason=[])
         conn.commit()

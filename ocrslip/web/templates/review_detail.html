@@ -83,7 +83,18 @@
           </select>
         </div>
         {{ f('location', 'ที่จอดรถ', slip.location, problems, 2) }}
-        {{ f('reviewed_by', 'ผู้ตรวจ', user.username if user else '', {}, 2) }}
+        <div class="fld" style="grid-column:span 2">
+          <label for="reviewed_by">ผู้ตรวจ <span class="muted">(ชื่อคนจริง ไม่ใช่ชื่อบัญชี)</span></label>
+          {# ใช้ <select> ไม่ใช่ <datalist> เพราะ Safari บน iOS ไม่รองรับ datalist #}
+          <select id="reviewed_by" name="reviewed_by" required>
+            <option value="">— เลือกชื่อ —</option>
+            {% for person in people %}<option value="{{ person }}"
+              {{ 'selected' if slip.reviewed_by == person }}>{{ person }}</option>{% endfor %}
+            <option value="__new__">+ ชื่อใหม่ (พิมพ์เอง)</option>
+          </select>
+          <input type="text" id="reviewed_by_new" name="reviewed_by_new" hidden
+                 placeholder="พิมพ์ชื่อคุณ" autocomplete="off" style="margin-top:.4rem">
+        </div>
       </div>
 
       <p class="muted" style="margin:.6rem 0 0">ความมั่นใจของ AI:
@@ -110,4 +121,33 @@
   </div>
 </form>
 {% endif %}
+
+<script>
+  (function () {
+    var sel = document.getElementById('reviewed_by'), box = document.getElementById('reviewed_by_new');
+    if (!sel || !box) return;
+    function sync() {
+      var isNew = sel.value === '__new__';
+      box.hidden = !isNew;
+      box.required = isNew;
+    }
+    sel.addEventListener('change', sync);
+
+    // คนตรวจนั่งไล่ทีละใบติดกันเป็นสิบ ๆ ใบ ถ้าต้องเลือกชื่อตัวเองใหม่ทุกใบจะเสียเวลามาก
+    // จำไว้ในเครื่อง (เครื่องหนึ่งมักเป็นของคนเดิม) แต่ถ้าใบนี้เคยมีคนตรวจแล้วให้ค่าเดิมชนะ
+    try {
+      var saved = localStorage.getItem('reviewed_by');
+      if (!sel.value && saved && saved !== '__new__' &&
+          [].some.call(sel.options, function (o) { return o.value === saved; })) {
+        sel.value = saved;
+      }
+    } catch (e) {}
+    sync();
+
+    sel.form.addEventListener('submit', function () {
+      var name = sel.value === '__new__' ? box.value.trim() : sel.value;
+      try { localStorage.setItem('reviewed_by', name); } catch (e) {}
+    });
+  })();
+</script>
 {% endblock %}

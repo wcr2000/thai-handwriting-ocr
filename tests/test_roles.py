@@ -84,3 +84,48 @@ def test_staff_still_sees_search_but_not_admin_pages(login):
     html = login("staff").get("/").text
     assert 'href="/search"' in html
     assert 'href="/table"' not in html
+
+
+def test_approve_without_reviewer_name_is_blocked(login):
+    """บัญชีใช้ร่วมกันหลายคน ถ้าไม่บังคับเลือกชื่อจริงจะไม่รู้ว่าใครอนุมัติใบไหน
+
+    เทสนี้ยืนยันว่าถูก "บล็อก" จึงไม่เขียนอะไรลง DB — ใบยังค้างอยู่ในคิวเหมือนเดิม
+    """
+    from ocrslip.db import connect, get_slip, list_slips
+
+    with connect() as conn:
+        pending = list_slips(conn, review_status="pending", limit=1)
+    if not pending:
+        pytest.skip("ยังไม่มีใบค้างคิวใน DB")
+    slip_id = str(pending[0]["id"])
+
+    r = login("approve").post(
+        f"/review/{slip_id}/approve",
+        data={"name": "ทดสอบ ระบบ", "tel": "0812345678", "noplate": "กก1234", "reviewed_by": ""},
+        follow_redirects=False,
+    )
+    assert r.status_code == 200, "ต้องกลับมาหน้าเดิมพร้อม error ไม่ใช่ redirect ว่าอนุมัติแล้ว"
+    assert "ต้องระบุชื่อผู้ตรวจ" in r.text
+    with connect() as conn:
+        assert get_slip(conn, slip_id)["review_status"] == "pending"
+
+
+def test_reviewer_sentinel_never_becomes_a_person_name(login):
+    """เลือก "+ ชื่อใหม่" แล้วไม่พิมพ์อะไร ต้องไม่ถูกบันทึกเป็นคนชื่อ __new__"""
+    from ocrslip.db import connect, get_slip, list_slips
+
+    with connect() as conn:
+        pending = list_slips(conn, review_status="pending", limit=1)
+    if not pending:
+        pytest.skip("ยังไม่มีใบค้างคิวใน DB")
+    slip_id = str(pending[0]["id"])
+
+    r = login("approve").post(
+        f"/review/{slip_id}/approve",
+        data={"name": "ทดสอบ ระบบ", "tel": "0812345678", "noplate": "กก1234",
+              "reviewed_by": "__new__", "reviewed_by_new": "   "},
+        follow_redirects=False,
+    )
+    assert r.status_code == 200 and "ต้องระบุชื่อผู้ตรวจ" in r.text
+    with connect() as conn:
+        assert get_slip(conn, slip_id)["review_status"] == "pending"
