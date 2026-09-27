@@ -4,7 +4,9 @@ services:
   - type: web
     name: ocr-dhammakaya
     runtime: docker
-    plan: starter
+    # standard = 1 CPU / 2 GB ตรงกับที่ใช้จริง — ห้ามลดกลับเป็น starter (0.5 CPU / 512 MB)
+    # เพราะ upload 6 ไฟล์พร้อมกันใช้แรมพีค ~576 MB จะโดน OOM kill
+    plan: standard
     region: singapore
     dockerfilePath: ./Dockerfile
     dockerContext: .
