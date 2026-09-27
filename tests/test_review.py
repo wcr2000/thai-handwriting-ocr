@@ -39,3 +39,29 @@ def test_plate_without_letters_is_only_a_warning():
     """ของจริงมีใบที่เขียนแต่ตัวเลข — ต้องเตือน แต่ไม่ถือว่าช่องนั้นว่าง"""
     problems = field_problems({**GOOD, "noplate": "1234"})
     assert "noplate" in problems
+
+
+def test_conflicts_flags_only_when_every_view_agrees_and_contradicts_stored():
+    """หยิบใบมาให้คนดูซ้ำเฉพาะตอนที่ภาพคนละมุมอ่านได้ตรงกันและขัดกับที่เก็บไว้
+
+    ถ้าสองมุมอ่านได้ไม่ตรงกัน แปลว่าลายมือกำกวม ไม่ใช่หลักฐานว่าค่าที่คนยืนยันผิด
+    — กรณีนั้นห้ามไปรบกวนคนตรวจซ้ำ
+    """
+    from ocrslip.recheck import conflicts
+
+    stored = {"name": "สมชาย ใจดี", "tel": "0812345678", "noplate": "กก1234"}
+
+    # ทั้งสองมุมอ่านได้ทะเบียนเดียวกัน และคนละคันกับที่เก็บไว้ -> ควรดึงกลับ
+    same = {"name": "สมชาย ใจดี", "tel": "0812345678", "noplate": "5ขค9999"}
+    assert conflicts(stored, [same, dict(same)]) == ["noplate"]
+
+    # สองมุมอ่านได้ไม่ตรงกัน -> ลายมือกำกวม ไม่ใช่หลักฐานว่าค่าที่เก็บไว้ผิด
+    a = {**stored, "noplate": "5ขค9999"}
+    b = {**stored, "noplate": "2งจ1111"}
+    assert conflicts(stored, [a, b]) == []
+
+    # อ่านได้ตรงกับที่เก็บไว้อยู่แล้ว -> ไม่มีอะไรต้องทำ
+    assert conflicts(stored, [dict(stored), dict(stored)]) == []
+
+    # ช่องที่ยังว่างในระบบ ไม่ถือว่าขัดแย้ง
+    assert conflicts({**stored, "noplate": None}, [same, dict(same)]) == []
