@@ -35,7 +35,7 @@ class Candidate:
     slip_id: str
     old_size: tuple[int, int]
     new_size: tuple[int, int]
-    quad_found: bool
+    quad_found: bool | None   # None = ยังไม่ได้ crop ดู เพราะรู้อยู่แล้วว่าต้องทำใหม่
     locked: bool          # คนยืนยัน/แก้ข้อมูลใบนี้แล้ว — ห้ามเขียนทับข้อมูล
     lock_reason: str
     why: str              # เหตุที่ต้องทำใหม่: crop เปลี่ยน / ยังไม่เคยเช็คว่ากลับหัว
@@ -63,23 +63,27 @@ def find_candidates(conn: psycopg.Connection) -> list[Candidate]:
 
     out: list[Candidate] = []
     for r in rows:
-        original = get_image(conn, r["id"], "original")
-        if original is None:
-            continue
-        pre = preprocess(original)
-        old, new = (r["width"], r["height"]), pre.cropped.size
+        old = (r["width"], r["height"])
 
-        why = "" if _same_size(old, new) else "crop เปลี่ยน"
-        if not why and not r["all_checked"]:
-            why = "ยังไม่เคยเช็คกลับหัว/crop ครอบครบ"
-        if not why:
-            continue
+        # ใบที่ยังไม่เคยผ่านการเช็คใหม่ เป็น candidate แน่นอนอยู่แล้ว ไม่ต้องโหลดรูปมาดู
+        # — ตอนที่ยังโหลดทุกใบ การสแกนดึงรูปเป็น GB ข้ามเน็ตจน connection หลุดก่อนได้เริ่มทำงาน
+        if not r["all_checked"]:
+            why, new, quad_found = "ยังไม่เคยเช็คกลับหัว/crop ครอบครบ", old, None
+        else:
+            original = get_image(conn, r["id"], "original")
+            if original is None:
+                continue
+            pre = preprocess(original)
+            new, quad_found = pre.cropped.size, pre.quad_found
+            if _same_size(old, new):
+                continue
+            why = "crop เปลี่ยน"
 
         locked = r["review_status"] != "pending" or r["edits"] > 0
         reason = "คนยืนยันแล้ว" if r["review_status"] != "pending" else (
             "คนแก้ข้อมูลแล้ว" if r["edits"] else ""
         )
-        out.append(Candidate(r["id"], old, new, pre.quad_found, locked, reason, why))
+        out.append(Candidate(r["id"], old, new, quad_found, locked, reason, why))
     return out
 
 
@@ -142,7 +146,8 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=0, help="จำกัดจำนวนใบที่แก้ (0 = ไม่จำกัด)")
     args = ap.parse_args()
 
-    with connect() as conn:
+    conn = connect()
+    try:
         cands = find_candidates(conn)
         if args.limit:
             cands = cands[: args.limit]
@@ -155,8 +160,9 @@ def main() -> None:
               f"อีก {len(locked)} ใบแก้แค่รูปเพราะมีคนยืนยัน/แก้แล้ว")
         for c in cands:
             note = f"  [{c.lock_reason}]" if c.locked else ""
-            print(f"  {c.slip_id[:8]} {c.old_size[0]}x{c.old_size[1]} -> "
-                  f"{c.new_size[0]}x{c.new_size[1]} quad={c.quad_found}  {c.why}{note}")
+            size = (f"{c.old_size[0]}x{c.old_size[1]} -> {c.new_size[0]}x{c.new_size[1]}"
+                    if c.why == "crop เปลี่ยน" else f"{c.old_size[0]}x{c.old_size[1]}")
+            print(f"  {c.slip_id[:8]} {size}  {c.why}{note}")
 
         if not args.apply:
             print("\n(ดูอย่างเดียว — ใส่ --apply เพื่อลงมือจริง)")
@@ -164,8 +170,15 @@ def main() -> None:
 
         cost = 0.0
         for i, c in enumerate(cands, 1):
-            r = reprocess_one(conn, c)
-            conn.commit()
+            try:
+                r = reprocess_one(conn, c)
+                conn.commit()
+            except psycopg.OperationalError as exc:
+                # Postgres ฝั่ง Render ตัด connection เป็นระยะเมื่อรันยาว ๆ
+                # ต่อใหม่แล้วไปต่อใบถัดไป ใบที่ค้างจะถูกหยิบมาทำในรอบหน้าเอง
+                print(f"[{i}/{len(cands)}] {c.slip_id[:8]} connection หลุด ({exc}) — ต่อใหม่")
+                conn = connect()
+                continue
             cost += r.get("cost", 0.0)
             flip = " [หมุนกลับหัว 180]" if r.get("flipped") else ""
             flip += " [crop พัง ใช้ภาพเต็มแทน]" if r.get("full_frame") else ""
@@ -173,6 +186,8 @@ def main() -> None:
                   + ("OCR ซ้ำแล้ว " + json.dumps(r["fields"], ensure_ascii=False)
                      if r["ocr"] else "อัปเดตรูปอย่างเดียว — " + r["note"]))
         print(f"\nเสร็จแล้ว ค่า OCR รวม ${cost:.4f}")
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":
