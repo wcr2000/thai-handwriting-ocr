@@ -39,6 +39,11 @@ PUBLIC_PATHS = ("/login", "/static", "/health", "/favicon.ico")
 # หน้าที่เฉพาะ admin เท่านั้น — จุดที่ย้อนกลับไม่ได้ หรือเป็นข้อมูลส่วนตัวทั้งก้อน
 ADMIN_ONLY = ("/table", "/dashboard", "/export.xlsx", "/staff")
 ADMIN_ONLY_SUFFIX = ("/return", "/reject")
+# role "approver" (คนทำ label) ใช้ allowlist ไม่ใช่ blacklist — route ใหม่ที่ลืมคิดถึงสิทธิ์
+# จะถูกปิดไว้ก่อนเสมอ ไม่ใช่เปิดให้โดยบังเอิญ เขาเห็นแค่ "อัปโหลด" กับ "คิวตรวจ" เท่านั้น
+# (ค้นหา / ใบรายตัว / ตารางข้อมูล / สรุป / รายชื่อทีม ปิดหมด)
+APPROVER_PATHS = ("/", "/api/ocr", "/logout", "/review")
+APPROVER_PREFIXES = ("/review/", "/image/")
 class NoCacheStatic(StaticFiles):
     """บังคับให้เบราว์เซอร์เช็กกับ server ก่อนใช้ไฟล์เก่าเสมอ
 
@@ -80,9 +85,10 @@ async def auth_gate(request: Request, call_next):
         return RedirectResponse(f"/login?next={quote(str(request.url.path))}", status_code=303)
 
     if not user.is_admin and (path.startswith(ADMIN_ONLY) or path.endswith(ADMIN_ONLY_SUFFIX)):
-        return HTMLResponse(
-            "<h3 style='font-family:sans-serif;padding:2rem'>หน้านี้สำหรับผู้ดูแลระบบเท่านั้น"
-            " · <a href='/'>กลับหน้าแรก</a></h3>", status_code=403)
+        return _forbidden("หน้านี้สำหรับผู้ดูแลระบบเท่านั้น")
+
+    if user.is_approver and not (path in APPROVER_PATHS or path.startswith(APPROVER_PREFIXES)):
+        return _forbidden("บัญชีนี้ใช้ได้เฉพาะหน้าอัปโหลดกับคิวตรวจสอบ")
 
     request.state.user = user
     return await call_next(request)
@@ -114,6 +120,12 @@ async def no_stale_html(request: Request, call_next):
     ):
         response.headers["Cache-Control"] = "no-store, must-revalidate"
     return response
+
+
+def _forbidden(message: str) -> HTMLResponse:
+    return HTMLResponse(
+        f"<h3 style='font-family:sans-serif;padding:2rem'>{message}"
+        " · <a href='/'>กลับหน้าแรก</a></h3>", status_code=403)
 
 
 def render(request: Request, name: str, **ctx) -> HTMLResponse:
@@ -227,8 +239,15 @@ async def api_ocr(
                   uploader=uploader, shooter=shooter)
 
 
+# กองที่ approver เปิดดูได้ — เฉพาะงานที่ยังค้างอยู่ ไม่ใช่คลังใบทั้งหมดที่ผ่านมา
+APPROVER_FILTERS = ("needs", "quick")
+
+
 @app.get("/review", response_class=HTMLResponse)
 def review_queue(request: Request, filter: str = "needs"):
+    user = getattr(request.state, "user", None)
+    if user and user.is_approver and filter not in APPROVER_FILTERS:
+        filter = "needs"
     criteria = {
         "needs": dict(review_status="pending", needs_review=True),
         "quick": dict(review_status="pending", needs_review=False),

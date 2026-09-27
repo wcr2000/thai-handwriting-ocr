@@ -1,4 +1,4 @@
-"""ระบบล็อกอินแบบง่าย: บัญชีคงที่ 2 บัญชีจาก .env + cookie ที่เซ็นด้วย HMAC
+"""ระบบล็อกอินแบบง่าย: บัญชีคงที่ 3 บัญชี (admin / staff / approver) จาก .env + cookie ที่เซ็นด้วย HMAC
 
 ตั้งใจให้ไม่มี dependency เพิ่มและไม่มีตาราง user ในฐานข้อมูล เพราะงานนี้มีผู้ใช้ไม่กี่คน
 แต่ยังต้องทนต่อการเดารหัสผ่าน:
@@ -74,17 +74,22 @@ def _dummy_hash() -> str:
 @dataclass(frozen=True)
 class User:
     username: str
-    role: str  # "admin" | "user"
+    role: str  # "admin" | "user" | "approver"
 
     @property
     def is_admin(self) -> bool:
         return self.role == "admin"
 
+    @property
+    def is_approver(self) -> bool:
+        """คนทำ label: เห็นแค่หน้าอัปโหลดกับคิวตรวจ ไม่เห็นข้อมูลรวมของทั้งระบบ"""
+        return self.role == "approver"
+
 
 def load_accounts() -> dict[str, tuple[str, str]]:
     """อ่านบัญชีจาก env -> {username: (password_hash, role)}"""
     accounts: dict[str, tuple[str, str]] = {}
-    for prefix, role in (("ADMIN", "admin"), ("USER", "user")):
+    for prefix, role in (("ADMIN", "admin"), ("USER", "user"), ("APPROVE", "approver")):
         name = os.getenv(f"{prefix}_USERNAME", "").strip()
         pw_hash = os.getenv(f"{prefix}_PASSWORD_HASH", "").strip()
         if name and pw_hash:
@@ -127,7 +132,8 @@ def read_token(token: str, secret: str) -> User | None:
         return None
     if int(data.get("exp", 0)) < time.time():
         return None
-    return User(username=data.get("u", ""), role=data.get("r", "user"))
+    # ไม่มี role ใน payload = token เก่า/แปลกปลอม ให้ตกไปที่สิทธิ์น้อยที่สุดไว้ก่อน
+    return User(username=data.get("u", ""), role=data.get("r", "approver"))
 
 
 # ---------- กันเดารหัสผ่าน ----------
@@ -190,7 +196,7 @@ def authenticate(username: str, password: str, client_ip: str) -> tuple[User | N
     if not accounts:
         return None, "ยังไม่ได้ตั้งค่าบัญชีผู้ใช้ (ADMIN_USERNAME / ADMIN_PASSWORD_HASH ใน .env)"
 
-    stored, role = accounts.get(username, (_dummy_hash(), "user"))
+    stored, role = accounts.get(username, (_dummy_hash(), "approver"))
     ok = verify_password(password or "", stored) and username in accounts
 
     if not ok:
@@ -216,4 +222,4 @@ if __name__ == "__main__":
         print(hash_password(sys.argv[2]))
     else:
         print("วิธีใช้: python -m ocrslip.auth hash '<รหัสผ่าน>'")
-        print("แล้วเอาค่าที่ได้ไปใส่ ADMIN_PASSWORD_HASH หรือ USER_PASSWORD_HASH ใน .env")
+        print("แล้วเอาค่าที่ได้ไปใส่ ADMIN_PASSWORD_HASH / USER_PASSWORD_HASH / APPROVE_PASSWORD_HASH ใน .env")

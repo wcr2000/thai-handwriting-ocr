@@ -11,6 +11,32 @@ from ocrslip.web.main import app
 
 client = TestClient(app)
 
+# รหัสผ่านสำหรับเทสเท่านั้น — เทสตั้ง env ของบัญชีเองทุกครั้ง จะได้ไม่มีรหัสผ่านจริงอยู่ใน git
+# และเทสไม่พังทุกครั้งที่เปลี่ยนรหัสผ่านของระบบจริง
+TEST_PW = "pw-for-test"
+
+
+@pytest.fixture
+def accounts(monkeypatch):
+    """ยัดบัญชีทดสอบครบทุก role ลง env แล้วคืนฟังก์ชันสำหรับล็อกอิน"""
+    from ocrslip import auth
+
+    h = auth.hash_password(TEST_PW)
+    for prefix, name in (("ADMIN", "admin"), ("USER", "staff"), ("APPROVE", "approve")):
+        monkeypatch.setenv(f"{prefix}_USERNAME", name)
+        monkeypatch.setenv(f"{prefix}_PASSWORD_HASH", h)
+    auth.throttle.fails.clear()
+    auth.throttle.locked_until.clear()
+
+    def login(username: str) -> TestClient:
+        c = TestClient(app)
+        r = c.post("/login", data={"username": username, "password": TEST_PW, "next": "/"},
+                   follow_redirects=False)
+        assert r.status_code == 303, f"ล็อกอิน {username} ไม่ผ่าน"
+        return c
+
+    return login
+
 
 def test_html_is_never_cached():
     r = client.get("/login")
@@ -30,17 +56,14 @@ def test_redirect_to_login_is_not_cached():
     assert "no-store" in r.headers.get("cache-control", "").lower()
 
 
-def test_forbidden_page_is_not_cached():
+def test_forbidden_page_is_not_cached(accounts):
     """หน้า 403 ที่ auth_gate คืนเองก็ต้องมี header ด้วย ไม่งั้นค้างอยู่ในเครื่องแม้สิทธิ์เปลี่ยนแล้ว
 
     ใช้ client แยกตัว เพราะ TestClient เก็บ cookie ไว้ข้ามเทส
     ถ้าล็อกอินค้างไว้ เทสอื่นที่ตรวจ "ยังไม่ล็อกอินต้องโดนเด้ง" จะพังตามไปด้วย
     """
-    with TestClient(app) as staff_client:
-        staff_client.post(
-            "/login", data={"username": "staff", "password": "flood2026-staff", "next": "/"}
-        )
-        r = staff_client.get("/table", follow_redirects=False)
+    staff_client = accounts("staff")
+    r = staff_client.get("/table", follow_redirects=False)
     assert r.status_code == 403
     assert "no-store" in r.headers.get("cache-control", "").lower()
 
@@ -60,7 +83,7 @@ def test_static_still_answers_304_with_etag():
     assert not r.content
 
 
-def test_image_keeps_its_own_cache_policy():
+def test_image_keeps_its_own_cache_policy(accounts):
     """รูปหลักฐานไม่เคยเปลี่ยน ให้ cache ได้นาน — middleware ต้องไม่ไปทับ"""
     from ocrslip.db import connect, list_slips
 
@@ -68,9 +91,7 @@ def test_image_keeps_its_own_cache_policy():
         slips = list_slips(conn, limit=1)
     if not slips:
         pytest.skip("ยังไม่มีข้อมูลใน DB")
-    with TestClient(app) as c:
-        c.post("/login", data={"username": "admin", "password": "flood2026-admin", "next": "/"})
-        r = c.get(f"/image/{slips[0]['id']}")
+    r = accounts("admin").get(f"/image/{slips[0]['id']}")
     assert "max-age" in r.headers.get("cache-control", "")
     assert "no-store" not in r.headers.get("cache-control", "")
 
