@@ -88,9 +88,13 @@ img { max-width: 100%; }
    จึงเปิด/ปิด popup ด้วย CSS ล้วน ๆ ได้ ไม่ต้องพึ่ง JS
    ห้ามใช้ class .htmx-indicator กับกล่องนี้ เพราะ htmx มี style ของตัวเองที่บังคับ
    opacity:0 ให้ .htmx-indicator แล้วไล่ opacity ขึ้น — จะชนกับ display:flex ที่เราคุมเอง */
+/* พื้นหลังต้องมืดลงด้วย rgba เสมอ ไม่ใช่พึ่งการเบลออย่างเดียว เพราะเครื่องที่ไม่รองรับ
+   backdrop-filter จะเหลือแค่กล่องขาวลอยบนหน้าเดิมที่ยังอ่านออกทุกตัว จนดูเหมือนหน้าค้าง
+   ส่วน -webkit- ต้องมีคู่กันเสมอ: iOS Safari ก่อน 18 รู้จักแต่ชื่อที่มี prefix */
 #ai-loading { display:none; position:fixed; inset:0; z-index:100;
               align-items:center; justify-content:center; padding:1rem;
-              background:rgba(26,26,26,.55); backdrop-filter:blur(3px); }
+              background:rgba(26,26,26,.55);
+              -webkit-backdrop-filter:blur(3px); backdrop-filter:blur(3px); }
 #ai-loading.htmx-request { display:flex; }
 .ai-loading-card { background:#fff; border-radius:20px; padding:1.4rem 1.6rem 1.2rem;
                    max-width:340px; width:100%; text-align:center;
