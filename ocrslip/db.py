@@ -223,8 +223,14 @@ def update_slip(
     edited_by: str | None,
     review_status: str | None = None,
     review_reason: list[str] | None = None,
-) -> int:
-    """บันทึกค่าที่คนแก้ + เขียน audit log เฉพาะ field ที่เปลี่ยนจริง คืนจำนวน field ที่แก้"""
+    require_status: str | None = None,
+) -> int | None:
+    """บันทึกค่าที่คนแก้ + เขียน audit log เฉพาะ field ที่เปลี่ยนจริง คืนจำนวน field ที่แก้
+
+    require_status = สถานะที่ใบต้องเป็นอยู่ ณ ตอนเขียน (optimistic lock)
+    คืน None ถ้าสถานะไม่ตรง แปลว่ามีคนอื่นตรวจใบนี้ไปก่อนแล้วระหว่างที่หน้านี้เปิดค้างอยู่
+    ต้องไม่เขียนอะไรเลยในกรณีนั้น ไม่งั้นงานของคนแรกถูกทับเงียบ ๆ พร้อม audit log ซ้ำอีกชุด
+    """
     before = get_slip(conn, slip_id)
     row = build_row(fields)
     if review_status is not None:
@@ -238,7 +244,15 @@ def update_slip(
     if review_status is not None:
         sets += ", reviewed_at = now()"
     row.pop("reviewed_at", None)
-    conn.execute(f"UPDATE {DB_SCHEMA}.slips SET {sets} WHERE id = %(id)s", {**row, "id": slip_id})
+    where = "WHERE id = %(id)s"
+    if require_status is not None:
+        where += " AND review_status = %(require_status)s"
+    cur = conn.execute(
+        f"UPDATE {DB_SCHEMA}.slips SET {sets} {where}",
+        {**row, "id": slip_id, "require_status": require_status},
+    )
+    if cur.rowcount == 0:
+        return None
 
     changed = 0
     for col in ("name", "tel", "plate_raw", "province", "brand", "car_type", "location", "deposit_date"):
