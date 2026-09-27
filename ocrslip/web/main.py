@@ -283,6 +283,8 @@ def review_queue(
                     {"filter": filter, "q": q, "sort": sort, "dir": dir}.items() if v})
     return render(
         request, "review_list.html", slips=slips, counts=counts, active=filter,
+        # กองที่ยังไม่ได้ตรวจยังไม่มีใครเป็นเจ้าของ คอลัมน์ "คนตรวจ" จะว่างทั้งแถว
+        show_reviewer=(filter in ("approved", "rejected", "all")),
         total=total, page=max(1, page), per_page=per_page,
         pages=max(1, -(-total // per_page)), qs=qs,
         f={"q": q, "sort": sort, "dir": dir},
@@ -309,17 +311,24 @@ def _form_fields(form) -> dict[str, Any]:
     return {f: (form.get(f) or "").strip() or None for f in FORM_FIELDS}
 
 
+def _picked_reviewer(form) -> str | None:
+    """ชื่อคนจริงที่เลือกในช่อง "ผู้ตรวจ" ("__new__" = ขอพิมพ์ชื่อใหม่)
+
+    บัญชี staff/approve ใช้กันหลายคน ถ้าบันทึกชื่อบัญชีไว้จะตามไม่ได้ว่าใครเป็นคนตรวจใบไหน
+    """
+    return clean_person_name(
+        form.get("reviewed_by_new") if (form.get("reviewed_by") or "").strip() == "__new__"
+        else form.get("reviewed_by")
+    ) or None
+
+
 @app.post("/review/{slip_id}/approve")
 async def approve(request: Request, slip_id: str):
     form = await request.form()
     fields = _form_fields(form)
     account = getattr(request.state, "user", None) and request.state.user.username
-    # บัญชี staff/approve ใช้กันหลายคน ถ้าบันทึกชื่อบัญชีไว้จะตามไม่ได้ว่าใครเป็นคนอนุมัติ
-    # จึงบังคับให้เลือกชื่อคนจริงแบบเดียวกับตอนอัปโหลด ("__new__" = ขอพิมพ์ชื่อใหม่)
-    reviewer = clean_person_name(
-        form.get("reviewed_by_new") if (form.get("reviewed_by") or "").strip() == "__new__"
-        else form.get("reviewed_by")
-    ) or None
+    # บังคับให้เลือกชื่อคนจริงแบบเดียวกับตอนอัปโหลด จะได้รู้ว่าใบนี้ใครอนุมัติ
+    reviewer = _picked_reviewer(form)
     # ตรวจซ้ำหลังคนแก้ แต่บล็อกเฉพาะ "ช่องบังคับที่ยังว่าง" เท่านั้น
     # ส่วนรูปแบบแปลก ๆ (ทะเบียนไม่มีหมวดอักษร, วันที่เขียนแค่ '26') เป็นแค่คำเตือน
     # เพราะคนตรวจเห็นรูปใบจริงแล้ว และของจริงก็มีใบแบบนั้นอยู่จริง
@@ -351,11 +360,14 @@ async def approve(request: Request, slip_id: str):
 @app.post("/review/{slip_id}/reject")
 async def reject(request: Request, slip_id: str):
     form = await request.form()
+    # ชื่อผู้ตรวจต้องผ่านตัวกรองเดียวกับตอนอนุมัติ ไม่งั้นค่า sentinel "__new__"
+    # จะถูกบันทึกเป็นชื่อคน แล้วโผล่ในสถิติว่ามีคนชื่อ __new__ ตีกลับไปหลายใบ
+    reviewer = _picked_reviewer(form)
     with connect() as conn:
         conn.execute(
             "UPDATE ocr_dhammakaya.slips SET review_status='rejected', needs_review=false,"
             " review_reason=%s, reviewed_by=%s, reviewed_at=now() WHERE id=%s",
-            ([(form.get("reason") or "รูปอ่านไม่ได้")], (form.get("reviewed_by") or None), slip_id),
+            ([(form.get("reason") or "รูปอ่านไม่ได้")], reviewer, slip_id),
         )
         conn.commit()
     return RedirectResponse("/review", status_code=303)
@@ -440,23 +452,27 @@ async def staff_toggle(request: Request, staff_id: int):
 def table_view(
     request: Request,
     q: str = "", review_status: str = "", car_status: str = "", car_type: str = "",
+    uploaded_by: str = "", reviewed_by: str = "",
     sort: str = "created_at", dir: str = "desc", page: int = 1,
 ):
     """ตารางข้อมูลทั้งหมด พร้อมตัวกรอง/เรียง/แบ่งหน้า — ไม่โหลดรูปเพื่อให้หน้าเบา"""
     filters = build_filters(q=q, review_status=review_status,
-                            car_status=car_status, car_type=car_type)
+                            car_status=car_status, car_type=car_type,
+                            uploaded_by=uploaded_by, reviewed_by=reviewed_by)
     per_page = 50
     with connect() as conn:
         rows, total = query_slips(conn, filters=filters, sort=sort,
                                   desc=(dir != "asc"), page=max(1, page), per_page=per_page)
     qs = urlencode({k: v for k, v in
                     {"q": q, "review_status": review_status, "car_status": car_status,
-                     "car_type": car_type, "sort": sort, "dir": dir}.items() if v})
+                     "car_type": car_type, "uploaded_by": uploaded_by,
+                     "reviewed_by": reviewed_by, "sort": sort, "dir": dir}.items() if v})
     return render(
         request, "table.html", rows=rows, total=total, page=max(1, page),
         per_page=per_page, pages=max(1, -(-total // per_page)), qs=qs,
         f={"q": q, "review_status": review_status, "car_status": car_status,
-           "car_type": car_type, "sort": sort, "dir": dir},
+           "car_type": car_type, "uploaded_by": uploaded_by, "reviewed_by": reviewed_by,
+           "sort": sort, "dir": dir},
     )
 
 
@@ -469,6 +485,7 @@ def dashboard(request: Request):
 @app.get("/export.xlsx")
 def export_xlsx(
     q: str = "", review_status: str = "", car_status: str = "", car_type: str = "",
+    uploaded_by: str = "", reviewed_by: str = "",
 ):
     from openpyxl import Workbook
 
@@ -480,7 +497,8 @@ def export_xlsx(
                "คนอัปโหลด", "คนถ่ายรูป", "คนตรวจ", "model", "บันทึกเมื่อ"]
     ws.append(headers)
     filters = build_filters(q=q, review_status=review_status,
-                            car_status=car_status, car_type=car_type)
+                            car_status=car_status, car_type=car_type,
+                            uploaded_by=uploaded_by, reviewed_by=reviewed_by)
     with connect() as conn:
         for r in export_rows(conn, filters):
             ws.append([

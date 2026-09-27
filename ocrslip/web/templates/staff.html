@@ -16,11 +16,15 @@
 
 <div class="card">
   <table>
-    <tr><th>ชื่อ</th><th>อัปโหลดไปแล้ว</th><th>สถานะ</th><th>เพิ่มเมื่อ</th><th></th></tr>
+    <tr><th>ชื่อ</th><th>อัปโหลดไปแล้ว</th><th>ตรวจไปแล้ว</th><th>สถานะ</th><th>เพิ่มเมื่อ</th><th></th></tr>
     {% for s in staff %}
     <tr>
       <td>{{ s.name }}</td>
-      <td>{{ s.slips }} ใบ</td>
+      <td>{% if s.slips %}<a href="/table?uploaded_by={{ s.name|urlencode }}">{{ s.slips }} ใบ</a>
+          {% else %}<span class="muted">—</span>{% endif %}</td>
+      <td>{% if s.approved %}<a href="/table?reviewed_by={{ s.name|urlencode }}&review_status=approved">อนุมัติ {{ s.approved }} ใบ</a>
+          {% else %}<span class="muted">—</span>{% endif %}{% if s.rejected %}
+          <a class="muted" href="/table?reviewed_by={{ s.name|urlencode }}&review_status=rejected">/ ตีกลับ {{ s.rejected }}</a>{% endif %}</td>
       <td>{% if s.active %}<span class="badge ok">ใช้งานอยู่</span>
           {% else %}<span class="badge">ปิดใช้งาน</span>{% endif %}</td>
       <td class="muted">{{ s.created_at.strftime('%d/%m/%Y') if s.created_at else '—' }}</td>
@@ -33,9 +37,11 @@
       </td>
     </tr>
     {% else %}
-    <tr><td colspan="5" class="muted">ยังไม่มีรายชื่อ</td></tr>
+    <tr><td colspan="6" class="muted">ยังไม่มีรายชื่อ</td></tr>
     {% endfor %}
   </table>
+  <p class="muted">"อัปโหลด" กับ "ตรวจ" นับแยกกัน เพราะคนถ่ายรูปเข้ามากับคนกดอนุมัติเป็นคนละบทบาท —
+     คนเดียวกันทำทั้งสองอย่างได้ แต่ตัวเลขจะไม่ปนกัน</p>
   <p class="muted">ปิดใช้งานแทนการลบ เพื่อให้ใบเก่าที่บันทึกชื่อนี้ไว้ยังตามรอยได้</p>
 </div>
 {% endblock %}

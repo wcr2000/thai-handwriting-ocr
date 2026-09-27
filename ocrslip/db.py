@@ -336,11 +336,30 @@ def known_people(conn: psycopg.Connection) -> list[str]:
 
 
 def list_staff(conn: psycopg.Connection) -> list[dict[str, Any]]:
-    """รายชื่อทั้งหมดพร้อมจำนวนใบที่แต่ละคนอัปโหลดไป (ไว้ให้ admin ดูว่าใครทำอะไรไปเท่าไร)"""
+    """รายชื่อทั้งหมด + จำนวนใบที่แต่ละคน "อัปโหลด" และ "ตรวจ" (ไว้ให้ admin ดูว่าใครทำไปเท่าไร)
+
+    คนอัปกับคนตรวจเป็นคนละบทบาท แถวเดียวกันจึงต้องนับแยกสองช่อง
+    ใช้ LEFT JOIN กับยอดที่ group มาแล้วรอบเดียว ไม่ใช้ subquery ต่อแถว
+    ไม่งั้นมีกี่ชื่อก็ต้องกวาดตาราง slips เท่านั้นรอบ
+    เทียบชื่อแบบ lower(btrim()) ให้ตรงกับที่ build_filters ใช้ ตัวเลขบนหน้านี้
+    จะได้เท่ากับจำนวนแถวที่กดเข้าไปดูจริง
+    """
     cur = conn.execute(
         f"""SELECT m.*,
-                   (SELECT count(*) FROM {DB_SCHEMA}.slips s WHERE s.uploaded_by = m.name) AS slips
+                   coalesce(up.n, 0)        AS slips,
+                   coalesce(rv.approved, 0) AS approved,
+                   coalesce(rv.rejected, 0) AS rejected
             FROM {DB_SCHEMA}.staff_members m
+            LEFT JOIN (
+                SELECT lower(btrim(uploaded_by)) AS k, count(*) AS n
+                FROM {DB_SCHEMA}.slips WHERE uploaded_by IS NOT NULL GROUP BY 1
+            ) up ON up.k = lower(btrim(m.name))
+            LEFT JOIN (
+                SELECT lower(btrim(reviewed_by)) AS k,
+                       count(*) FILTER (WHERE review_status = 'approved') AS approved,
+                       count(*) FILTER (WHERE review_status = 'rejected') AS rejected
+                FROM {DB_SCHEMA}.slips WHERE reviewed_by IS NOT NULL GROUP BY 1
+            ) rv ON rv.k = lower(btrim(m.name))
             ORDER BY m.active DESC, m.name"""
     )
     return cur.fetchall()
@@ -417,6 +436,8 @@ def build_filters(
     needs_review: bool | None = None,
     car_status: str | None = None,
     car_type: str | None = None,
+    uploaded_by: str | None = None,
+    reviewed_by: str | None = None,
 ) -> tuple[str, dict]:
     """สร้าง WHERE clause ที่ใช้ร่วมกันระหว่างหน้าตาราง, คิวตรวจ, ตัวนับ และ Excel
 
@@ -438,6 +459,13 @@ def build_filters(
     if car_type:
         where.append("car_type = %(car_type)s")
         params["car_type"] = car_type
+    # กรองตามคน: เทียบแบบไม่สนตัวพิมพ์/ช่องว่างหัวท้าย เพราะชื่อที่พิมพ์เองตอนอัปโหลดหรือตอนตรวจ
+    # อาจต่างจากชื่อในรายการแค่ช่องว่าง แล้วจะกลายเป็นคนละคนในสายตา query
+    for key, val in (("uploaded_by", uploaded_by), ("reviewed_by", reviewed_by)):
+        name = clean_person_name(val)
+        if name:
+            where.append(f"lower(btrim({key})) = lower(btrim(%({key})s))")
+            params[key] = name
     if q and q.strip():
         # normalize คำค้นแบบเดียวกับตอนบันทึก ไม่งั้นพิมพ์ "นายสมชาย" จะไม่เจอแถวที่เก็บ "สมชาย"
         # ใส่เฉพาะช่องที่ normalize แล้วยังเหลือข้อความ ไม่งั้น LIKE '%%' จะแมตช์ทุกแถว
@@ -462,7 +490,7 @@ def build_filters(
 
 SORTABLE = {
     "created_at": "created_at", "name": "name_norm", "tel": "tel_digits",
-    "uploaded_by": "uploaded_by",
+    "uploaded_by": "uploaded_by", "reviewed_by": "reviewed_by",
     "plate": "plate_norm", "brand": "brand_norm", "date": "deposit_date",
     "car_status": "car_status", "review_status": "review_status",
 }
@@ -561,6 +589,22 @@ def dashboard_stats(conn: psycopg.Connection) -> dict[str, Any]:
         f"""SELECT field AS label, count(*) AS n FROM {DB_SCHEMA}.slip_edits
             GROUP BY 1 ORDER BY n DESC LIMIT 8"""
     ).fetchall()
+    # ใครอนุมัติ/ตีกลับไปกี่ใบ — คนละชุดกับ by_uploader เพราะคนอัปกับคนตรวจไม่ใช่คนเดียวกัน
+    # รวมกลุ่ม "ไม่ระบุ" ไว้ด้วย (ใบเก่าที่ตรวจก่อนจะมีช่องชื่อผู้ตรวจ) ไม่งั้นยอดรวมจะไม่ตรงกับ approved
+    #
+    # จัดกลุ่มด้วย lower(btrim()) แบบเดียวกับ build_filters แล้วใช้ mode() เลือกตัวสะกดที่พบบ่อยสุด
+    # เป็นชื่อที่แสดง ไม่งั้น "first" กับ "FIRST" จะเป็นสองแถวบนจอ แต่กดเข้าไปได้ใบชุดเดียวกัน
+    # (= ตัวเลขบนแถวไม่ตรงกับจำนวนที่เห็นจริง)
+    by_reviewer = conn.execute(
+        f"""SELECT coalesce(mode() WITHIN GROUP (ORDER BY btrim(reviewed_by)), '— ไม่ระบุ —') AS label,
+                   count(*) FILTER (WHERE review_status = 'approved') AS n,
+                   count(*) FILTER (WHERE review_status = 'rejected') AS rejected
+            FROM {DB_SCHEMA}.slips
+            WHERE reviewed_at IS NOT NULL
+            GROUP BY lower(btrim(reviewed_by))
+            ORDER BY n DESC, rejected DESC LIMIT 20"""
+    ).fetchall()
+
     reviewed = conn.execute(
         f"SELECT count(*) AS n FROM {DB_SCHEMA}.slips WHERE reviewed_at IS NOT NULL"
     ).fetchone()["n"]
@@ -576,7 +620,13 @@ def dashboard_stats(conn: psycopg.Connection) -> dict[str, Any]:
         "by_type": group("car_type"),
         "by_brand": group("brand_norm"),
         "by_location": group("location"),
-        "by_uploader": group("uploaded_by"),
+        "by_uploader": conn.execute(
+            f"""SELECT coalesce(mode() WITHIN GROUP (ORDER BY btrim(uploaded_by)), '— ไม่ระบุ —') AS label,
+                       count(*) AS n
+                FROM {DB_SCHEMA}.slips WHERE review_status <> 'rejected'
+                GROUP BY lower(btrim(uploaded_by)) ORDER BY n DESC LIMIT 8"""
+        ).fetchall(),
+        "by_reviewer": by_reviewer,
         "by_day": list(reversed(by_day)),
         "edits": edits,
         "reviewed": reviewed,

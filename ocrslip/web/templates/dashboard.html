@@ -80,7 +80,43 @@
   <div class="col">{{ bars('แยกตามยี่ห้อ', by_brand, 'q') }}</div>
 </div>
 <div class="row">
-  <div class="col">{{ bars('ใครอัปโหลดไปกี่ใบ', by_uploader, 'q') }}</div>
+  <div class="col">
+    <div class="card">
+      <h3>ใครอัปโหลดไปกี่ใบ</h3>
+      {% set top_u = (by_uploader|map(attribute='n')|max) if by_uploader else 1 %}
+      {% for r in by_uploader %}
+      <div class="bar-row">
+        <div class="bar-label">{% if r.label == '— ไม่ระบุ —' %}{{ r.label }}
+          {% else %}<a href="/table?uploaded_by={{ r.label|urlencode }}">{{ r.label }}</a>{% endif %}</div>
+        <div class="bar-track"><div class="bar-fill" style="width:{{ (r.n / top_u * 100)|round(1) }}%"></div></div>
+        <div class="bar-n">{{ r.n }}</div>
+      </div>
+      {% else %}<p class="muted">ยังไม่มีข้อมูล</p>{% endfor %}
+      <p class="muted">คนที่ถ่าย/อัปรูปเข้าระบบ · กดชื่อเพื่อดูใบของคนนั้น</p>
+    </div>
+  </div>
+  <div class="col">
+    <div class="card">
+      <h3>ใครตรวจไปกี่ใบ</h3>
+      {% set top_rv = (by_reviewer|map(attribute='n')|max) if by_reviewer else 1 %}
+      {% for r in by_reviewer %}
+      <div class="bar-row">
+        <div class="bar-label">{% if r.label == '— ไม่ระบุ —' %}{{ r.label }}
+          {% else %}<a href="/table?reviewed_by={{ r.label|urlencode }}&review_status=approved">{{ r.label }}</a>{% endif %}</div>
+        <div class="bar-track"><div class="bar-fill" style="width:{{ (r.n / top_rv * 100)|round(1) }}%"></div></div>
+        <div class="bar-n">{{ r.n }}{% if r.rejected %}
+          <a class="muted" href="/table?reviewed_by={{ r.label|urlencode }}&review_status=rejected"
+             title="ตีกลับ {{ r.rejected }} ใบ">+{{ r.rejected }}↩</a>{% endif %}</div>
+      </div>
+      {% else %}<p class="muted">ยังไม่มีใครตรวจ</p>{% endfor %}
+      <p class="muted">แถบคือจำนวนที่ <strong>อนุมัติ</strong> · เลขจาง ↩ คือที่ตีกลับ ·
+         คนละคนกับคนอัปโหลด กดชื่อเพื่อดูใบที่คนนั้นตรวจ</p>
+      <p class="muted">ชื่อที่ตรงกับชื่อบัญชีล็อกอิน (staff / admin / approve) คือใบที่ตรวจไว้
+         ก่อนระบบจะบังคับเลือกชื่อคนจริง — ยังแยกไม่ได้ว่าใครในบัญชีนั้นเป็นคนตรวจ</p>
+    </div>
+  </div>
+</div>
+<div class="row">
   <div class="col">{{ bars('แยกตามที่จอด', by_location, 'q') }}</div>
 </div>
 <div class="row">
