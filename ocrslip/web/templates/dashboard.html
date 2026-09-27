@@ -37,11 +37,11 @@
 <h2>สรุปภาพรวม</h2>
 <div class="kpis">
   <div class="kpi"><div class="n">{{ kpi.total }}</div><div class="t"><a href="/table">ใบทั้งหมด</a></div></div>
-  <div class="kpi"><div class="n" style="color:var(--ok)">{{ kpi.stored }}</div><div class="t"><a href="/table?car_status=stored">ยังฝากอยู่</a></div></div>
-  <div class="kpi"><div class="n">{{ kpi.returned }}</div><div class="t"><a href="/table?car_status=returned">รับคืนแล้ว</a></div></div>
+  <div class="kpi"><div class="n" style="color:var(--ok)">{{ kpi.stored }}</div><div class="t"><a href="/table?car_status=stored">ยังจอดอยู่</a></div></div>
+  <div class="kpi"><div class="n">{{ kpi.returned }}</div><div class="t"><a href="/table?car_status=returned">รับรถกลับแล้ว</a></div></div>
   <div class="kpi"><div class="n" style="color:var(--warn)">{{ kpi.needs_review }}</div><div class="t"><a href="/review">ต้องตรวจ</a></div></div>
   <div class="kpi"><div class="n">{{ kpi.approved }}</div><div class="t"><a href="/table?review_status=approved">อนุมัติแล้ว</a></div></div>
-  <div class="kpi"><div class="n">{{ '%.0f'|format(kpi.returned / kpi.total * 100 if kpi.total else 0) }}%</div><div class="t">คืนรถไปแล้ว</div></div>
+  <div class="kpi"><div class="n">{{ '%.0f'|format(kpi.returned / kpi.total * 100 if kpi.total else 0) }}%</div><div class="t">รับรถกลับแล้ว</div></div>
 </div>
 
 <div class="card">
@@ -61,11 +61,11 @@
 </div>
 
 <div class="card">
-  <h3>ใบฝากรถต่อวัน <span class="muted">(น้ำเงิน = ฝากทั้งหมด · เขียว = คืนแล้ว)</span></h3>
+  <h3>ใบจอดรถต่อวัน <span class="muted">(น้ำเงิน = เข้าจอดทั้งหมด · เขียว = รับกลับแล้ว)</span></h3>
   {% set top_day = (by_day|map(attribute='n')|max) if by_day else 1 %}
   <div class="day-chart">
     {% for d in by_day %}
-    <div class="day-col" title="{{ d.label }} — ฝาก {{ d.n }} คืน {{ d.returned }}">
+    <div class="day-col" title="{{ d.label }} — เข้าจอด {{ d.n }} รับกลับ {{ d.returned }}">
       <div class="bar-n">{{ d.n }}</div>
       <div class="day-bar" style="height:{{ [(d.n / top_day * 100)|round|int, 3]|max }}px"></div>
       <div class="day-bar ret" style="height:{{ (d.returned / top_day * 100)|round|int }}px"></div>

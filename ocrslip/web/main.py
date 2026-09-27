@@ -1,4 +1,4 @@
-"""เว็บแอปฝากรถน้ำท่วม: อัปโหลด -> OCR -> คิวตรวจสอบ -> ค้นหา -> คืนรถ
+"""เว็บแอประบบเอื้อเฟื้อที่จอดรถ: อัปโหลด -> OCR -> คิวตรวจสอบ -> ค้นหา -> รับรถกลับ
 
 รัน:  uvicorn ocrslip.web.main:app --reload
 """
@@ -29,7 +29,7 @@ from ..search import search as fuzzy_search
 from .pipeline import ingest
 
 HERE = Path(__file__).resolve().parent
-app = FastAPI(title="ระบบฝากรถน้ำท่วม")
+app = FastAPI(title="ระบบเอื้อเฟื้อที่จอดรถ")
 
 # ถ้าไม่ได้ตั้ง SECRET_KEY ให้สุ่มขึ้นมาใช้ในรอบนี้ — ปลอดภัย แต่รีสตาร์ตแล้วทุกคนต้องล็อกอินใหม่
 _SECRET = SECRET_KEY or secrets.token_urlsafe(32)
@@ -417,9 +417,9 @@ def export_xlsx(
 
     wb = Workbook()
     ws = wb.active
-    ws.title = "ใบฝากรถ"
+    ws.title = "ใบจอดรถ"
     headers = ["ชื่อ", "เบอร์โทร", "ทะเบียน", "จังหวัด", "ยี่ห้อ", "ประเภท", "ที่จอด",
-               "วันที่ฝาก", "สถานะตรวจ", "สถานะรถ", "คืนเมื่อ", "ผู้คืน",
+               "วันที่เข้าจอด", "สถานะตรวจ", "สถานะรถ", "รับรถกลับเมื่อ", "ผู้ส่งมอบรถกลับ",
                "คนอัปโหลด", "คนถ่ายรูป", "คนตรวจ", "model", "บันทึกเมื่อ"]
     ws.append(headers)
     filters = build_filters(q=q, review_status=review_status,

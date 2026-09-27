@@ -3,7 +3,7 @@
 <div class="row">
   <div class="col" style="flex:1 1 480px">
     <div class="card">
-      <img class="slip-img" src="/image/{{ slip.id }}" alt="ใบฝากรถ">
+      <img class="slip-img" src="/image/{{ slip.id }}" alt="ใบจอดรถ">
       <p class="muted"><a href="/image/{{ slip.id }}?kind=original" target="_blank">ดูรูปต้นฉบับ</a></p>
     </div>
   </div>
@@ -15,7 +15,7 @@
         <tr><th>ทะเบียน</th><td>{{ slip.plate_raw or '—' }} {{ slip.province or '' }}</td></tr>
         <tr><th>ยี่ห้อ</th><td>{{ slip.brand or '—' }} ({{ slip.car_type or '—' }})</td></tr>
         <tr><th>ที่จอด</th><td>{{ slip.location or '—' }}</td></tr>
-        <tr><th>วันที่ฝาก</th><td>{{ slip.deposit_date or '—' }}</td></tr>
+        <tr><th>วันที่เข้าจอด</th><td>{{ slip.deposit_date or '—' }}</td></tr>
         <tr><th>สถานะตรวจ</th><td>{{ slip.review_status }}</td></tr>
         <tr><th>คนอัปโหลด</th><td>{{ slip.uploaded_by or '—' }}
             <span class="muted">(บัญชี {{ slip.created_by or '—' }})</span></td></tr>
@@ -34,7 +34,7 @@
       <input type="text" id="returned_by" name="returned_by" required>
       <label for="note">หมายเหตุ</label>
       <input type="text" id="note" name="note">
-      <p><button type="submit">✓ รับรถคืนแล้ว</button></p>
+      <p><button type="submit">✓ ยืนยันรับรถกลับแล้ว</button></p>
     </form>
     {% endif %}
     {% if slip.car_status == 'stored' and user and not user.is_admin %}

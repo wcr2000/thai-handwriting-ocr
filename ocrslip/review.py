@@ -18,7 +18,7 @@ REASON_LABELS = {
     "low_confidence": "model ไม่มั่นใจในบางช่อง",
     "missing_field": "มีช่องสำคัญที่อ่านไม่ออก",
     "format_invalid": "รูปแบบข้อมูลไม่ถูกต้อง",
-    "duplicate_suspect": "อาจซ้ำกับใบที่ยังฝากอยู่",
+    "duplicate_suspect": "อาจซ้ำกับใบที่ยังจอดอยู่",
     "duplicate_image": "รูปนี้เคยอัปโหลดแล้ว",
 }
 

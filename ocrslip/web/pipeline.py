@@ -64,7 +64,7 @@ def _read_something(res: OcrResult) -> bool:
 
 
 def count_duplicates(conn: psycopg.Connection, fields: dict[str, Any]) -> int:
-    """นับใบที่ยังฝากอยู่และมีทะเบียนหรือเบอร์ตรงกัน — กันคีย์ซ้ำ/รถคันเดิมฝากซ้ำ"""
+    """นับใบที่ยังจอดอยู่และมีทะเบียนหรือเบอร์ตรงกัน — กันคีย์ซ้ำ/รถคันเดิมลงทะเบียนซ้ำ"""
     plate, tel = norm_plate(fields.get("noplate")), norm_phone(fields.get("tel"))
     if not plate and not tel:
         return 0

@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>เข้าสู่ระบบ · ระบบฝากรถ</title>
+<title>เข้าสู่ระบบ · ระบบเอื้อเฟื้อที่จอดรถ</title>
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body style="display:grid; place-items:center; min-height:100vh; min-height:100dvh">
 <form method="post" action="/login" class="card" style="width:min(380px, 92vw)">
-  <h2 style="margin-top:0">🚗 ระบบฝากรถน้ำท่วม</h2>
+  <h2 style="margin-top:0">🚗 ระบบเอื้อเฟื้อที่จอดรถ</h2>
   {% if error %}<div class="err">{{ error }}</div>{% endif %}
   <label for="username">ชื่อผู้ใช้</label>
   <input type="text" id="username" name="username" value="{{ username or '' }}" autofocus required

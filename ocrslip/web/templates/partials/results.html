@@ -9,14 +9,14 @@
     <div class="col">
       <div><span class="score">{{ '%.0f'|format(r.score) }}%</span>
            <span class="muted">ตรงที่ {{ r.match_on }}</span>
-           {% if r.car_status == 'returned' %}<span class="badge bad">รับคืนแล้ว</span>
-           {% else %}<span class="badge ok">ยังฝากอยู่</span>{% endif %}
+           {% if r.car_status == 'returned' %}<span class="badge bad">รับรถกลับแล้ว</span>
+           {% else %}<span class="badge ok">ยังจอดอยู่</span>{% endif %}
            {% if r.review_status != 'approved' %}<span class="badge warn">ยังไม่ผ่านการตรวจ</span>{% endif %}
       </div>
       <div><strong>{{ r.name or '—' }}</strong> · {{ r.tel or '—' }}</div>
       <div>ทะเบียน {{ r.plate_raw or '—' }} {{ r.province or '' }} · {{ r.brand or '—' }} ({{ r.car_type or '—' }})</div>
-      <div class="muted">ที่จอด: {{ r.location or '—' }} · ฝากเมื่อ {{ r.deposit_date or '—' }}</div>
-      <div><a href="/slips/{{ r.id }}">เปิดดูใบจริง / คืนรถ →</a></div>
+      <div class="muted">ที่จอด: {{ r.location or '—' }} · เข้าจอดเมื่อ {{ r.deposit_date or '—' }}</div>
+      <div><a href="/slips/{{ r.id }}">เปิดดูใบจริง / รับรถกลับ →</a></div>
     </div>
   </div>
   {% endfor %}

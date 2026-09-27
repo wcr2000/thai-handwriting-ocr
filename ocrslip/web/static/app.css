@@ -81,3 +81,34 @@ th { color:var(--muted); font-weight:600; }
 html { max-width: 100%; overflow-x: hidden; }
 body { max-width: 100%; }
 img { max-width: 100%; }
+
+
+/* ---------- popup ระหว่างรอ AI อ่านใบ (partials/loading_overlay.html) ---------- */
+/* htmx เติม class .htmx-request ให้ element ที่ตั้งเป็น hx-indicator ตอนกำลังยิง request
+   จึงเปิด/ปิด popup ด้วย CSS ล้วน ๆ ได้ ไม่ต้องพึ่ง JS
+   ห้ามใช้ class .htmx-indicator กับกล่องนี้ เพราะ htmx มี style ของตัวเองที่บังคับ
+   opacity:0 ให้ .htmx-indicator แล้วไล่ opacity ขึ้น — จะชนกับ display:flex ที่เราคุมเอง */
+#ai-loading { display:none; position:fixed; inset:0; z-index:100;
+              align-items:center; justify-content:center; padding:1rem;
+              background:rgba(26,26,26,.55); backdrop-filter:blur(3px); }
+#ai-loading.htmx-request { display:flex; }
+.ai-loading-card { background:#fff; border-radius:20px; padding:1.4rem 1.6rem 1.2rem;
+                   max-width:340px; width:100%; text-align:center;
+                   box-shadow:0 18px 50px rgba(0,0,0,.28);
+                   animation:ai-pop .25s ease-out; }
+@keyframes ai-pop { from { opacity:0; transform:translateY(12px) scale(.96); }
+                    to   { opacity:1; transform:none; } }
+.samanera { display:block; margin:0 auto .6rem; max-width:100%; height:auto; }
+.ai-loading-title { margin:0 0 .3rem; font-size:1.05rem; font-weight:700; }
+.ai-loading-tip { margin:0 0 .9rem; color:var(--muted); font-size:.9rem; min-height:2.4em; }
+.ai-loading-note { margin:.7rem 0 0; color:var(--muted); font-size:.75rem; }
+/* แถบวิ่งไปกลับ — เจตนาไม่บอก % เพราะเราไม่รู้จริงว่าเหลืออีกเท่าไร อย่าหลอกผู้ใช้ */
+.ai-loading-bar { height:6px; border-radius:99px; background:#f0e4cd; overflow:hidden; }
+.ai-loading-bar span { display:block; width:40%; height:100%; border-radius:99px;
+                       background:linear-gradient(90deg,#f2b544,#e0872b);
+                       animation:ai-slide 1.5s ease-in-out infinite; }
+@keyframes ai-slide { 0% { transform:translateX(-100%); } 100% { transform:translateX(250%); } }
+@media (prefers-reduced-motion: reduce) {
+  .ai-loading-card { animation:none; }
+  .ai-loading-bar span { width:100%; animation:none; }
+}
