@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="card">
-  <h2>อัปโหลดใบฝากรถ</h2>
+  <h2>อัปโหลดใบจอดรถ</h2>
   <p class="muted">ถ่ายจากมือถือหรือเลือกจากคลังรูปได้ อัปโหลดหลายใบพร้อมกันได้ · รองรับ HEIC จาก iPhone · ทุกใบจะเข้าคิวรอคนตรวจก่อนเสมอ</p>
   {# action/method/enctype ไว้เป็นทางสำรอง ถ้า htmx โหลดไม่ขึ้นฟอร์มจะยัง submit ได้จริง
      ไม่ใช่ยิง GET เปล่า ๆ แล้วไฟล์หายไปเฉย ๆ #}
   <form method="post" action="/api/ocr" enctype="multipart/form-data"
         hx-post="/api/ocr" hx-target="#result" hx-encoding="multipart/form-data"
-        hx-indicator="#busy" hx-disabled-elt="button">
+        hx-indicator="#ai-loading" hx-disabled-elt="button">
 
     <div class="row">
       <div class="col">
@@ -34,10 +34,10 @@
       </div>
     </div>
 
-    <label for="files">รูปใบฝากรถ</label>
+    <label for="files">รูปใบจอดรถ</label>
     <input type="file" id="files" name="files" accept="image/*,.heic,.heif" multiple required>
     <p><button type="submit">อ่านด้วย AI แล้วเข้าคิวตรวจ</button>
-       <span id="busy" class="htmx-indicator muted">⏳ กำลังอ่าน… (ราว 3 วินาทีต่อใบ)</span></p>
+       <span class="muted">ราว 3 วินาทีต่อใบ</span></p>
   </form>
   <p class="muted">model ที่ใช้: <code>{{ model }}</code></p>
 </div>
@@ -50,10 +50,12 @@
     <span class="badge">ผ่านเร็ว {{ counts.quick_pass }}</span>
     <span class="badge ok">อนุมัติแล้ว {{ counts.approved }}</span>
     <span class="badge bad">ตีกลับ {{ counts.rejected }}</span>
-    <span class="badge">ยังฝากอยู่ {{ counts.stored }}</span>
+    <span class="badge">ยังจอดอยู่ {{ counts.stored }}</span>
   </p>
 </div>
 {% endif %}
+
+{% include "partials/loading_overlay.html" %}
 
 <div id="result"></div>
 
@@ -93,6 +95,51 @@
       var name = sel.value === '__new__'
         ? document.getElementById('uploaded_by_new').value.trim() : sel.value;
       try { localStorage.setItem('uploaded_by', name); } catch (e) {}
+    });
+  })();
+
+  (function () {
+    // popup เณรน้อยระหว่างรอ AI — CSS เปิด/ปิดกล่องเองผ่าน class .htmx-request ของ htmx
+    // ส่วนนี้แค่เติมรายละเอียดให้คนรอไม่เคว้ง: จำนวนใบที่กำลังอ่าน, ข้อความหมุน, และ
+    // aria-hidden ให้ screen reader ไม่อ่านกล่องที่ซ่อนอยู่
+    var box = document.getElementById('ai-loading');
+    var files = document.getElementById('files');
+    // ยึดจากช่องไฟล์แล้วถอยไปหา .form ของมัน ไม่ใช่ query จากค่า hx-post
+    // เพราะถ้าวันหลังเปลี่ยน endpoint ปุ่มจะเงียบไปเฉย ๆ โดยไม่มีอะไรฟ้อง
+    var form = files && files.form;
+    if (!box || !form) return;
+    var titleEl = document.getElementById('ai-loading-title');
+    var tipEl = document.getElementById('ai-loading-tip');
+    var TIPS = [
+      'ใจเย็น ๆ นั่งพักหายใจไปพร้อมเณรน้อยสักครู่',
+      'AI กำลังไล่อ่านลายมือทีละช่อง…',
+      'อ่านเสร็จแล้วจะเข้าคิวให้คนตรวจยืนยันอีกรอบ',
+      'ยิ่งรูปชัดและเห็นใบเต็มใบ ยิ่งอ่านแม่น',
+      'ขออนุโมทนาบุญกับทีมงานทุกท่านครับ'
+    ];
+    var timer = null;
+
+    form.addEventListener('htmx:beforeRequest', function () {
+      var n = files && files.files ? files.files.length : 0;
+      titleEl.textContent = n > 1
+        ? 'AI กำลังอ่านใบจอดรถ ' + n + ' ใบ…'
+        : 'AI กำลังอ่านใบจอดรถ…';
+      var i = 0;
+      tipEl.textContent = TIPS[0];
+      timer = setInterval(function () {
+        i = (i + 1) % TIPS.length;
+        tipEl.textContent = TIPS[i];
+      }, 3500);
+      box.setAttribute('aria-hidden', 'false');
+      // ล็อกไม่ให้เลื่อนหน้าหลังระหว่างมี popup ทับอยู่
+      document.body.style.overflow = 'hidden';
+    });
+
+    // afterRequest ยิงทั้งกรณีสำเร็จและ error — popup ต้องหายทุกกรณี ไม่ค้างคาหน้าจอ
+    form.addEventListener('htmx:afterRequest', function () {
+      if (timer) { clearInterval(timer); timer = null; }
+      box.setAttribute('aria-hidden', 'true');
+      document.body.style.overflow = '';
     });
   })();
 </script>

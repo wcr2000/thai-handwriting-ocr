@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{% block title %}ระบบฝากรถน้ำท่วม{% endblock %}</title>
+<title>{% block title %}ระบบเอื้อเฟื้อที่จอดรถ{% endblock %}</title>
 {# เก็บ htmx ไว้ในเครื่องแทนการดึงจาก CDN — ถ้า unpkg ใช้ไม่ได้ (เน็ตมือถือในพื้นที่น้ำท่วม
    captive portal, DNS พัง) ฟอร์มจะ submit แบบ native โดยไม่มี enctype ไฟล์หายเงียบ ๆ #}
 <script src="/static/htmx.min.js"></script>
@@ -11,11 +11,11 @@
 </head>
 <body>
 <header>
-  <a class="brand" href="/">🚗 ระบบฝากรถ</a>
+  <a class="brand" href="/">🚗 ระบบเอื้อเฟื้อที่จอดรถ</a>
   <nav>
     <a href="/">อัปโหลด</a>
     <a href="/review">คิวตรวจสอบ</a>
-    <a href="/search">ค้นหา{% if user and user.is_admin %} / คืนรถ{% endif %}</a>
+    <a href="/search">ค้นหา{% if user and user.is_admin %} / รับรถกลับ{% endif %}</a>
     {% if user and user.is_admin %}
     <a href="/table">ตารางข้อมูล</a>
     <a href="/dashboard">สรุปภาพรวม</a>

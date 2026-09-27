@@ -50,7 +50,7 @@
 <form method="post" action="/review/{{ slip.id }}/approve" class="rev">
   <div class="rev-img">
     <a href="/image/{{ slip.id }}?kind=original" target="_blank" title="คลิกเพื่อดูรูปต้นฉบับเต็ม">
-      <img src="/image/{{ slip.id }}?kind=processed" alt="ใบฝากรถ"></a>
+      <img src="/image/{{ slip.id }}?kind=processed" alt="ใบจอดรถ"></a>
     <p class="muted" style="margin:.4rem 0 0">
        อัปโดย <strong>{{ slip.uploaded_by or '—' }}</strong>{% if slip.photographer and slip.photographer != slip.uploaded_by %}
        · ถ่ายโดย <strong>{{ slip.photographer }}</strong>{% endif %} ·
@@ -71,7 +71,7 @@
       <div class="grid2">
         {{ f('name', 'ชื่อ-นามสกุล', slip.name, problems, 2) }}
         {{ f('tel', 'เบอร์โทร', slip.tel, problems) }}
-        {{ f('date', 'วันที่ฝาก', slip.deposit_date, problems) }}
+        {{ f('date', 'วันที่เข้าจอด', slip.deposit_date, problems) }}
         {{ f('noplate', 'ทะเบียนรถ', slip.plate_raw, problems) }}
         {{ f('province', 'จังหวัด', slip.province, problems) }}
         {{ f('brand', 'ยี่ห้อ / รุ่น / สี', slip.brand, problems) }}
@@ -103,7 +103,7 @@
 <form method="post" action="/review/{{ slip.id }}/reject" class="card" style="margin-top:.8rem; padding:.7rem 1rem">
   <div class="row" style="align-items:flex-end; gap:.6rem">
     <div style="flex:1 1 320px">
-      <label for="reason" style="margin-top:0">ตีกลับ — รูปเบลอ / ไม่ใช่ใบฝากรถ / ข้อมูลใช้ไม่ได้</label>
+      <label for="reason" style="margin-top:0">ตีกลับ — รูปเบลอ / ไม่ใช่ใบจอดรถ / ข้อมูลใช้ไม่ได้</label>
       <input type="text" id="reason" name="reason" placeholder="เหตุผล">
     </div>
     <div><button type="submit" class="danger">ตีกลับ</button></div>

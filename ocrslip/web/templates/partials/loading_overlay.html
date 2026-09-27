@@ -1,0 +1,100 @@
+{# Popup ระหว่างรอ AI อ่านใบ — โชว์เณรน้อยนั่งสมาธิเป็นเพื่อนคนอัปโหลด
+
+   ใช้ร่วมกับ hx-indicator="#ai-loading": htmx จะเติม class .htmx-request ให้ element
+   ที่เป็น indicator ตอนเริ่มยิง request แล้วถอดออกเมื่อได้คำตอบ — CSS จึงเปิด/ปิด popup
+   ได้เองโดยไม่ต้องพึ่ง JS (ถ้า JS ในหน้าพังยังทำงานได้)
+
+   รูปเณรฝังเป็น inline SVG ไม่ใช่ <img src="...svg"> เพราะ CSS animation ใน SVG
+   ที่โหลดผ่าน <img> บางเบราว์เซอร์ไม่เล่นให้ และเราอยู่ออฟไลน์ได้ด้วย ไม่ต้องโหลดไฟล์เพิ่ม #}
+<div id="ai-loading" aria-hidden="true">
+  <div class="ai-loading-card" role="status" aria-live="polite">
+    <svg class="samanera" viewBox="0 0 200 200" width="180" height="180"
+         role="img" aria-label="สามเณรนั่งสมาธิ">
+      <style>
+        /* หายใจเข้า-ออก: ขยาย/หุบจากก้นขึ้นไป ไม่ใช่จากกลางภาพ ตัวจะได้ไม่ลอย */
+        .sn-body { animation: sn-breathe 3.6s ease-in-out infinite; transform-origin: 100px 168px; }
+        .sn-halo { animation: sn-halo 3.6s ease-in-out infinite; transform-origin: 100px 72px; }
+        .sn-spark { animation: sn-rise 3.6s ease-in-out infinite; }
+        .sn-spark2 { animation-delay: 1.2s; }
+        .sn-spark3 { animation-delay: 2.4s; }
+        @keyframes sn-breathe {
+          0%, 100% { transform: scale(1); }
+          50%      { transform: scale(1.035); }
+        }
+        @keyframes sn-halo {
+          0%, 100% { opacity: .35; transform: scale(.96); }
+          50%      { opacity: .85; transform: scale(1.04); }
+        }
+        @keyframes sn-rise {
+          0%   { opacity: 0; transform: translateY(0); }
+          25%  { opacity: .9; }
+          100% { opacity: 0; transform: translateY(-38px); }
+        }
+        /* เคารพการตั้งค่าเครื่องของผู้ใช้ที่ปิดภาพเคลื่อนไหว (ป้องกันเวียนหัว) */
+        @media (prefers-reduced-motion: reduce) {
+          .sn-body, .sn-halo, .sn-spark { animation: none; }
+        }
+      </style>
+
+      <circle cx="100" cy="100" r="94" fill="#fdf3e3"/>
+      <circle cx="100" cy="100" r="94" fill="none" stroke="#f0dfc2" stroke-width="2"/>
+
+      {# ดอกบัวใต้ที่นั่ง #}
+      <g fill="#f7c9cf">
+        <ellipse cx="66"  cy="170" rx="18" ry="8" transform="rotate(-16 66 170)"/>
+        <ellipse cx="134" cy="170" rx="18" ry="8" transform="rotate(16 134 170)"/>
+      </g>
+      <ellipse cx="100" cy="172" rx="24" ry="9" fill="#fbdde1"/>
+
+      {# รังสีรอบศีรษะ #}
+      <circle class="sn-halo" cx="100" cy="72" r="34" fill="none"
+              stroke="#f2b544" stroke-width="2.5" stroke-dasharray="4 7"/>
+
+      <g class="sn-body">
+        {# ขาขัดสมาธิ — รูปทรงเลนส์กว้างเป็นฐาน #}
+        <path d="M52 160 Q100 128 148 160 Q100 180 52 160 Z" fill="#e0872b"/>
+        {# แขนสองข้าง วาดก่อนลำตัวและใช้สีเข้มกว่า เพื่อให้เห็นเป็นแขนจริง ๆ
+           ไม่ใช่ก้อนกลมติดกับตัว (ถ้าวาดทับลำตัวด้วยสีเดียวกันจะกลายเป็นดักแด้) #}
+        <path d="M84 118 Q68 144 94 153" fill="none" stroke="#dd8526" stroke-width="11"
+              stroke-linecap="round"/>
+        <path d="M116 118 Q132 144 106 153" fill="none" stroke="#dd8526" stroke-width="11"
+              stroke-linecap="round"/>
+        {# ลำตัวห่มจีวร — บ่าแคบกว่าฐาน ให้ทรงรวมเป็นสามเหลี่ยมแบบท่านั่งสมาธิ #}
+        <path d="M80 156 C77 122 84 97 100 97 C116 97 123 122 120 156 Z" fill="#f4a03c"/>
+        {# สังฆาฏิพาดบ่าซ้าย #}
+        <path d="M93 101 Q86 130 88 156 L100 156 Q96 128 104 102 Z" fill="#e0872b" opacity=".7"/>
+        {# มือประสานกลางตัก #}
+        <ellipse cx="100" cy="152" rx="14" ry="7.5" fill="#f6cfa2"/>
+        <path d="M90 151 q10 6 20 0" fill="none" stroke="#e0b183" stroke-width="1.6"
+              stroke-linecap="round"/>
+
+        {# ศีรษะ #}
+        <ellipse cx="78"  cy="76" rx="5" ry="7" fill="#f0c295"/>
+        <ellipse cx="122" cy="76" rx="5" ry="7" fill="#f0c295"/>
+        <rect x="93" y="84" width="14" height="18" rx="7" fill="#eec095"/>
+        <circle cx="100" cy="72" r="25" fill="#f6cfa2"/>
+        {# ตาปิดสองข้าง + แก้ม + ยิ้มน้อย ๆ #}
+        <path d="M87 71 q6 5 12 0"  fill="none" stroke="#7a5230" stroke-width="2.4"
+              stroke-linecap="round"/>
+        <path d="M101 71 q6 5 12 0" fill="none" stroke="#7a5230" stroke-width="2.4"
+              stroke-linecap="round"/>
+        <ellipse cx="84"  cy="82" rx="5" ry="3" fill="#f7b3a8" opacity=".7"/>
+        <ellipse cx="116" cy="82" rx="5" ry="3" fill="#f7b3a8" opacity=".7"/>
+        <path d="M93 86 q7 5 14 0" fill="none" stroke="#7a5230" stroke-width="2.2"
+              stroke-linecap="round"/>
+      </g>
+
+      {# ประกายลอยขึ้นเป็นจังหวะ ให้รู้ว่าระบบยังทำงานอยู่ ไม่ได้ค้าง #}
+      <g fill="#f2b544">
+        <circle class="sn-spark"             cx="52"  cy="104" r="3"/>
+        <circle class="sn-spark sn-spark2"   cx="148" cy="110" r="2.5"/>
+        <circle class="sn-spark sn-spark3"   cx="100" cy="36"  r="2.5"/>
+      </g>
+    </svg>
+
+    <p class="ai-loading-title" id="ai-loading-title">AI กำลังอ่านใบจอดรถ…</p>
+    <p class="ai-loading-tip" id="ai-loading-tip">ใจเย็น ๆ นั่งพักหายใจไปพร้อมเณรน้อยสักครู่</p>
+    <div class="ai-loading-bar"><span></span></div>
+    <p class="ai-loading-note">อย่าปิดหน้านี้ · ระบบจะพาไปหน้าผลลัพธ์เองเมื่ออ่านเสร็จ</p>
+  </div>
+</div>

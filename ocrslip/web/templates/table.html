@@ -6,7 +6,7 @@
 {% endmacro %}
 {% block content %}
 <div class="card">
-  <h2>ตารางข้อมูลใบฝากรถ</h2>
+  <h2>ตารางข้อมูลใบจอดรถ</h2>
   <form method="get" action="/table" class="row" style="align-items:flex-end; gap:.7rem">
     <div style="flex:2 1 240px">
       <label for="q">ค้นหา (ชื่อ / เบอร์ / ทะเบียน / ยี่ห้อ / ที่จอด)</label>
@@ -22,7 +22,7 @@
     <div style="flex:1 1 130px">
       <label for="car_status">สถานะรถ</label>
       <select id="car_status" name="car_status">
-        {% for v, t in [('', 'ทั้งหมด'), ('stored', 'ยังฝากอยู่'), ('returned', 'รับคืนแล้ว')] %}
+        {% for v, t in [('', 'ทั้งหมด'), ('stored', 'ยังจอดอยู่'), ('returned', 'รับรถกลับแล้ว')] %}
         <option value="{{ v }}" {{ 'selected' if f.car_status == v }}>{{ t }}</option>{% endfor %}
       </select>
     </div>
@@ -46,7 +46,7 @@
   <table>
     <tr>
       {{ sorth('name', 'ชื่อ') }}{{ sorth('tel', 'เบอร์โทร') }}{{ sorth('plate', 'ทะเบียน') }}
-      {{ sorth('brand', 'ยี่ห้อ') }}<th>ประเภท</th><th>ที่จอด</th>{{ sorth('date', 'วันที่ฝาก') }}
+      {{ sorth('brand', 'ยี่ห้อ') }}<th>ประเภท</th><th>ที่จอด</th>{{ sorth('date', 'วันที่เข้าจอด') }}
       {{ sorth('uploaded_by', 'คนอัป') }}{{ sorth('review_status', 'ตรวจ') }}{{ sorth('car_status', 'รถ') }}<th></th>
     </tr>
     {% for r in rows %}
@@ -66,8 +66,8 @@
         {% elif r.needs_review %}<span class="badge warn">ต้องตรวจ</span>
         {% else %}<span class="badge">รอยืนยัน</span>{% endif %}
       </td>
-      <td>{% if r.car_status == 'returned' %}<span class="badge bad">คืนแล้ว</span>
-          {% else %}<span class="badge ok">ยังฝาก</span>{% endif %}</td>
+      <td>{% if r.car_status == 'returned' %}<span class="badge bad">รับกลับแล้ว</span>
+          {% else %}<span class="badge ok">ยังจอด</span>{% endif %}</td>
       <td><a href="/slips/{{ r.id }}">ดู</a>
           {% if r.review_status == 'pending' %} · <a href="/review/{{ r.id }}">ตรวจ</a>{% endif %}</td>
     </tr>

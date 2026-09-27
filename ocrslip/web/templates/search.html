@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="card">
-  <h2>ค้นหาใบฝากรถ</h2>
+  <h2>ค้นหาใบจอดรถ</h2>
   <p class="muted">พิมพ์ชื่อ เบอร์โทร หรือทะเบียนก็ได้ · สะกดผิดหรือเลขเพี้ยน 1-2 ตัวก็ยังหาเจอ</p>
   <input type="search" name="q" placeholder="เช่น สมชาย / 0800000000 / กก1234"
          hx-get="/api/search" hx-trigger="keyup changed delay:300ms, search"
