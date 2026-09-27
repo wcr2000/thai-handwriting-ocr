@@ -1,152 +1,232 @@
 {% extends "base.html" %}
-{% macro bars(title, rows, link_key=None, note='') %}
-  <div class="card">
-    <h3>{{ title }}</h3>
-    {% set top = (rows|map(attribute='n')|max) if rows else 1 %}
+{% block head %}<link rel="stylesheet" href="/static/dashboard.css">{% endblock %}
+
+{# แถบเทียบสัดส่วน: ความยาวแถบเทียบกับแถวที่มากที่สุด ส่วนตัวเลข % เทียบกับฐานที่บอกไว้ใต้การ์ด
+   ทุกการ์ดมี "ดูเป็นตาราง" ต่อท้ายเสมอ เพราะค่าที่อ่านได้จากความยาวแถบอย่างเดียวถือว่าอ่านไม่ได้ #}
+{% macro bars(title, rows, denom, hint='', link_key=None, tone='', foot='', empty='ยังไม่มีข้อมูล') %}
+<div class="panel">
+  <h4>{{ title }}</h4>
+  {% if hint %}<p class="hint">{{ hint }}</p>{% endif %}
+  {% set top = (rows|map(attribute='n')|max) if rows else 1 %}
+  <div class="blist">
     {% for r in rows %}
-    <div class="bar-row">
-      <div class="bar-label">{% if link_key %}<a href="/table?{{ link_key }}={{ r.label }}">{{ r.label }}</a>{% else %}{{ r.label }}{% endif %}</div>
-      <div class="bar-track"><div class="bar-fill" style="width:{{ (r.n / top * 100)|round(1) }}%"></div></div>
-      <div class="bar-n">{{ r.n }}</div>
+    <div class="brow">
+      <div class="lbl">{% if link_key and r.label != '— ไม่ระบุ —' %}
+        <a href="/table?{{ link_key }}={{ r.label|urlencode }}">{{ r.label }}</a>
+        {% else %}{{ r.label }}{% endif %}</div>
+      <div class="btrack"><div class="bfill {{ tone }}" style="width:{{ (r.n / (top or 1) * 100)|round(1) }}%"></div></div>
+      <div class="bn">{{ '{:,}'.format(r.n) }}<span class="pct">{{ '%.0f'|format(r.n / denom * 100 if denom else 0) }}%</span></div>
     </div>
-    {% else %}<p class="muted">ยังไม่มีข้อมูล</p>{% endfor %}
-    {% if note %}<p class="muted">{{ note }}</p>{% endif %}
+    {% else %}<p class="empty">{{ empty }}</p>{% endfor %}
   </div>
+  {% if rows %}
+  <details class="tableview"><summary>ดูเป็นตาราง</summary>
+    <div class="scroll"><table>
+      <thead><tr><th>{{ title }}</th><th class="n">ใบ</th><th class="n">สัดส่วน</th></tr></thead>
+      <tbody>{% for r in rows %}<tr><td>{{ r.label }}</td><td class="n">{{ '{:,}'.format(r.n) }}</td>
+        <td class="n">{{ '%.1f'|format(r.n / denom * 100 if denom else 0) }}%</td></tr>{% endfor %}</tbody>
+    </table></div>
+  </details>
+  {% endif %}
+  {% if foot %}<p class="foot">{{ foot }}</p>{% endif %}
+</div>
 {% endmacro %}
+
 {% block content %}
-<style>
-  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:.8rem; margin-bottom:1rem; }
-  .kpi { background:#fff; border:1px solid var(--line); border-radius:10px; padding:.9rem 1rem; }
-  .kpi .n { font-size:1.9rem; font-weight:700; line-height:1.1; }
-  .kpi .t { color:var(--muted); font-size:.85rem; }
-  .kpi a { color:inherit; text-decoration:none; }
-  .bar-row { display:flex; align-items:center; gap:.6rem; margin:.35rem 0; }
-  .bar-label { flex:0 0 40%; font-size:.9rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .bar-track { flex:1; background:#eef1f6; border-radius:99px; height:14px; overflow:hidden; }
-  .bar-fill { height:100%; background:#2557a7; border-radius:99px; }
-  .bar-n { flex:0 0 2.5rem; text-align:right; font-variant-numeric:tabular-nums; }
-    /* พอข้อมูลเกิน ~12 วัน คอลัมน์จะล้นกรอบ ถ้าไม่ให้เลื่อนจะโดนตัดหายโดยดูเหมือนครบ */
-  .day-chart { display:flex; align-items:flex-end; gap:.5rem; min-height:150px;
-               padding-top:.5rem; overflow-x:auto; }
-  .day-col { flex:0 0 44px; display:flex; flex-direction:column; justify-content:flex-end; align-items:center; gap:.2rem; }
-  .day-bar { width:70%; background:#2557a7; border-radius:4px 4px 0 0; min-height:2px; }
-  .day-bar.ret { background:#0a7d34; }
-  .day-x { font-size:.7rem; color:var(--muted); }
-</style>
+<div class="dash">
 
-<h2>สรุปภาพรวม</h2>
-<div class="kpis">
-  <div class="kpi"><div class="n">{{ kpi.total }}</div><div class="t"><a href="/table">ใบทั้งหมด</a></div></div>
-  <div class="kpi"><div class="n" style="color:var(--ok)">{{ kpi.stored }}</div><div class="t"><a href="/table?car_status=stored">ยังจอดอยู่</a></div></div>
-  <div class="kpi"><div class="n">{{ kpi.returned }}</div><div class="t"><a href="/table?car_status=returned">รับรถกลับแล้ว</a></div></div>
-  <div class="kpi"><div class="n" style="color:var(--warn)">{{ kpi.needs_review }}</div><div class="t"><a href="/review">ต้องตรวจ</a></div></div>
-  <div class="kpi"><div class="n">{{ kpi.approved }}</div><div class="t"><a href="/table?review_status=approved">อนุมัติแล้ว</a></div></div>
-  <div class="kpi"><div class="n">{{ '%.0f'|format(kpi.returned / kpi.total * 100 if kpi.total else 0) }}%</div><div class="t">รับรถกลับแล้ว</div></div>
+<div class="dash-head">
+  <div>
+    <p class="eyebrow">สรุปภาพรวม</p>
+    <div class="hero">{{ '{:,}'.format(kpi.total) }}<small>ใบฝากรถในระบบ</small></div>
+    <p class="asof">รับรถกลับแล้ว {{ '{:,}'.format(kpi.returned) }} ใบ ·
+       ตรวจแล้ว {{ '{:,}'.format(reviewed) }} ใบ · ค่า AI รวม {{ '%.0f'|format(kpi.cost_usd|float * usd_thb) }} บาท</p>
+  </div>
+  <div class="actions"><a href="/table" class="btn ghost">ตารางข้อมูล</a>
+    <a href="/export.xlsx" class="btn ghost">⬇ Excel</a></div>
 </div>
 
-<div class="card">
+{# ---------- สถานะรถ + งานตรวจ: ตัวเลขที่ต้องดูทุกวัน ---------- #}
+<section class="block">
+  <h3>สถานะปัจจุบัน</h3>
+  <p class="hint">กดตัวเลขเพื่อเปิดรายการใบที่นับอยู่ในช่องนั้น</p>
+  <div class="tiles">
+    <div class="tile">
+      <div class="t"><a href="/table?car_status=stored">ยังจอดอยู่</a></div>
+      <div class="v">{{ '{:,}'.format(kpi.stored) }}</div>
+      <div class="meter"><i style="width:{{ (kpi.stored / kpi.total * 100)|round(1) if kpi.total else 0 }}%"></i></div>
+      <div class="sub">{{ '%.1f'|format(kpi.stored / kpi.total * 100 if kpi.total else 0) }}% ของใบทั้งหมด</div>
+    </div>
+    <div class="tile">
+      <div class="t"><a href="/table?car_status=returned">รับรถกลับแล้ว</a></div>
+      <div class="v">{{ '{:,}'.format(kpi.returned) }}</div>
+      <div class="meter ok"><i style="width:{{ (kpi.returned / kpi.total * 100)|round(1) if kpi.total else 0 }}%"></i></div>
+      <div class="sub">{{ '%.1f'|format(kpi.returned / kpi.total * 100 if kpi.total else 0) }}% ของใบทั้งหมด</div>
+    </div>
+    <div class="tile{{ ' flag' if kpi.needs_review else '' }}">
+      <div class="t"><a href="/review">รอตรวจ (ติด flag)</a></div>
+      <div class="v">{{ '{:,}'.format(kpi.needs_review) }}</div>
+      <div class="sub">อยู่ในคิวรอทั้งหมด {{ '{:,}'.format(kpi.pending) }} ใบ</div>
+    </div>
+    <div class="tile">
+      <div class="t"><a href="/table?review_status=approved">อนุมัติแล้ว</a></div>
+      <div class="v">{{ '{:,}'.format(kpi.approved) }}</div>
+      <div class="meter"><i style="width:{{ (kpi.approved / kpi.total * 100)|round(1) if kpi.total else 0 }}%"></i></div>
+      <div class="sub">ตีกลับ {{ '{:,}'.format(kpi.rejected) }} ใบ</div>
+    </div>
+  </div>
+</section>
+
+{# ---------- กราฟรายวัน ---------- #}
+<section class="block">
+  <h3>ใบฝากรถต่อวัน</h3>
+  <p class="hint">30 วันล่าสุด นับตามวันที่บนใบ · ชี้ที่แท่งเพื่อดูตัวเลขของวันนั้น</p>
+  <div class="panel">
+    <div class="legend">
+      <span><i></i> ยังจอดอยู่</span>
+      <span><i class="ret"></i> รับรถกลับแล้ว</span>
+    </div>
+    {% set top_day = (by_day|map(attribute='n')|max) if by_day else 0 %}
+    {% set ticks = axis_ticks(top_day) %}
+    {% set ymax = ticks[-1] %}
+    <div class="chart">
+      <div class="plot">
+        {% for t in ticks %}
+        <div class="gl{{ ' base' if loop.first else '' }}" style="bottom:{{ (t / ymax * 100)|round(2) }}%">
+          <span>{{ '{:,}'.format(t) }}</span></div>
+        {% endfor %}
+        <div class="cols">
+          {% for d in by_day %}
+          {% set stored = d.n - d.returned %}
+          <div class="dcol" tabindex="0">
+            <div class="tip">{{ d.label.strftime('%d/%m/%Y') }}<br>
+              ยังจอดอยู่ {{ '{:,}'.format(stored) }} ใบ<br>
+              รับกลับแล้ว {{ '{:,}'.format(d.returned) }} ใบ</div>
+            {% if d.n == top_day and d.n > 0 %}<div class="peak">{{ '{:,}'.format(d.n) }}</div>{% endif %}
+            {% if stored %}<div class="seg v top" style="height:{{ (stored / ymax * 100)|round(2) }}%"></div>{% endif %}
+            {% if d.returned %}<div class="seg v ret{{ ' top' if not stored else '' }}"
+                 style="height:{{ (d.returned / ymax * 100)|round(2) }}%"></div>{% endif %}
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="xaxis">
+        {% for d in by_day %}
+        <div class="xtick">{{ d.label.strftime('%-d/%-m') if loop.index0 % 5 == 0 or loop.last else '' }}</div>
+        {% endfor %}
+      </div>
+    </div>
+
+    {# ใบที่ตกขอบกราฟต้องบอกจำนวนไว้ ไม่งั้นกราฟจะดูเหมือนข้อมูลทั้งหมด #}
+    {% set out = date_health.no_date + date_health.odd_date + date_health.older %}
+    {% if out %}
+    <div class="callout">
+      <span>⚠</span>
+      <div>ยังมีอีก <b>{{ '{:,}'.format(out) }}</b> ใบที่ไม่ได้อยู่ในกราฟนี้ —
+        วันที่ผิดปกติ (ปีที่เป็นไปไม่ได้ เช่น 2083) <b>{{ '{:,}'.format(date_health.odd_date) }}</b> ใบ ·
+        อ่านวันที่ไม่ออก <b>{{ '{:,}'.format(date_health.no_date) }}</b> ใบ ·
+        เก่ากว่า 30 วัน <b>{{ '{:,}'.format(date_health.older) }}</b> ใบ
+        <br>กราฟข้างบนจึงครอบเพียง {{ '{:,}'.format(date_health.in_window) }} ใบ
+        ({{ '%.0f'|format(date_health.in_window / kpi.total * 100 if kpi.total else 0) }}% ของทั้งหมด)
+      </div>
+    </div>
+    {% endif %}
+
+    <details class="tableview"><summary>ดูเป็นตาราง</summary>
+      <div class="scroll"><table>
+        <thead><tr><th>วันที่</th><th class="n">ทั้งหมด</th><th class="n">ยังจอดอยู่</th><th class="n">รับกลับแล้ว</th></tr></thead>
+        <tbody>{% for d in by_day %}<tr><td>{{ d.label.strftime('%d/%m/%Y') }}</td>
+          <td class="n">{{ '{:,}'.format(d.n) }}</td>
+          <td class="n">{{ '{:,}'.format(d.n - d.returned) }}</td>
+          <td class="n">{{ '{:,}'.format(d.returned) }}</td></tr>{% endfor %}</tbody>
+      </table></div>
+    </details>
+  </div>
+</section>
+
+{# ---------- ค่าใช้จ่าย AI ---------- #}
+<section class="block">
   <h3>ค่าใช้จ่าย AI</h3>
-  <div class="kpis" style="margin:0">
-    <div class="kpi"><div class="n">{{ '%.2f'|format(kpi.avg_cost_usd|float * usd_thb) }}</div>
-      <div class="t">บาท / ใบ (เฉลี่ยจริง)</div></div>
-    <div class="kpi"><div class="n">{{ '%.2f'|format(kpi.cost_usd|float * usd_thb) }}</div>
-      <div class="t">บาท ใช้ไปทั้งหมด ({{ kpi.total }} ใบ)</div></div>
-    <div class="kpi"><div class="n">{{ '%.0f'|format(kpi.avg_cost_usd|float * usd_thb * 1000) }}</div>
-      <div class="t">บาท ต่อ 1,000 ใบ</div></div>
-    <div class="kpi"><div class="n">{{ '%.1f'|format(kpi.avg_latency|float) }}s</div>
-      <div class="t">เวลาอ่านเฉลี่ยต่อใบ</div></div>
+  <p class="hint">คิดจากค่าที่ OpenRouter เรียกเก็บจริงต่อใบ (เก็บลง DB ทุกครั้งที่อ่าน)
+     แปลงที่ {{ usd_thb }} บาท/USD — ปรับอัตราได้ที่ <code>USD_THB</code> ใน .env</p>
+  <div class="tiles">
+    <div class="tile"><div class="t">ค่าเฉลี่ยต่อใบ</div>
+      <div class="v">{{ '%.3f'|format(kpi.avg_cost_usd|float * usd_thb) }}<span class="unit">บาท</span></div>
+      <div class="sub">≈ {{ '%.0f'|format(kpi.avg_cost_usd|float * usd_thb * 1000) }} บาท ต่อ 1,000 ใบ</div></div>
+    <div class="tile"><div class="t">ใช้ไปทั้งหมด</div>
+      <div class="v">{{ '%.2f'|format(kpi.cost_usd|float * usd_thb) }}<span class="unit">บาท</span></div>
+      <div class="sub">จาก {{ '{:,}'.format(kpi.total) }} ใบ</div></div>
+    <div class="tile"><div class="t">เวลาอ่านเฉลี่ยต่อใบ</div>
+      <div class="v">{{ '%.1f'|format(kpi.avg_latency|float) }}<span class="unit">วินาที</span></div>
+      <div class="sub">เวลาที่คนอัปโหลดต้องรอหน้าจอ</div></div>
+    <div class="tile"><div class="t">ค่าใช้จ่ายถ้าครบ 10,000 ใบ</div>
+      <div class="v">{{ '%.0f'|format(kpi.avg_cost_usd|float * usd_thb * 10000) }}<span class="unit">บาท</span></div>
+      <div class="sub">ประมาณจากค่าเฉลี่ยปัจจุบัน</div></div>
   </div>
-  <p class="muted">คิดจากค่าที่ OpenRouter เรียกเก็บจริงต่อใบ (เก็บลง DB ทุกครั้งที่อ่าน) แปลงที่ {{ usd_thb }} บาท/USD —
-     ปรับอัตราได้ที่ <code>USD_THB</code> ใน .env</p>
-</div>
+</section>
 
-<div class="card">
-  <h3>ใบจอดรถต่อวัน <span class="muted">(น้ำเงิน = เข้าจอดทั้งหมด · เขียว = รับกลับแล้ว)</span></h3>
-  {% set top_day = (by_day|map(attribute='n')|max) if by_day else 1 %}
-  <div class="day-chart">
-    {% for d in by_day %}
-    <div class="day-col" title="{{ d.label }} — เข้าจอด {{ d.n }} รับกลับ {{ d.returned }}">
-      <div class="bar-n">{{ d.n }}</div>
-      <div class="day-bar" style="height:{{ [(d.n / top_day * 100)|round|int, 3]|max }}px"></div>
-      <div class="day-bar ret" style="height:{{ (d.returned / top_day * 100)|round|int }}px"></div>
-      <div class="day-x">{{ d.label.strftime('%d/%m') }}</div>
-    </div>
-    {% else %}<p class="muted">ยังไม่มีใบที่ระบุวันที่</p>{% endfor %}
+{# ---------- องค์ประกอบของรถ ---------- #}
+<section class="block">
+  <h3>รถที่รับฝาก</h3>
+  <p class="hint">8 อันดับแรกของแต่ละหมวด · สัดส่วนเทียบกับใบทั้งหมด {{ '{:,}'.format(kpi.total) }} ใบ</p>
+  <div class="grid2">
+    {{ bars('ประเภทรถ', by_type, kpi.total, link_key='car_type') }}
+    {{ bars('ยี่ห้อ', by_brand, kpi.total, link_key='q') }}
+    {{ bars('ที่จอด', by_location, kpi.total, link_key='q') }}
   </div>
-</div>
+</section>
 
-<div class="row">
-  <div class="col">{{ bars('แยกตามประเภทรถ', by_type, 'car_type') }}</div>
-  <div class="col">{{ bars('แยกตามยี่ห้อ', by_brand, 'q') }}</div>
-</div>
-<div class="row">
-  <div class="col">
-    <div class="card">
-      <h3>ใครอัปโหลดไปกี่ใบ</h3>
-      {% set top_u = (by_uploader|map(attribute='n')|max) if by_uploader else 1 %}
-      {% for r in by_uploader %}
-      <div class="bar-row">
-        <div class="bar-label">{% if r.label == '— ไม่ระบุ —' %}{{ r.label }}
-          {% else %}<a href="/table?uploaded_by={{ r.label|urlencode }}">{{ r.label }}</a>{% endif %}</div>
-        <div class="bar-track"><div class="bar-fill" style="width:{{ (r.n / top_u * 100)|round(1) }}%"></div></div>
-        <div class="bar-n">{{ r.n }}</div>
-      </div>
-      {% else %}<p class="muted">ยังไม่มีข้อมูล</p>{% endfor %}
-      <p class="muted">คนที่ถ่าย/อัปรูปเข้าระบบ · กดชื่อเพื่อดูใบของคนนั้น</p>
-    </div>
-  </div>
-  <div class="col">
-    <div class="card">
-      <h3>ใครตรวจไปกี่ใบ</h3>
+{# ---------- ทีมงาน ---------- #}
+<section class="block">
+  <h3>ทีมงาน</h3>
+  <p class="hint">คนอัปโหลดกับคนตรวจเป็นคนละบทบาท จึงนับแยกกัน</p>
+  <div class="grid2">
+    {{ bars('ใครอัปโหลดไปกี่ใบ', by_uploader, kpi.total, hint='คนที่ถ่าย/อัปรูปเข้าระบบ',
+            link_key='uploaded_by', foot='กดชื่อเพื่อดูใบของคนนั้น') }}
+    <div class="panel">
+      <h4>ใครตรวจไปกี่ใบ</h4>
+      <p class="hint">แถบคือจำนวนที่ <strong>อนุมัติ</strong> · เลขจาง ↩ คือที่ตีกลับ</p>
       {% set top_rv = (by_reviewer|map(attribute='n')|max) if by_reviewer else 1 %}
-      {% for r in by_reviewer %}
-      <div class="bar-row">
-        <div class="bar-label">{% if r.label == '— ไม่ระบุ —' %}{{ r.label }}
-          {% else %}<a href="/table?reviewed_by={{ r.label|urlencode }}&review_status=approved">{{ r.label }}</a>{% endif %}</div>
-        <div class="bar-track"><div class="bar-fill" style="width:{{ (r.n / top_rv * 100)|round(1) }}%"></div></div>
-        <div class="bar-n">{{ r.n }}{% if r.rejected %}
-          <a class="muted" href="/table?reviewed_by={{ r.label|urlencode }}&review_status=rejected"
-             title="ตีกลับ {{ r.rejected }} ใบ">+{{ r.rejected }}↩</a>{% endif %}</div>
+      <div class="blist">
+        {% for r in by_reviewer %}
+        <div class="brow">
+          <div class="lbl">{% if r.label == '— ไม่ระบุ —' %}{{ r.label }}
+            {% else %}<a href="/table?reviewed_by={{ r.label|urlencode }}&review_status=approved">{{ r.label }}</a>{% endif %}</div>
+          <div class="btrack"><div class="bfill" style="width:{{ (r.n / (top_rv or 1) * 100)|round(1) }}%"></div></div>
+          <div class="bn">{{ '{:,}'.format(r.n) }}<span class="pct">{{ '%.0f'|format(r.n / reviewed * 100 if reviewed else 0) }}%</span>{% if r.rejected %}
+            <a class="ret" href="/table?reviewed_by={{ r.label|urlencode }}&review_status=rejected"
+               title="ตีกลับ {{ r.rejected }} ใบ">+{{ r.rejected }}↩</a>{% endif %}</div>
+        </div>
+        {% else %}<p class="empty">ยังไม่มีใครตรวจ</p>{% endfor %}
       </div>
-      {% else %}<p class="muted">ยังไม่มีใครตรวจ</p>{% endfor %}
-      <p class="muted">แถบคือจำนวนที่ <strong>อนุมัติ</strong> · เลขจาง ↩ คือที่ตีกลับ ·
-         คนละคนกับคนอัปโหลด กดชื่อเพื่อดูใบที่คนนั้นตรวจ</p>
-      <p class="muted">ชื่อที่ตรงกับชื่อบัญชีล็อกอิน (staff / admin / approve) คือใบที่ตรวจไว้
-         ก่อนระบบจะบังคับเลือกชื่อคนจริง — ยังแยกไม่ได้ว่าใครในบัญชีนั้นเป็นคนตรวจ</p>
+      {% if by_reviewer %}
+      <details class="tableview"><summary>ดูเป็นตาราง</summary>
+        <div class="scroll"><table>
+          <thead><tr><th>ผู้ตรวจ</th><th class="n">อนุมัติ</th><th class="n">ตีกลับ</th></tr></thead>
+          <tbody>{% for r in by_reviewer %}<tr><td>{{ r.label }}</td>
+            <td class="n">{{ '{:,}'.format(r.n) }}</td><td class="n">{{ '{:,}'.format(r.rejected) }}</td></tr>{% endfor %}</tbody>
+        </table></div>
+      </details>
+      {% endif %}
+      <p class="foot">ชื่อที่ตรงกับชื่อบัญชีล็อกอิน (staff / admin / approve) คือใบที่ตรวจไว้
+        ก่อนระบบจะบังคับเลือกชื่อคนจริง — ยังแยกไม่ได้ว่าใครในบัญชีนั้นเป็นคนตรวจ</p>
     </div>
   </div>
-</div>
-<div class="row">
-  <div class="col">{{ bars('แยกตามที่จอด', by_location, 'q') }}</div>
-</div>
-<div class="row">
-  <div class="col">
-    <div class="card">
-      <h3>เหตุผลที่ถูกส่งเข้าคิวตรวจ</h3>
-      {% set top_r = (reasons|map(attribute='n')|max) if reasons else 1 %}
-      {% for r in reasons %}
-      <div class="bar-row">
-        <div class="bar-label">{{ reason_labels.get(r.label, r.label) }}</div>
-        <div class="bar-track"><div class="bar-fill" style="width:{{ (r.n / top_r * 100)|round(1) }}%; background:var(--warn)"></div></div>
-        <div class="bar-n">{{ r.n }}</div>
-      </div>
-      {% else %}<p class="muted">ไม่มีใบไหนติด flag</p>{% endfor %}
-    </div>
-  </div>
-</div>
+</section>
 
-<div class="card">
+{# ---------- คุณภาพการอ่านของ AI ---------- #}
+<section class="block">
   <h3>คุณภาพการอ่านของ AI</h3>
-  <p class="muted">นับจากช่องที่เจ้าหน้าที่ต้องแก้จริงใน {{ reviewed }} ใบที่ตรวจไปแล้ว — ใช้ดูว่าควรปรับ prompt หรือเปลี่ยน model ตรงไหน</p>
-  {% set top_e = (edits|map(attribute='n')|max) if edits else 1 %}
-  {% for e in edits %}
-  <div class="bar-row">
-    <div class="bar-label">{{ {'name':'ชื่อ-นามสกุล','tel':'เบอร์โทร','plate_raw':'ทะเบียน','brand':'ยี่ห้อ','car_type':'ประเภทรถ','location':'ที่จอด','deposit_date':'วันที่','province':'จังหวัด'}.get(e.label, e.label) }}</div>
-    <div class="bar-track"><div class="bar-fill" style="width:{{ (e.n / top_e * 100)|round(1) }}%; background:var(--warn)"></div></div>
-    <div class="bar-n">{{ e.n }}</div>
+  <p class="hint">ใช้ตัดสินใจว่าควรแก้ prompt หรือเปลี่ยน model ตรงไหน</p>
+  <div class="grid2">
+    {{ bars('เหตุผลที่ถูกส่งเข้าคิวตรวจ', reasons|map('to_reason')|list, kpi.total,
+            hint='ใบหนึ่งติดได้หลายเหตุผล ตัวเลขจึงรวมกันเกินจำนวนใบได้',
+            tone='serious', empty='ไม่มีใบไหนติด flag') }}
+    {{ bars('ช่องที่เจ้าหน้าที่ต้องแก้', edits|map('to_field')|list, reviewed,
+            hint='นับจาก ' ~ '{:,}'.format(reviewed) ~ ' ใบที่ตรวจไปแล้ว',
+            tone='warn', empty='ยังไม่มีการแก้ไข') }}
   </div>
-  {% else %}<p class="muted">ยังไม่มีการแก้ไข</p>{% endfor %}
-</div>
+</section>
 
-<p><a href="/export.xlsx" class="btn ghost">⬇ โหลดข้อมูลทั้งหมดเป็น Excel</a></p>
+</div>
 {% endblock %}

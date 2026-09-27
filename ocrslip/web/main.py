@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import io
+import math
 import secrets
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -62,6 +63,42 @@ app.mount("/static", NoCacheStatic(directory=HERE / "static"), name="static")
 templates = Jinja2Templates(directory=HERE / "templates")
 templates.env.globals["reason_labels"] = REASON_LABELS
 templates.env.globals["usd_thb"] = USD_THB
+
+
+def axis_ticks(top: int, divisions: int = 4) -> list[int]:
+    """หาเส้นกริดแกน Y ที่เป็นเลขกลม ๆ และครอบค่าสูงสุดพอดี
+
+    ถ้าปล่อยให้เพดานแกนเป็นค่าสูงสุดดิบ ป้ายกริดจะกลายเป็นเลขอย่าง 1,217
+    ซึ่งอ่านแล้วเทียบแท่งอื่นไม่ได้ — แกนมีหน้าที่บอกค่าของแท่งที่ไม่ได้ติดป้ายไว้
+    """
+    if top <= 0:
+        return [0, 1]
+    step = top / divisions
+    mag = 10 ** math.floor(math.log10(step))
+    for m in (1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10):
+        if step <= m * mag:
+            step = m * mag
+            break
+    step = max(1, int(round(step)))
+    return [step * i for i in range(divisions + 1)]
+
+
+templates.env.globals["axis_ticks"] = axis_ticks
+
+# ชื่อช่องที่คนอ่านรู้เรื่อง — ใช้กับกราฟ "ช่องที่เจ้าหน้าที่ต้องแก้"
+FIELD_LABELS = {
+    "name": "ชื่อ-นามสกุล", "tel": "เบอร์โทร", "plate_raw": "ทะเบียน", "brand": "ยี่ห้อ",
+    "car_type": "ประเภทรถ", "location": "ที่จอด", "deposit_date": "วันที่", "province": "จังหวัด",
+}
+
+
+def _relabel(row: dict, table: dict) -> dict:
+    """แทนชื่อ key ดิบจาก DB ด้วยชื่อภาษาคน โดยไม่แก้ dict เดิม"""
+    return {**row, "label": table.get(row["label"], row["label"])}
+
+
+templates.env.filters["to_reason"] = lambda r: _relabel(r, REASON_LABELS)
+templates.env.filters["to_field"] = lambda r: _relabel(r, FIELD_LABELS)
 
 FORM_FIELDS = ("name", "tel", "date", "noplate", "province", "brand", "typecar", "location")
 
