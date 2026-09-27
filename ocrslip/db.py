@@ -16,7 +16,7 @@ from psycopg.rows import dict_row
 
 from .config import DATABASE_URL, DB_SCHEMA
 from .normalize import (
-    norm_brand, norm_cartype, norm_name, norm_phone, norm_plate, norm_province, parse_date,
+    _base, norm_brand, norm_cartype, norm_name, norm_phone, norm_plate, norm_province, parse_date,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -231,6 +231,23 @@ def list_slips(
     return cur.fetchall()
 
 
+def next_in_queue(conn: psycopg.Connection, slip_id: str) -> tuple[str | None, int]:
+    """(id ใบถัดไปในคิว, จำนวนใบที่ยังค้าง) — ถามฐานข้อมูลตรง ๆ
+
+    เดิมดึงคิวทั้งกอง (SELECT * 200 แถว พร้อม jsonb ของ OCR) มาเรียงใน Python
+    เพื่อเอาแค่ใบแรกกับจำนวน ซึ่งหนักเกินเหตุเพราะหน้านี้เปิดทุกครั้งที่ตรวจ 1 ใบ
+
+    เรียงให้ใบที่ต้องตรวจมาก่อน แล้วไล่จากใบเก่าสุด (เคลียร์งานตกค้างให้หมดก่อน)
+    """
+    nxt = conn.execute(
+        f"SELECT id, count(*) OVER () AS remaining FROM {DB_SCHEMA}.slips"
+        " WHERE review_status = 'pending' AND id <> %s"
+        " ORDER BY needs_review DESC, created_at ASC LIMIT 1",
+        (slip_id,),
+    ).fetchone()
+    return (str(nxt["id"]), nxt["remaining"]) if nxt else (None, 0)
+
+
 def known_people(conn: psycopg.Connection) -> list[str]:
     """รายชื่อที่ยังใช้งานอยู่ ไว้ให้เลือกตอนอัปโหลด"""
     cur = conn.execute(
@@ -318,17 +335,24 @@ def export_rows(conn: psycopg.Connection, filters: tuple[str, dict] | None = Non
 def build_filters(
     q: str | None = None,
     review_status: str | None = None,
+    needs_review: bool | None = None,
     car_status: str | None = None,
     car_type: str | None = None,
 ) -> tuple[str, dict]:
-    """สร้าง WHERE clause ที่ใช้ร่วมกันระหว่างหน้าตาราง, ตัวนับ และ Excel
+    """สร้าง WHERE clause ที่ใช้ร่วมกันระหว่างหน้าตาราง, คิวตรวจ, ตัวนับ และ Excel
 
     ใช้ตัวเดียวกันทุกที่ เพื่อให้ปุ่ม 'โหลด Excel' ได้ข้อมูลตรงกับที่เห็นบนจอเสมอ
+
+    ค้นบนคอลัมน์ *_norm ไม่ใช่คอลัมน์ดิบ เพราะ trigram index อยู่บน *_norm
+    ถ้า ILIKE คอลัมน์ดิบ index ใช้ไม่ได้เลย ทุกการค้นจะกวาดทั้งตาราง
     """
     where, params = ["TRUE"], {}
     if review_status:
         where.append("review_status = %(review_status)s")
         params["review_status"] = review_status
+    if needs_review is not None:
+        where.append("needs_review = %(needs_review)s")
+        params["needs_review"] = needs_review
     if car_status:
         where.append("car_status = %(car_status)s")
         params["car_status"] = car_status
@@ -336,14 +360,24 @@ def build_filters(
         where.append("car_type = %(car_type)s")
         params["car_type"] = car_type
     if q and q.strip():
-        parts = ["name ILIKE %(q)s", "plate_raw ILIKE %(q)s",
-                 "brand ILIKE %(q)s", "location ILIKE %(q)s"]
-        params["q"] = f"%{q.strip()}%"
+        # normalize คำค้นแบบเดียวกับตอนบันทึก ไม่งั้นพิมพ์ "นายสมชาย" จะไม่เจอแถวที่เก็บ "สมชาย"
+        # ใส่เฉพาะช่องที่ normalize แล้วยังเหลือข้อความ ไม่งั้น LIKE '%%' จะแมตช์ทุกแถว
+        parts = []
+        for col, key, val in (
+            ("name_norm", "qname", norm_name(q)),
+            ("plate_norm", "qplate", norm_plate(q)),
+            ("brand_norm", "qbrand", norm_brand(q)),
+            ("location", "qloc", _base(q).strip()),   # ที่จอดไม่มีคอลัมน์ norm ใช้ trgm บนคอลัมน์ดิบ
+        ):
+            if val:
+                parts.append(f"{col} ILIKE %({key})s")
+                params[key] = f"%{val}%"
         digits = "".join(ch for ch in q if ch.isdigit())
         if digits:  # ถ้าไม่มีตัวเลขเลย ห้ามใส่เงื่อนไขเบอร์ ไม่งั้น LIKE '%%' จะแมตช์ทุกแถว
             parts.append("tel_digits LIKE %(qd)s")
             params["qd"] = f"%{digits}%"
-        where.append(f"({' OR '.join(parts)})")
+        if parts:
+            where.append(f"({' OR '.join(parts)})")
     return " AND ".join(where), params
 
 
@@ -359,21 +393,41 @@ def query_slips(
     conn: psycopg.Connection, *, filters: tuple[str, dict],
     sort: str = "created_at", desc: bool = True, page: int = 1, per_page: int = 50,
 ) -> tuple[list[dict], int]:
+    """(แถวของหน้านี้, จำนวนทั้งหมดที่เข้าเงื่อนไข) ในการคุยกับฐานข้อมูลรอบเดียว
+
+    ฐานข้อมูลอยู่คนละเครื่องกับเว็บ RTT วัดได้ 60-550 ms ขณะที่งานฝั่ง Postgres
+    ใช้ไม่ถึง 1 ms ฉะนั้นตัวที่กินเวลาคือ "จำนวนรอบที่คุย" ไม่ใช่ความหนักของ query
+    count(*) OVER () จึงคุ้มกว่าการยิง COUNT(*) แยกอีกรอบ
+    (แลกกับการที่ window ต้องอ่านแถวที่แมตช์ทั้งหมด วัดที่ ~1,000 ใบได้ 1.3 ms
+    ยังถูกกว่า RTT หลายสิบเท่า — ถ้าวันหนึ่งใบเป็นแสนแล้วช้า ค่อยกลับมาแยก COUNT)
+
+    ไม่ SELECT * เพราะจะลาก raw_ocr / ocr_confidence (jsonb ก้อนใหญ่) มาเปล่า ๆ
+    ทั้งที่หน้าตารางกับคิวตรวจไม่ได้ใช้ — วัดแล้วต่างกันหลายเท่าตัวบนสายจริง
+    """
     where, params = filters
-    total = conn.execute(
-        f"SELECT count(*) AS n FROM {DB_SCHEMA}.slips WHERE {where}", params
-    ).fetchone()["n"]
     order = SORTABLE.get(sort, "created_at")
     rows = conn.execute(
         f"""SELECT id, name, tel, plate_raw, province, brand, car_type, location,
                    deposit_date, review_status, needs_review, review_reason,
                    car_status, returned_at, returned_by, uploaded_by, photographer,
-                   reviewed_by, ocr_model, created_at
+                   reviewed_by, ocr_model, created_at,
+                   count(*) OVER () AS total_rows
             FROM {DB_SCHEMA}.slips WHERE {where}
             ORDER BY {order} {'DESC' if desc else 'ASC'} NULLS LAST
             LIMIT %(limit)s OFFSET %(offset)s""",
         {**params, "limit": per_page, "offset": (page - 1) * per_page},
     ).fetchall()
+    if rows:
+        total = rows[0]["total_rows"]
+        for r in rows:
+            del r["total_rows"]
+    elif page > 1:
+        # หน้าว่างเพราะเลยหน้าสุดท้ายไป ต้องถามจำนวนจริงเพื่อให้ปุ่มแบ่งหน้ายังถูก
+        total = conn.execute(
+            f"SELECT count(*) AS n FROM {DB_SCHEMA}.slips WHERE {where}", params
+        ).fetchone()["n"]
+    else:
+        total = 0
     return rows, total
 
 

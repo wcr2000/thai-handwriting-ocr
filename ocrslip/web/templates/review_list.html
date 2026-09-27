@@ -1,4 +1,9 @@
 {% extends "base.html" %}
+{% macro sorth(key, label) %}
+  {% set nd = 'asc' if f.sort == key and f.dir == 'desc' else 'desc' %}
+  <th><a href="/review?{{ qs|replace('sort=' ~ f.sort, '') }}&sort={{ key }}&dir={{ nd }}">
+    {{ label }}{% if f.sort == key %} {{ '▾' if f.dir == 'desc' else '▴' }}{% endif %}</a></th>
+{% endmacro %}
 {% block content %}
 <div class="card">
   <h2>คิวตรวจสอบ</h2>
@@ -12,19 +17,47 @@
     <a href="/review?filter=all"      class="{{ 'active' if active=='all' }}">ทั้งหมด ({{ counts.total }})</a>
     {% endif %}
   </p>
+  {# ค้นในกองที่เลือกอยู่เท่านั้น กองจึงเดินไปพร้อมคำค้นเป็น hidden field #}
+  <form method="get" action="/review" class="row" style="align-items:flex-end; gap:.7rem">
+    <input type="hidden" name="filter" value="{{ active }}">
+    <div style="flex:2 1 240px">
+      <label for="q">ค้นในกองนี้ (ชื่อ / เบอร์ / ทะเบียน / ยี่ห้อ / ที่จอด)</label>
+      <input type="search" id="q" name="q" value="{{ f.q }}" placeholder="พิมพ์คำที่ต้องการ">
+    </div>
+    <div style="flex:0 0 auto"><button type="submit">ค้นหา</button></div>
+    {% if f.q %}
+    <div style="flex:0 0 auto"><a href="/review?filter={{ active }}" class="btn ghost">ล้างคำค้น</a></div>
+    {% endif %}
+  </form>
+  <p style="margin-top:.8rem">พบ <strong>{{ total }}</strong> ใบในกองนี้{% if f.q %} ตามคำค้น "{{ f.q }}"{% endif %}</p>
+</div>
+
+<div class="card" style="overflow-x:auto">
   <table>
-    <tr><th>ชื่อ</th><th>เบอร์</th><th>ทะเบียน</th><th>ยี่ห้อ</th><th>ที่จอด</th><th>เหตุผลที่ต้องตรวจ</th><th></th></tr>
+    <tr>
+      {{ sorth('name', 'ชื่อ') }}{{ sorth('tel', 'เบอร์') }}{{ sorth('plate', 'ทะเบียน') }}
+      {{ sorth('brand', 'ยี่ห้อ') }}<th>ที่จอด</th>{{ sorth('created_at', 'เข้าคิวเมื่อ') }}
+      <th>เหตุผลที่ต้องตรวจ</th><th></th>
+    </tr>
     {% for s in slips %}
     <tr>
       <td>{{ s.name or '—' }}</td><td>{{ s.tel or '—' }}</td>
       <td>{{ s.plate_raw or '—' }}{% if s.province %} <span class="muted">{{ s.province }}</span>{% endif %}</td>
       <td>{{ s.brand or '—' }}</td><td>{{ s.location or '—' }}</td>
+      <td class="muted">{{ s.created_at.strftime('%d/%m %H:%M') if s.created_at else '—' }}</td>
       <td>{% for reason in s.review_reason %}<span class="badge warn">{{ reason_labels.get(reason, reason) }}</span>{% endfor %}</td>
       <td><a href="/review/{{ s.id }}">ตรวจ →</a></td>
     </tr>
     {% else %}
-    <tr><td colspan="7" class="muted">ไม่มีใบในกองนี้</td></tr>
+    <tr><td colspan="8" class="muted">{% if f.q %}ไม่มีใบในกองนี้ที่ตรงกับคำค้น{% else %}ไม่มีใบในกองนี้{% endif %}</td></tr>
     {% endfor %}
   </table>
+  {% if pages > 1 %}
+  <p class="filters" style="margin-top:.8rem">
+    {% for i in range(1, pages + 1) %}
+    <a href="/review?{{ qs }}&page={{ i }}" class="{{ 'active' if i == page }}">{{ i }}</a>
+    {% endfor %}
+  </p>
+  {% endif %}
 </div>
 {% endblock %}
