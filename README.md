@@ -91,6 +91,16 @@ cp .env.example .env          # ใส่ OPENROUTER_API_KEY และ DATABASE_
 คำสั่งปิดใบมีเงื่อนไข `car_status = 'stored'` อยู่ใน `UPDATE` คนที่กดทีหลังจึงเขียนทับ
 ร่องรอยของคนแรกไม่ได้ และหน้าใบจะขึ้นเตือนว่ามีคนปิดไปก่อนแล้ว ไม่ใช่เงียบเหมือนสำเร็จ
 
+## การ deploy
+
+`render.yaml` ตั้ง `preDeployCommand: python -m ocrslip.db init` ไว้ — Render จะรัน
+migration ให้ก่อนสลับ traffic ทุกครั้ง ไม่ต้องจำไปรันเอง และถ้า migration พัง
+deploy จะไม่ขึ้นเลย ซึ่งดีกว่าขึ้นไปแล้วหน้าแตก
+
+`db/schema.sql` ทุกคำสั่งเขียนแบบรันซ้ำได้ (`IF NOT EXISTS` / `CREATE OR REPLACE`)
+จึงรันทุก deploy ได้โดยไม่มีผลข้างเคียง และ `init_schema()` commit ทีละคำสั่ง
+พร้อมต่อสายใหม่ให้เองถ้า Postgres ฝั่ง Render ตัดสายกลางทาง
+
 ## ทำไมต้องมีคิวตรวจสอบ
 
 OCR ลายมือไทยไม่มีทางแม่น 100% — ทุกใบจึงเข้าสถานะ `pending` ก่อนเสมอ และถูกชู flag อัตโนมัติเมื่อ
