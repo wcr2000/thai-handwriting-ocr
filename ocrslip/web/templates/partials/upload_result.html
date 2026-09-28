@@ -14,11 +14,17 @@
         <td>{{ r.fields.tel or '—' }}</td>
         <td>{{ r.fields.noplate or '—' }}</td>
         <td>
-          {% if r.reasons %}
+          {# รูปนี้เคยอัปแล้ว จึงไม่สร้างใบใหม่และไม่เสียค่า OCR ซ้ำ — ชี้ไปใบเดิมแทน #}
+          {% if r.duplicate_of %}
+            <span class="badge">อัปซ้ำ — ใบเดิมมีอยู่แล้ว</span>
+            <span class="muted">{{ 'ตรวจแล้ว' if r.duplicate_of.review_status == 'approved'
+                                  else ('ตีกลับแล้ว' if r.duplicate_of.review_status == 'rejected' else 'รอตรวจ') }}{%
+              if r.duplicate_of.uploaded_by %} · อัปโดย {{ r.duplicate_of.uploaded_by }}{% endif %}</span>
+          {% elif r.reasons %}
             {% for reason in r.reasons %}<span class="badge warn">{{ reason_labels.get(reason, reason) }}</span>{% endfor %}
           {% else %}<span class="badge ok">พร้อมอนุมัติ</span>{% endif %}
         </td>
-        <td><a href="/review/{{ r.id }}">ตรวจ →</a></td>
+        <td><a href="/review/{{ r.id }}">{{ 'ดูใบเดิม' if r.duplicate_of else 'ตรวจ' }} →</a></td>
       {% else %}
         <td colspan="4"><span class="badge bad">อ่านไม่สำเร็จ</span> <span class="muted">{{ r.error }}</span></td>
         <td></td>
@@ -26,6 +32,10 @@
     </tr>
     {% endfor %}
   </table>
+  {% if dropped %}
+  <p class="muted">ไฟล์เดียวกันถูกเลือกมาซ้ำในรอบนี้ ตัดออกให้ {{ dropped|length }} ไฟล์:
+    {{ dropped|join(', ') }}</p>
+  {% endif %}
   <p><a href="/review">ไปที่คิวตรวจสอบ →</a></p>
 </div>
 {% endif %}

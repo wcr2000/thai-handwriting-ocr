@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import io
 import math
 import secrets
@@ -26,8 +27,8 @@ from ..config import (
 from ..db import (
     add_staff, build_filters, clean_person_name, connect, dashboard_stats, export_rows, get_image, get_slip,
     delete_slip, get_settings, insert_slip, list_edits, open_slip_by_plate, set_setting,
-    claim_next, claim_one, known_people, list_staff, mark_returned, next_in_queue,
-    query_slips, release_claims, review_counts,
+    claim_next, claim_one, known_people, list_staff, mark_returned, mark_superseded, next_in_queue,
+    query_slips, reject_slip, release_claims, review_counts,
     set_staff_active, update_slip,
 )
 from ..normalize import PROVINCE_CHOICES, norm_phone, norm_plate, parse_date
@@ -407,8 +408,22 @@ async def api_ocr(
                 add_staff(conn, person, created_by=account)
         conn.commit()
 
+    dropped: list[str] = []
     uploads = [(f.filename, await f.read()) for f in files]
     uploads = [(name, raw) for name, raw in uploads if raw]
+    # ไฟล์เดียวกันที่ติดมาสองครั้งในคำขอเดียว ต้องตัดที่นี่ — ด่านกันซ้ำใน ingest อ่านจาก
+    # ฐานข้อมูล แต่ทุกใบใน batch ประมวลผลขนานกันและ commit ตอนจบ ต่างคนจึงมองไม่เห็นกัน
+    # (ของจริงเจอ 7 กลุ่มที่ห่างกันไม่ถึง 10 วินาที = ซ้ำกันเองในคำขอเดียว)
+    seen: set[str] = set()
+    fresh = []
+    for name, raw in uploads:
+        digest = hashlib.sha256(raw).hexdigest()
+        if digest in seen:
+            dropped.append(name)
+            continue
+        seen.add(digest)
+        fresh.append((name, raw))
+    uploads = fresh
 
     def one(item: tuple[str, bytes]) -> dict[str, Any]:
         name, raw = item
@@ -422,23 +437,27 @@ async def api_ocr(
     with ThreadPoolExecutor(max_workers=min(6, max(1, len(uploads)))) as pool:
         results = list(pool.map(one, uploads))
     return render(request, "partials/upload_result.html", results=results,
-                  uploader=uploader, shooter=shooter)
+                  uploader=uploader, shooter=shooter, dropped=dropped)
 
 
 # กองที่ approver เปิดดูได้ — เฉพาะงานที่ยังค้างอยู่ ไม่ใช่คลังใบทั้งหมดที่ผ่านมา
-APPROVER_FILTERS = ("needs", "quick")
+# "dup" อยู่ในนี้ด้วย เพราะคนตรวจคือคนที่ต้องเห็นว่าใบที่หายไปจากคิวไปอยู่ไหน
+# ถ้าซ่อนไว้ไม่ให้ใครเห็นเลย เวลามีใบถูกตีว่าซ้ำผิด จะไม่มีทางรู้ได้เลยว่าเกิดขึ้น
+APPROVER_FILTERS = ("needs", "quick", "dup")
 
 # แต่ละ "กอง" คือ preset ของตัวกรองชุดเดียวกับหน้าตาราง ไม่ใช่ query คนละแบบ
+# กองที่ต้องทำต้องไม่มีใบซ้ำ (superseded=False) ไม่งั้นคนตรวจได้ใบที่เพื่อนตรวจไปแล้ว
 QUEUE_PILES = {
-    "needs": dict(review_status="pending", needs_review=True),
-    "quick": dict(review_status="pending", needs_review=False),
+    "needs": dict(review_status="pending", needs_review=True, superseded=False),
+    "quick": dict(review_status="pending", needs_review=False, superseded=False),
+    "dup": dict(superseded=True),
     "approved": dict(review_status="approved"),
     "rejected": dict(review_status="rejected"),
     "all": {},
 }
 
 # ยอดของแต่ละกองตรงกับคอลัมน์ไหนใน review_counts() — ใช้แทนการนับใหม่ตอนไม่ได้ค้นหา
-PILE_TOTALS = {"needs": "needs_review", "quick": "quick_pass",
+PILE_TOTALS = {"needs": "needs_review", "quick": "quick_pass", "dup": "superseded",
                "approved": "approved", "rejected": "rejected", "all": "total"}
 
 
@@ -581,6 +600,12 @@ async def approve(request: Request, slip_id: str):
                 slip=slip, problems={}, next_id=next_id, remaining=remaining,
                 people=known_people(conn), taken=True,
             )
+        # ใบนี้มีคนตรวจแล้ว ใบที่เหลือซึ่งเป็นใบเดียวกันจึงไม่ต้องให้ใครตรวจอีก
+        # ต้องอยู่ในทรานแซกชันเดียวกับการอนุมัติ ไม่งั้นถ้าล้มกลางทางจะได้ใบที่ถูกถอน
+        # ออกจากคิวโดยที่ไม่มีใบไหนถูกอนุมัติเลย — ใบนั้นจะหายไปจากงานเงียบ ๆ
+        superseded = mark_superseded(conn, slip_id)
+        if superseded:
+            print(f"[dedup] approve slip={slip_id} ถอนใบซ้ำออกจากคิว {superseded} ใบ")
         conn.commit()
     # ไม่ใช้ next_id ที่ฝังมากับฟอร์มแล้ว — มันเป็นภาพคิวตอนเปิดหน้า ซึ่งอาจผ่านไปหลายนาที
     # /review/next จองใบสด ๆ ให้ตอนนี้ คนอื่นจะไม่ได้ใบเดียวกัน
@@ -594,13 +619,7 @@ async def reject(request: Request, slip_id: str):
     # จะถูกบันทึกเป็นชื่อคน แล้วโผล่ในสถิติว่ามีคนชื่อ __new__ ตีกลับไปหลายใบ
     reviewer = _picked_reviewer(form)
     with connect() as conn:
-        conn.execute(
-            "UPDATE ocr_dhammakaya.slips SET review_status='rejected', needs_review=false,"
-            " review_reason=%s, reviewed_by=%s, reviewed_at=now(),"
-            # ใบที่ออกจากกอง pending แล้วไม่ต้องมีใครถืออีก
-            " claimed_by=NULL, claimed_name=NULL, claimed_at=NULL WHERE id=%s",
-            ([(form.get("reason") or "รูปอ่านไม่ได้")], reviewer, slip_id),
-        )
+        reject_slip(conn, slip_id, (form.get("reason") or "รูปอ่านไม่ได้"), reviewer)
         conn.commit()
     return RedirectResponse("/review", status_code=303)
 

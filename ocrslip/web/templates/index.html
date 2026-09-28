@@ -135,11 +135,27 @@
       document.body.style.overflow = 'hidden';
     });
 
+    // ปุ่มต้องกดได้เฉพาะตอนที่มีไฟล์เลือกอยู่จริง
+    // ต้นเหตุของใบซ้ำ 650 ใบคือช่องไฟล์ไม่ถูกล้างหลังอัปสำเร็จ (htmx เปลี่ยนแค่ #result
+    // ฟอร์มอยู่เดิม) คนที่คิดว่าเมื่อกี้ไม่ติดจึงกดอีกที = ส่งไฟล์ชุดเดิมทั้งชุดซ้ำ
+    var submit = form.querySelector('button[type=submit]');
+    function syncSubmit() {
+      if (submit) submit.disabled = !(files.files && files.files.length);
+    }
+    files.addEventListener('change', syncSubmit);
+    syncSubmit();
+
     // afterRequest ยิงทั้งกรณีสำเร็จและ error — popup ต้องหายทุกกรณี ไม่ค้างคาหน้าจอ
-    form.addEventListener('htmx:afterRequest', function () {
+    form.addEventListener('htmx:afterRequest', function (evt) {
       if (timer) { clearInterval(timer); timer = null; }
       box.setAttribute('aria-hidden', 'true');
       document.body.style.overflow = '';
+      // ล้างเฉพาะช่องไฟล์ ไม่ใช่ form.reset() — ชื่อคนอัปต้องค้างไว้ให้อัปใบถัดไปต่อได้เลย
+      // ล้างแค่ตอนสำเร็จ ถ้าพลาดกลางทางต้องเหลือไฟล์ไว้ให้กดส่งใหม่ได้โดยไม่ต้องเลือกใหม่
+      if (evt.detail && evt.detail.successful) {
+        files.value = '';
+        syncSubmit();
+      }
     });
   })();
 </script>
