@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>ตั้งค่าฟอร์มขาเข้า</h2>
+  <p class="muted">ตัวเลือก "อาคาร" กับ "ชั้น" ที่ขึ้นให้ผู้มาจอดเลือกในหน้า
+     <a href="/in" target="_blank">/in</a> · แก้แล้วมีผลทันที ไม่ต้องรีสตาร์ตระบบ</p>
+  {% if saved %}<div class="err" style="background:#e3f5e9; border-color:#9c9">บันทึกแล้ว</div>{% endif %}
+
+  <form method="post" action="/settings">
+    <div class="row">
+      <div class="col">
+        <label for="buildings">อาคาร <span class="muted">(บรรทัดละหนึ่งอาคาร)</span></label>
+        <textarea id="buildings" name="buildings" rows="8">{{ buildings }}</textarea>
+        <p class="muted">{% if from_db.buildings %}ตั้งไว้จากหน้านี้
+           {% else %}ยังไม่เคยตั้ง — กำลังใช้ค่าตั้งต้นจาก <code>ENTRY_BUILDINGS</code>{% endif %}</p>
+      </div>
+      <div class="col">
+        <label for="floors">ชั้น <span class="muted">(บรรทัดละหนึ่งชั้น)</span></label>
+        <textarea id="floors" name="floors" rows="8">{{ floors }}</textarea>
+        <p class="muted">{% if from_db.floors %}ตั้งไว้จากหน้านี้
+           {% else %}ยังไม่เคยตั้ง — กำลังใช้ค่าตั้งต้นจาก <code>ENTRY_FLOORS</code>{% endif %}</p>
+      </div>
+    </div>
+    <p><button type="submit">บันทึก</button></p>
+  </form>
+
+  <p class="muted">ล้างช่องให้ว่างแล้วบันทึก = ถอยกลับไปใช้ค่าตั้งต้นใน <code>.env</code></p>
+  <p class="muted">แก้รายการนี้ไม่กระทบใบเก่า เพราะที่จอดถูกเก็บเป็นข้อความไปแล้วตอนบันทึก</p>
+</div>
+
+<div class="card">
+  <h3>รหัสเจ้าหน้าที่</h3>
+  {% if entry_open %}
+  <p><span class="badge ok">หน้า /in เปิดใช้งานอยู่</span></p>
+  {% else %}
+  <p><span class="badge bad">หน้า /in ปิดอยู่</span> — ยังไม่ได้ตั้ง <code>ENTRY_PASSWORD</code></p>
+  {% endif %}
+  {# รหัสตั้งใจไม่ให้แก้จากหน้าเว็บ: ถ้าแก้ได้ก็ต้องอ่านกลับได้ แปลว่าต้องเก็บแบบไม่ hash
+     ลงฐานข้อมูล แล้วความลับก็จะไปอยู่ในที่ที่ backup ทุกชุดพาไปด้วย
+     อยู่ใน .env มันอยู่ที่เดียว และคนที่เปลี่ยนได้คือคนที่ดูแลระบบจริง ๆ เท่านั้น #}
+  <p class="muted">เปลี่ยนรหัสที่ <code>ENTRY_PASSWORD</code> ใน <code>.env</code> เท่านั้น
+     ไม่ได้ทำให้แก้จากหน้าเว็บโดยตั้งใจ — รหัสที่แก้จากหน้าเว็บได้ต้องเก็บแบบอ่านกลับได้
+     ซึ่งแปลว่ามันจะติดไปกับ backup ทุกชุด</p>
+</div>
+{% endblock %}

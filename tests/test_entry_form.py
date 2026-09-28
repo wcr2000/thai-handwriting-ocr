@@ -24,7 +24,13 @@ GOOD = {
 
 
 @pytest.fixture
-def pw(monkeypatch):
+def pw(pgenv, monkeypatch):
+    """ตั้งรหัส + ชี้ฐานข้อมูลไปที่ฐานทดสอบ
+
+    ต้องพ่วง pgenv ด้วยตั้งแต่ /in เริ่มอ่านตัวเลือกอาคาร/ชั้นจากตาราง app_settings —
+    ก่อนหน้านี้เทสต์กลุ่มนี้ไม่แตะฐานข้อมูลเลยจึงไม่ต้องใช้ แต่ตอนนี้ถ้าไม่พ่วง
+    มันจะไปเปิด connection ตาม DATABASE_URL ใน .env ซึ่งชี้ production
+    """
     monkeypatch.setattr(main, "ENTRY_PASSWORD", PW)
 
 

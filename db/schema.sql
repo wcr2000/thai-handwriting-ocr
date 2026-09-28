@@ -176,3 +176,14 @@ ALTER TABLE ocr_dhammakaya.slips ADD COLUMN IF NOT EXISTS entry_source text;
 -- ชื่อคนที่มารับรถ เก็บเฉพาะตอนที่ไม่ใช่เจ้าของ (ให้ญาติมารับ)
 -- เป็นเคสที่ต้องมีร่องรอยมากที่สุด แต่เดิมบันทึกไว้ได้แค่ในหมายเหตุรวม
 ALTER TABLE ocr_dhammakaya.slips ADD COLUMN IF NOT EXISTS released_to text;
+
+-- ค่าตั้งที่ผู้ดูแลแก้จากหน้าเว็บได้ โดยไม่ต้องแตะ env แล้วรีสตาร์ต service
+-- เก็บเป็น key/value ธรรมดาเพราะมีไม่กี่ค่าและเป็นข้อความล้วน ถ้าทำเป็นคอลัมน์
+-- ต้องเพิ่ม migration ทุกครั้งที่มีค่าใหม่ ซึ่งไม่คุ้มกับตารางที่มีไม่ถึงสิบแถว
+-- ไม่มีแถว = ยังไม่เคยตั้งจากหน้าเว็บ ให้ตกไปใช้ค่าใน env เสมอ
+CREATE TABLE IF NOT EXISTS ocr_dhammakaya.app_settings (
+    key        text PRIMARY KEY,
+    value      text NOT NULL,
+    updated_by text,
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
