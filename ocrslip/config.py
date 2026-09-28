@@ -26,6 +26,11 @@ CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.85"))
 REVIEW_CLAIM_MINUTES = int(os.getenv("REVIEW_CLAIM_MINUTES", "10"))
 # ใช้แปลงค่าใช้จ่าย AI (OpenRouter คิดเป็น USD) ให้แสดงผลเป็นบาท
 USD_THB = float(os.getenv("USD_THB", "33"))
+# เขตเวลาที่ทุก connection ใช้ — DB เก็บเป็น timestamptz (UTC) ซึ่งถูกแล้ว แต่ server
+# ที่ Render ตั้ง TimeZone=UTC ทำให้เวลาที่แสดงบนหน้าเว็บช้ากว่าเวลาไทย 7 ชั่วโมง
+# ตั้งที่ connection ทีเดียวจบ ไม่ต้องไล่ +7 ทุก template (และทำให้การนับ "รายวัน"
+# ที่หน้าสรุปตัดวันตามเที่ยงคืนของไทย ไม่ใช่เที่ยงคืน UTC ซึ่งคือ 7 โมงเช้าบ้านเรา)
+APP_TIMEZONE = os.getenv("APP_TIMEZONE", "Asia/Bangkok")
 
 # กุญแจสำหรับเซ็น session cookie — ถ้าไม่ตั้ง จะสุ่มใหม่ทุกครั้งที่รีสตาร์ต
 # (ปลอดภัย แต่ผู้ใช้ทุกคนจะหลุดล็อกอิน) บน production ต้องตั้งค่านี้เสมอ

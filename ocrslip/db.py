@@ -14,7 +14,7 @@ from typing import Any, Iterable
 import psycopg
 from psycopg.rows import dict_row
 
-from .config import DATABASE_URL, DB_SCHEMA, REVIEW_CLAIM_MINUTES
+from .config import APP_TIMEZONE, DATABASE_URL, DB_SCHEMA, REVIEW_CLAIM_MINUTES
 from .normalize import (
     _base, norm_brand, norm_cartype, norm_name, norm_phone, norm_plate, norm_province, parse_date,
 )
@@ -26,7 +26,11 @@ SCHEMA_SQL = ROOT / "db" / "schema.sql"
 def connect() -> psycopg.Connection:
     if not DATABASE_URL:
         raise RuntimeError("ยังไม่ได้ตั้ง DATABASE_URL ใน .env")
-    return psycopg.connect(DATABASE_URL, row_factory=dict_row)
+    # -c TimeZone ต้องอยู่ตรงนี้ ไม่ใช่ไปแปลงตอน render — now() ที่เขียนลง returned_at/
+    # reviewed_at และ interval ของการจองใบ ล้วนอ้างเขตเวลาของ session นี้ ถ้าแปลงทีหลัง
+    # เฉพาะที่หน้าจอ จะมีที่ตกหล่นเสมอ (เคสที่เจอ: ใบปิดเวลา 16:15 แต่หน้าใบโชว์ 09:15)
+    return psycopg.connect(
+        DATABASE_URL, row_factory=dict_row, options=f"-c TimeZone={APP_TIMEZONE}")
 
 
 def split_sql(sql: str) -> list[str]:
@@ -451,6 +455,60 @@ def open_slip_by_plate(
         (plate_norm, hours),
     )
     return cur.fetchone()
+
+def deposit_rounds(
+    conn: psycopg.Connection, plate_norms: list[str]
+) -> dict[str, dict[str, Any]]:
+    """ใบของทะเบียนที่ถูกเอามาฝากหลายรอบ -> {slip_id: {"round": n, "total": m}}
+
+    คนกลุ่มหนึ่งเอารถมาฝาก รับกลับ แล้วเอามาฝากใหม่ เห็นมาแล้ว 2-3 รอบต่อคัน
+    ข้อมูลถูกอยู่แล้ว (1 ใบ = 1 รอบ) แต่หน้าค้นหาแสดงเป็นแถวคล้าย ๆ กันเรียงตามคะแนน
+    เจ้าหน้าที่ขาออกจึงต้องไล่อ่านวันที่เองว่าใบไหนคือรอบปัจจุบัน — ปิดผิดใบเมื่อไหร่
+    จะเหลือใบค้างที่ไม่มีใครมารับตลอดไป การบอกเลขรอบตรง ๆ ถูกกว่าให้คนเดาเอง
+
+    คืนเฉพาะทะเบียนที่มีมากกว่า 1 รอบ — ใบเดี่ยว ๆ ติดป้าย "รอบที่ 1 จาก 1" มีแต่รกตา
+    ไม่นับใบที่ถูกตีว่าซ้ำหรือตีกลับ เพราะไม่ใช่การฝากจริงสักรอบ
+    """
+    plates = [p for p in {p for p in plate_norms} if p]
+    if not plates:
+        return {}
+    rows = conn.execute(
+        f"""SELECT id::text AS id, round, total FROM (
+                SELECT id,
+                       row_number() OVER w AS round,
+                       count(*) OVER (PARTITION BY plate_norm) AS total
+                  FROM {DB_SCHEMA}.slips
+                 WHERE plate_norm = ANY(%s)
+                   AND superseded_by IS NULL AND review_status <> 'rejected'
+                WINDOW w AS (PARTITION BY plate_norm
+                             ORDER BY deposit_date NULLS LAST, created_at)
+            ) t WHERE total > 1""",
+        (plates,),
+    ).fetchall()
+    return {r["id"]: {"round": r["round"], "total": r["total"]} for r in rows}
+
+
+def deposit_history(conn: psycopg.Connection, plate_norm: str) -> list[dict[str, Any]]:
+    """ทุกรอบการฝากของทะเบียนนี้ เรียงตามรอบ — ไว้โชว์ในหน้าใบตอนจะปล่อยรถ
+
+    เจ้าหน้าที่ต้องเห็นได้ทันทีว่าใบที่เปิดอยู่คือรอบไหน และรอบอื่นปิดไปหมดหรือยัง
+    """
+    if not plate_norm:
+        return []
+    return conn.execute(
+        f"""SELECT id::text AS id, round, deposit_date, location, car_status,
+                   review_status, returned_at
+              FROM (SELECT id, deposit_date, location, car_status, review_status,
+                           returned_at,
+                           row_number() OVER (ORDER BY deposit_date NULLS LAST,
+                                              created_at) AS round
+                      FROM {DB_SCHEMA}.slips
+                     WHERE plate_norm = %s
+                       AND superseded_by IS NULL AND review_status <> 'rejected') t
+             ORDER BY round""",
+        (plate_norm,),
+    ).fetchall()
+
 
 def get_slip(conn: psycopg.Connection, slip_id: str) -> dict[str, Any]:
     cur = conn.execute(f"SELECT * FROM {DB_SCHEMA}.slips WHERE id = %s", (slip_id,))

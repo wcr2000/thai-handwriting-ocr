@@ -26,7 +26,8 @@ from ..config import (
 )
 from ..db import (
     add_staff, build_filters, clean_person_name, connect, dashboard_stats, export_rows, get_image, get_slip,
-    delete_slip, get_settings, insert_slip, list_edits, open_slip_by_plate, set_setting,
+    delete_slip, deposit_history, deposit_rounds, get_settings, insert_slip, list_edits,
+    open_slip_by_plate, set_setting,
     claim_next, claim_one, known_people, list_staff, mark_returned, mark_superseded, next_in_queue,
     query_slips, reject_slip, release_claims, review_counts,
     set_staff_active, update_slip,
@@ -633,7 +634,10 @@ def search_page(request: Request, deleted: str = ""):
 def api_search(request: Request, q: str = "", include_pending: bool = False):
     with connect() as conn:
         rows = fuzzy_search(conn, q, include_pending=include_pending) if q else []
-    return render(request, "partials/results.html", rows=rows, q=q)
+        # รถคันเดิมที่เอามาฝากหลายรอบจะโผล่มาหลายแถวคล้ายกันหมด ต้องบอกให้เห็นว่าแถวไหนรอบไหน
+        # ถามทีเดียวสำหรับทุกทะเบียนในผลลัพธ์ ไม่ใช่ถามรายแถว (หน้านี้ยิงทุกครั้งที่พิมพ์)
+        rounds = deposit_rounds(conn, [r.get("plate_norm") for r in rows])
+    return render(request, "partials/results.html", rows=rows, q=q, rounds=rounds)
 
 
 @app.get("/slips/{slip_id}", response_class=HTMLResponse)
@@ -647,8 +651,13 @@ def slip_detail(request: Request, slip_id: str, taken: int = 0):
         edits = list_edits(conn, slip_id)
         # ใบที่กรอกเองไม่มีรูปหลักฐาน ต้องรู้ก่อน render ไม่งั้นหน้าจะมีกรอบรูปแตกค้างอยู่
         has_image = get_image(conn, slip_id) is not None
+        # หน้านี้คือจุดที่กดปล่อยรถ ถ้าทะเบียนนี้เคยฝากหลายรอบต้องเห็นทุกรอบตรงนี้
+        # ไม่ใช่ให้ย้อนกลับไปไล่ดูเองที่หน้าค้นหาว่าปิดใบถูกรอบหรือเปล่า
+        # ใบเดี่ยว ๆ ไม่ต้องมีการ์ด "ประวัติการฝาก" ที่มีแถวเดียวคือใบที่เปิดอยู่
+        history = deposit_history(conn, slip["plate_norm"])
+        history = history if len(history) > 1 else []
     return render(request, "slip.html", slip=slip, edits=edits, has_image=has_image,
-                  taken=bool(taken))
+                  taken=bool(taken), history=history)
 
 
 @app.post("/slips/{slip_id}/return")

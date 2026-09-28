@@ -35,6 +35,30 @@
             <span class="badge warn">ไม่ใช่เจ้าของ</span></td></tr>{% endif %}
       </table>
     </div>
+    {# ทะเบียนที่เอามาฝากหลายรอบ ต้องเห็นทุกรอบก่อนกดปล่อยรถ ไม่ใช่ย้อนกลับไปเดาที่หน้าค้นหา #}
+    {% if history %}
+    <div class="card">
+      <h3>ทะเบียนนี้ฝากมาแล้ว {{ history|length }} รอบ</h3>
+      <p class="muted">แต่ละรอบเป็นคนละใบ ใบที่เปิดอยู่คือแถวที่ไฮไลต์ไว้ —
+         ก่อนกดปล่อยรถ ดูให้แน่ว่าเป็นรอบที่รถยังจอดอยู่</p>
+      <table>
+        <tr><th>รอบ</th><th>วันที่เข้าจอด</th><th>ที่จอด</th><th>สถานะรถ</th><th></th></tr>
+        {% for h in history %}
+        <tr>
+          <td>{% if h.id == slip.id|string %}<strong>{{ h.round }} ← ใบนี้</strong>
+              {% else %}{{ h.round }}{% endif %}</td>
+          <td>{{ h.deposit_date or '—' }}</td>
+          <td>{{ h.location or '—' }}</td>
+          <td>{% if h.car_status == 'stored' %}<span class="badge ok">ยังจอดอยู่</span>
+              {% else %}<span class="badge bad">รับกลับแล้ว{% if h.returned_at %}
+                {{ h.returned_at.strftime('%d/%m/%Y') }}{% endif %}</span>{% endif %}
+              {% if h.review_status != 'approved' %}<span class="badge warn">ยังไม่ผ่านการตรวจ</span>{% endif %}</td>
+          <td>{% if h.id != slip.id|string %}<a href="/slips/{{ h.id }}">เปิดใบนี้ →</a>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </table>
+    </div>
+    {% endif %}
     {% if slip.car_status == 'stored' and user %}
     <form method="post" action="/slips/{{ slip.id }}/return" class="card">
       <h3>ยืนยันการรับรถคืน</h3>
