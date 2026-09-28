@@ -13,6 +13,13 @@ services:
     # /static/app.css ตอบ 200 โดยไม่ต้องต่อ DB และไม่ติด login
     healthCheckPath: /static/app.css
     autoDeployTrigger: commit
+    # รัน migration ก่อนสลับ traffic ทุกครั้ง — schema.sql เขียนแบบรันซ้ำได้ทั้งไฟล์
+    # (IF NOT EXISTS / CREATE OR REPLACE) จึงรันทุก deploy ได้ไม่มีผลข้างเคียง
+    #
+    # เคยเกิดขึ้นจริง: deploy โค้ดที่ต้องใช้ตาราง app_settings ขึ้นไปแล้ว แต่ยังไม่มีใคร
+    # รัน db init ผลคือหน้า /in ที่ผู้มาจอดใช้ตอบ 500 ทั้งหน้า ทั้งที่เป็นแค่ขั้นตอน
+    # ที่ลืมทำ ถ้า migration พัง deploy จะไม่ขึ้นเลย ซึ่งดีกว่าขึ้นไปแล้วหน้าแตก
+    preDeployCommand: python -m ocrslip.db init
     envVars:
       # --- OpenRouter ---
       - key: OPENROUTER_API_KEY
@@ -46,4 +53,14 @@ services:
         sync: false
       # Render เป็น HTTPS อยู่แล้ว — ตั้ง true เพื่อบังคับ Secure cookie
       - key: COOKIE_SECURE
+        sync: false
+      # --- ฟอร์มขาเข้าที่ผู้มาจอดกรอกเอง (/in) ---
+      # รหัสที่เจ้าหน้าที่พิมพ์ปิดท้ายฟอร์ม ไม่ตั้ง = ปิดหน้า /in ไปเลย
+      - key: ENTRY_PASSWORD
+        sync: false
+      # ตัวเลือกอาคาร/ชั้น เป็นแค่ "ค่าตั้งต้น" — ค่าที่ใช้จริงแก้ได้ที่หน้า /settings
+      # และมีผลทันทีโดยไม่ต้องรีสตาร์ต สองตัวนี้จึงแทบไม่ต้องแตะหลังตั้งครั้งแรก
+      - key: ENTRY_BUILDINGS
+        sync: false
+      - key: ENTRY_FLOORS
         sync: false
