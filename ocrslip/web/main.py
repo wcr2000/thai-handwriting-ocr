@@ -34,6 +34,7 @@ from ..db import (
 )
 from ..normalize import PROVINCE_CHOICES, norm_phone, norm_plate, parse_date
 from ..review import REASON_LABELS, evaluate
+from ..dedup import group_duplicates, load_slips
 from ..search import search as fuzzy_search
 from .pipeline import ingest
 
@@ -48,7 +49,7 @@ _SECRET = SECRET_KEY or secrets.token_urlsafe(32)
 # เจ้าหน้าที่พิมพ์ปิดท้าย ไม่ใช่การล็อกอิน (ตรวจรหัสฝั่ง server เท่านั้น ดู config.ENTRY_PASSWORD)
 PUBLIC_PATHS = ("/login", "/static", "/health", "/favicon.ico", "/in")
 # หน้าที่เฉพาะ admin เท่านั้น — จุดที่ย้อนกลับไม่ได้ หรือเป็นข้อมูลส่วนตัวทั้งก้อน
-ADMIN_ONLY = ("/table", "/dashboard", "/export.xlsx", "/staff", "/settings")
+ADMIN_ONLY = ("/table", "/dashboard", "/export.xlsx", "/staff", "/settings", "/dups")
 # "/reject" ไม่อยู่ในนี้ — คนที่นั่งตรวจ (approver) คือคนที่เห็นรูปเบลอ/ใบผิดประเภท
 # ถ้าตีกลับไม่ได้ เขาจะกดอนุมัติข้อมูลขยะแทน ซึ่งแก้ยากกว่า (ตีกลับย้อนได้ด้วย ?edit=1)
 # "/return" เคยอยู่ในนี้ แต่คนที่ยืนอยู่จุด checkout คือ staff ไม่ใช่ admin ถ้าปล่อยรถไม่ได้
@@ -691,6 +692,134 @@ async def do_delete(request: Request, slip_id: str):
           f"name={gone.get('name')!r} car_status={gone.get('car_status')} by={account}")
     return RedirectResponse(
         f"/search?deleted={quote(str(gone.get('plate_raw') or gone['id']))}", status_code=303)
+
+# ---------- หน้าเทียบใบซ้ำที่อนุมัติไปแล้วทั้งคู่ ----------
+#
+# ใบซ้ำที่ยังค้างคิวถูกถอนออกอัตโนมัติตอนอนุมัติ แต่คู่ที่ "อนุมัติไปแล้วทั้งคู่" แตะเองไม่ได้ —
+# คนตรวจทำงานไปแล้วทั้งสองใบ และค่าที่ได้มักไม่ตรงกัน (model อ่านใบเดียวกันสองรอบได้ไม่เหมือนกัน)
+# แปลว่าในคลังมีแถวที่ผิดอยู่ ต้องมีคนดูรูปแล้วชี้ว่าใบไหนถูก เครื่องชี้เองไม่ได้
+#
+# หน้านี้จึงไม่ตัดสินอะไรเลย หน้าที่มันคือ "วางของให้ตัดสินได้เร็ว": รูปใบเดียวกัน
+# กับทุกใบเรียงข้างกัน ไฮไลต์ช่องที่ขัดกัน แล้วเก็บใบที่ถูกด้วยคลิกเดียว
+# ทำทีละกลุ่มไม่ใช่รายการยาว เพราะงานนี้คือการตัดสินซ้ำ ๆ หลายร้อยครั้ง
+
+# ช่องข้อมูลที่ต้องเทียบ — ช่องที่ต่างกันหมายถึงมีใบใดใบหนึ่งอ่านผิด
+DUP_FIELDS = (("name", "ชื่อ-นามสกุล"), ("tel", "เบอร์โทร"), ("plate_raw", "ทะเบียน"),
+              ("province", "จังหวัด"), ("brand", "ยี่ห้อ"), ("car_type", "ประเภทรถ"),
+              ("location", "ที่จอด"), ("deposit_date", "วันที่ฝาก"))
+# ช่องที่ "ต่างกันเป็นเรื่องปกติ" (คนละคนอัป คนละเวลา) โชว์ไว้ช่วยตัดสิน แต่ไม่นับเป็นความขัดแย้ง
+DUP_META = (("review_status", "สถานะตรวจ"), ("reviewed_by", "คนตรวจ"),
+            ("uploaded_by", "คนอัปโหลด"), ("car_status", "สถานะรถ"),
+            ("created_at", "เข้าระบบเมื่อ"))
+
+
+def _cell(slip: dict, field: str) -> str:
+    return str(slip.get(field) or "").strip()
+
+
+def _clashes(group: list[dict[str, Any]]) -> set[str]:
+    """ช่องข้อมูลที่ใบในกลุ่มไม่ตรงกัน — ว่าง = ทุกใบเหมือนกันหมด เก็บใบไหนก็ได้"""
+    return {f for f, _ in DUP_FIELDS if len({_cell(s, f) for s in group}) > 1}
+
+
+def _identical(groups: list[list[dict[str, Any]]]) -> list[list[dict[str, Any]]]:
+    """กลุ่มที่เก็บใบไหนก็ได้ผลเท่ากัน — ไม่มีช่องไหนขัดกัน และสถานะรถตรงกันทุกใบ
+
+    ต้องเช็คสถานะรถด้วย ทั้งที่ไม่ใช่ช่องที่ OCR อ่าน: ถ้ากลุ่มมีทั้งใบที่ยังจอดอยู่และ
+    ใบที่รับรถไปแล้ว การเลือกผิดใบเปลี่ยนคำตอบว่า "รถคันนี้ยังอยู่ไหม" ซึ่งต้องมีคนดู
+    ไม่ใช่งานของปุ่มรวบ
+    """
+    return [g for g in groups
+            if not _clashes(g) and len({s["car_status"] for s in g}) == 1]
+
+
+def _dup_groups(conn) -> list[list[dict[str, Any]]]:
+    """กลุ่มใบซ้ำที่มีใบอนุมัติแล้วมากกว่าหนึ่งใบ เรียงจากกลุ่มที่เก่าสุด
+
+    เรียงให้คงที่ทั้งกลุ่มและสมาชิก เพราะหน้านี้เดินด้วยเลขลำดับกลุ่ม (?i=) ถ้าลำดับ
+    สลับไปมาระหว่างคำขอ ปุ่ม "ข้ามกลุ่มนี้" จะพาไปกลุ่มที่เพิ่งข้ามมาแล้ว
+    """
+    groups = [g for g in group_duplicates(load_slips(conn, only_candidates=True))
+              if len([s for s in g if s["review_status"] == "approved"]) > 1]
+    for g in groups:
+        g.sort(key=lambda s: s["created_at"])
+    groups.sort(key=lambda g: g[0]["created_at"])
+    return groups
+
+
+@app.get("/dups", response_class=HTMLResponse)
+def dups_page(request: Request, i: int = 0, done: int = 0):
+    with connect() as conn:
+        groups = _dup_groups(conn)
+    if not groups:
+        return render(request, "dups.html", group=None, total=0, index=0, done=done)
+    index = min(max(0, i), len(groups) - 1)
+    group = groups[index]
+    same = _identical(groups)
+    return render(
+        request, "dups.html", group=group, total=len(groups), index=index, done=done,
+        fields=DUP_FIELDS, meta=DUP_META,
+        # ปุ่มรวบกลุ่มที่ไม่มีอะไรให้ตัดสิน — ของจริง 56 จาก 273 กลุ่มเป็นแบบนี้
+        # ถ้าไม่มีทางรวบ คนต้องกดผ่านทีละกลุ่มโดยไม่ได้ตัดสินอะไรเลย
+        identical_groups=len(same), identical_slips=sum(len(g) - 1 for g in same),
+        # ช่องที่ทุกใบไม่ตรงกัน = จุดที่ต้องตัดสิน ที่เหลือเลื่อนผ่านได้เลย
+        conflicts=_clashes(group),
+        # รูปเดียวกันทุกใบ = โชว์รูปเดียวพอ ไม่ต้องให้คนไล่ดูรูปเหมือนกันสามรูป
+        one_photo=(len({s["osha"] for s in group}) == 1 and group[0]["osha"] is not None),
+        # เก็บใบที่รับรถไปแล้วโดยที่อีกใบยังจอดอยู่ = รถคันนั้นจะไม่มีใบ active เหลือ
+        mixed_car=(len({s["car_status"] for s in group}) > 1),
+    )
+
+
+@app.post("/dups/resolve-identical")
+async def dups_resolve_identical(request: Request):
+    """รวบทุกกลุ่มที่ทุกใบเหมือนกันหมด โดยเก็บใบเก่าสุดไว้
+
+    ทำรวดเดียวได้เพราะ "ไม่มีอะไรให้ตัดสิน" — ทุกช่องที่เก็บในคลังตรงกัน และสถานะรถตรงกัน
+    เก็บใบไหนไว้ก็ได้ผลในคลังเหมือนกันทุกตัวอักษร เลือกใบเก่าสุดเพราะเป็นใบที่คนตรวจคนแรกทำ
+    กลุ่มที่มีช่องขัดกันแม้แต่ช่องเดียวจะไม่ถูกแตะ — นั่นคืองานที่ต้องมีคนดูรูป
+    """
+    account = getattr(request.state, "user", None) and request.state.user.username
+    removed = 0
+    with connect() as conn:
+        for group in _identical(_dup_groups(conn)):
+            for extra in group[1:]:      # เรียงจากเก่าไปใหม่แล้ว ใบแรกคือใบที่เก็บไว้
+                gone = delete_slip(conn, extra["id"])
+                if gone:
+                    removed += 1
+                    print(f"[dups] รวบกลุ่มที่เหมือนกันหมด keep={group[0]['id']} "
+                          f"drop={gone['id']} plate={gone.get('plate_raw')!r} by={account}")
+        conn.commit()
+    return RedirectResponse(f"/dups?done={removed}", status_code=303)
+
+
+@app.post("/dups/resolve")
+async def dups_resolve(request: Request):
+    """เก็บใบที่คนเลือก ลบใบซ้ำที่เหลือในกลุ่มนั้น
+
+    กลุ่มถูกคำนวณใหม่ฝั่ง server จาก id ที่เลือก ไม่ได้เชื่อรายการ id ที่ฟอร์มส่งมา —
+    ฟอร์มที่ถูกแก้จึงสั่งลบใบที่ไม่ได้อยู่ในกลุ่มเดียวกันไม่ได้ (ปุ่มนี้ลบถาวร)
+    """
+    form = await request.form()
+    keep = str(form.get("keep") or "")
+    account = getattr(request.state, "user", None) and request.state.user.username
+    try:
+        index = max(0, int(str(form.get("i") or 0)))
+    except ValueError:
+        index = 0
+    with connect() as conn:
+        group = next((g for g in _dup_groups(conn) if any(s["id"] == keep for s in g)), None)
+        if group is None:
+            return HTMLResponse("กลุ่มนี้ถูกจัดการไปแล้ว (หรือใบที่เลือกถูกลบไปก่อน)",
+                                status_code=404)
+        gone = [delete_slip(conn, s["id"]) for s in group if s["id"] != keep]
+        conn.commit()
+    for row in gone:
+        if row:
+            print(f"[dups] keep={keep} ลบใบซ้ำ slip={row['id']} plate={row.get('plate_raw')!r} "
+                  f"name={row.get('name')!r} by={account}")
+    return RedirectResponse(f"/dups?i={index}&done={len(gone)}", status_code=303)
+
 
 @app.get("/image/{slip_id}")
 def image(slip_id: str, kind: str = "processed"):

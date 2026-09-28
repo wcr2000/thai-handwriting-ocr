@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  /* วางรูปซ้าย ตารางเทียบขวา — คนตัดสินต้องเห็นรูปกับค่าที่ขัดกันในสายตาเดียว */
+  .dup { display:grid; grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr); gap:1rem; }
+  .dup-img { background:#fff; border:1px solid var(--line); border-radius:10px; padding:.6rem; }
+  .dup-img img { width:100%; max-height:70vh; object-fit:contain; cursor:zoom-in; }
+  .dup-tbl { overflow-x:auto; }
+  .dup-tbl table { min-width:100%; }
+  .dup-tbl th, .dup-tbl td { vertical-align:top; }
+  .dup-tbl td.f { font-weight:600; white-space:nowrap; }
+  /* ช่องที่ขัดกันต้องเด่นกว่าทุกอย่างในหน้า เพราะมันคือเหตุผลที่หน้านี้มีอยู่ */
+  tr.clash td { background:#fff6d6; }
+  tr.clash td.f::after { content:" ⚠"; color:#b58900; }
+  tr.meta td { color:var(--muted); font-size:.85rem; }
+  .keepbar { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; margin-top:.7rem }
+  @media (max-width:900px) { .dup { grid-template-columns:1fr; }
+                             .dup-img img { max-height:38vh; } }
+</style>
+
+{% if done %}
+<div class="card"><p class="ok">ลบใบซ้ำไปแล้ว {{ done }} ใบ</p></div>
+{% endif %}
+
+{% if not group %}
+<div class="card">
+  <h2>ใบซ้ำที่อนุมัติไปแล้ว</h2>
+  <p>ไม่มีกลุ่มไหนเหลือให้ตัดสินแล้ว 🎉</p>
+  <p class="muted">หน้านี้เก็บเฉพาะกลุ่มที่มีใบ "อนุมัติแล้ว" มากกว่าหนึ่งใบ —
+    ใบซ้ำที่ยังค้างคิวระบบถอนออกเองตอนอนุมัติ ดูได้ที่
+    <a href="/review?filter=dup">คิวตรวจ กอง "ซ้ำ"</a></p>
+</div>
+{% else %}
+
+<div class="card">
+  <h2>ใบซ้ำที่อนุมัติไปแล้ว — กลุ่มที่ {{ index + 1 }} จาก {{ total }}</h2>
+  <p class="muted">ใบกระดาษใบเดียวกันถูกอนุมัติเข้าคลังหลายใบ และ AI อ่านได้ไม่ตรงกัน
+    แปลว่ามีแถวที่ผิดอยู่ในคลัง — ดูรูปแล้วเลือกใบที่ถูก ที่เหลือจะถูกลบถาวร</p>
+  {% if mixed_car %}
+  <p class="err">กลุ่มนี้มีทั้งใบที่ยังจอดอยู่และใบที่รับรถกลับไปแล้ว —
+    ถ้าเก็บใบที่รับรถไปแล้วไว้ รถคันนี้จะไม่มีใบที่ยัง active เหลือในระบบ</p>
+  {% endif %}
+  {% if not conflicts %}
+  <p class="ok">กลุ่มนี้ทุกช่องตรงกันหมด — เก็บใบไหนก็ได้ผลเหมือนกัน (แนะนำใบที่ 1 ซึ่งเก่าสุด)</p>
+  {% endif %}
+
+  {% if identical_groups %}
+  {# ใช้ <details> ไม่ใช่ปุ่มเปล่า — ลบถาวรหลายสิบใบในคลิกเดียวต้องมีด่านที่เห็นด้วยตาก่อน #}
+  <details class="danger-zone" style="margin-top:.8rem">
+    <summary>รวบกลุ่มที่ไม่มีอะไรให้ตัดสินทีเดียว ({{ identical_groups }} กลุ่ม /
+      {{ identical_slips }} ใบ)</summary>
+    <p class="muted">เฉพาะกลุ่มที่ <b>ทุกช่องตรงกันหมดและสถานะรถตรงกัน</b> — เก็บใบเก่าสุด
+      ลบที่เหลือ ผลในคลังเหมือนกันทุกตัวอักษรไม่ว่าจะเก็บใบไหน กลุ่มที่มีช่องขัดกัน
+      จะไม่ถูกแตะ เพราะนั่นคืองานที่ต้องดูรูป</p>
+    <form method="post" action="/dups/resolve-identical"
+          onsubmit="return confirm('ลบใบซ้ำ {{ identical_slips }} ใบจาก {{ identical_groups }} กลุ่มที่ข้อมูลตรงกันหมด?')">
+      <button type="submit" class="danger">รวบ {{ identical_groups }} กลุ่มนี้</button>
+    </form>
+  </details>
+  {% endif %}
+</div>
+
+<div class="dup">
+  <div class="dup-img">
+    {% if one_photo %}
+    <p class="muted">ทุกใบในกลุ่มนี้มาจากรูปเดียวกันเป๊ะ (hash ตรงกัน)</p>
+    <a href="/image/{{ group[0].id }}?kind=original" target="_blank">
+      <img src="/image/{{ group[0].id }}" alt="ใบจอดรถ"></a>
+    {% else %}
+    <p class="muted">แต่ละใบมาจากคนละรูป (ถ่ายใบเดียวกันหลายรอบ) — เทียบรูปกับค่าในตารางทีละใบ</p>
+    {% for s in group %}
+    <a href="/image/{{ s.id }}?kind=original" target="_blank">
+      <img src="/image/{{ s.id }}" alt="ใบจอดรถ {{ loop.index }}"></a>
+    <p class="muted">ใบที่ {{ loop.index }} · {{ s.id[:8] }}</p>
+    {% endfor %}
+    {% endif %}
+  </div>
+
+  <div class="card dup-tbl">
+    <table>
+      <tr>
+        <th></th>
+        {% for s in group %}
+        <th>ใบที่ {{ loop.index }}<br><span class="muted">{{ s.id[:8] }}</span></th>
+        {% endfor %}
+      </tr>
+      {% for key, label in fields %}
+      <tr class="{{ 'clash' if key in conflicts }}">
+        <td class="f">{{ label }}</td>
+        {% for s in group %}<td>{{ s[key] or '—' }}</td>{% endfor %}
+      </tr>
+      {% endfor %}
+      {% for key, label in meta %}
+      <tr class="meta">
+        <td class="f">{{ label }}</td>
+        {% for s in group %}
+        <td>{% if key == 'created_at' and s[key] %}{{ s[key].strftime('%d/%m %H:%M') }}
+            {% else %}{{ s[key] or '—' }}{% endif %}</td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+      <tr>
+        <td class="f">เก็บใบนี้</td>
+        {% for s in group %}
+        <td>
+          {# ปุ่มละฟอร์ม ไม่ใช่ radio + ปุ่มเดียว — ปุ่มที่ลบถาวรต้องชี้ชัดว่ากดแล้วเก็บใบไหน
+             และต้องใช้ได้แม้ JS ไม่ทำงาน #}
+          <form method="post" action="/dups/resolve"
+                onsubmit="return confirm('เก็บใบที่ {{ loop.index }} ({{ s.plate_raw or '—' }} {{ s.name or '' }}) แล้วลบอีก {{ group|length - 1 }} ใบถาวร?')">
+            <input type="hidden" name="keep" value="{{ s.id }}">
+            <input type="hidden" name="i" value="{{ index }}">
+            <button type="submit" class="danger">เก็บใบนี้ ลบที่เหลือ</button>
+          </form>
+          <p class="muted"><a href="/slips/{{ s.id }}" target="_blank">เปิดใบเต็ม</a></p>
+        </td>
+        {% endfor %}
+      </tr>
+    </table>
+    <div class="keepbar">
+      {% if index + 1 < total %}
+      <a class="btn ghost" href="/dups?i={{ index + 1 }}">ข้ามกลุ่มนี้ →</a>
+      {% endif %}
+      {% if index > 0 %}<a href="/dups?i={{ index - 1 }}">← กลุ่มก่อนหน้า</a>{% endif %}
+      <span class="muted">ข้ามได้ ไม่มีอะไรถูกเปลี่ยนจนกว่าจะกด "เก็บใบนี้"</span>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

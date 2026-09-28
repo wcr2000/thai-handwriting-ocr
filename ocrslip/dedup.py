@@ -38,16 +38,51 @@ def norm_location(value: str | None) -> str:
     return re.sub(r"\s+", " ", (value or "")).strip().lower()
 
 
-def load_slips(conn: psycopg.Connection) -> list[dict[str, Any]]:
-    """ทุกใบ + hash ของรูปต้นฉบับ (ใบที่กรอกเองไม่มีรูป จึงเป็น NULL)"""
-    return conn.execute(
-        f"""SELECT s.id::text AS id, s.name, s.tel, s.plate_raw, s.plate_norm, s.tel_digits,
-                   s.deposit_date, s.review_status, s.superseded_by, s.uploaded_by,
-                   s.created_at, s.car_status, s.location,
-                   (SELECT i.sha256 FROM {DB_SCHEMA}.slip_images i
-                     WHERE i.slip_id = s.id AND i.kind = 'original' LIMIT 1) AS osha
-            FROM {DB_SCHEMA}.slips s ORDER BY s.created_at"""
-    ).fetchall()
+SLIP_COLS = """s.id::text AS id, s.name, s.tel, s.plate_raw, s.plate_norm, s.tel_digits,
+                   s.province, s.brand, s.car_type, s.deposit_date, s.location,
+                   s.review_status, s.reviewed_by, s.superseded_by, s.uploaded_by,
+                   s.car_status, s.returned_at, s.created_at"""
+
+# ตัวกรอง "ใบที่มีสิทธิ์ซ้ำกับใบอื่น" — คีย์หลวมกว่า group_duplicates โดยเจตนา
+# (ไม่ดูที่จอด/สถานะรถ) เพราะมันเป็นแค่ด่านตัดของที่ไม่เกี่ยวออกก่อนส่งให้ union-find
+# ตัวตัดสินจริงยังเป็น group_duplicates ตัวเดียว คีย์ที่หลวมกว่าครอบคีย์จริงอยู่แล้ว
+# จึงไม่มีใบไหนในกลุ่มจริงหลุดหายไป (ถ้าทำให้แคบกว่า กลุ่มจะขาดสมาชิกแบบเงียบ ๆ)
+# ต้องเป็น JOIN ไม่ใช่ "id IN (... OR ...)" — แบบหลังทำให้ planner ไล่ EXISTS กับ
+# row-comparison ทีละแถวของทั้งตาราง วัดได้ 11 วินาที ขณะที่ JOIN กับ UNION ใช้ไม่ถึงวินาที
+CANDIDATES = """
+    WITH img AS (SELECT slip_id, sha256 FROM {s}.slip_images WHERE kind = 'original'),
+         dup_sha AS (SELECT sha256 FROM img GROUP BY sha256
+                      HAVING count(DISTINCT slip_id) > 1),
+         dup_txt AS (SELECT plate_norm, tel_digits, deposit_date FROM {s}.slips
+                      WHERE coalesce(plate_norm, '') <> '' AND coalesce(tel_digits, '') <> ''
+                        AND deposit_date IS NOT NULL
+                      GROUP BY 1, 2, 3 HAVING count(*) > 1)
+    SELECT i.slip_id AS id FROM img i JOIN dup_sha USING (sha256)
+     UNION
+    SELECT s2.id FROM {s}.slips s2 JOIN dup_txt t
+       ON s2.plate_norm = t.plate_norm AND s2.tel_digits = t.tel_digits
+      AND s2.deposit_date = t.deposit_date
+"""
+
+
+def load_slips(
+    conn: psycopg.Connection, *, only_candidates: bool = False
+) -> list[dict[str, Any]]:
+    """ทุกใบ + hash ของรูปต้นฉบับ (ใบที่กรอกเองไม่มีรูป จึงเป็น NULL)
+
+    only_candidates = เอาเฉพาะใบที่มีสิทธิ์ซ้ำ ใช้ตอนหน้าเว็บเรียก — ทั้งตาราง
+    (5,700 แถว) ใช้เวลา 1.7 วินาทีบนสายจริง ซึ่งช้าเกินไปสำหรับหน้าที่กดวนหลายร้อยครั้ง
+    สคริปต์ CLI ยังโหลดทั้งตารางตามเดิม เพราะรันทีเดียวจบและอยากให้เห็นภาพรวมจริง
+    """
+    osha = f"""(SELECT i.sha256 FROM {DB_SCHEMA}.slip_images i
+                     WHERE i.slip_id = s.id AND i.kind = 'original' LIMIT 1) AS osha"""
+    if not only_candidates:
+        sql = f"SELECT {SLIP_COLS}, {osha} FROM {DB_SCHEMA}.slips s ORDER BY s.created_at"
+    else:
+        sql = (f"WITH cand AS ({CANDIDATES.format(s=DB_SCHEMA)})"
+               f" SELECT {SLIP_COLS}, {osha} FROM {DB_SCHEMA}.slips s"
+               f" JOIN cand ON cand.id = s.id ORDER BY s.created_at")
+    return conn.execute(sql).fetchall()
 
 
 def group_duplicates(slips: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
