@@ -1,0 +1,147 @@
+{% extends "public_base.html" %}
+{% block content %}
+<div class="card">
+  <h2 style="margin-top:0">ลงทะเบียนจอดรถ</h2>
+  <p class="muted">กรอกตามบัตรจอดรถสีขาว แล้วยื่นเครื่องให้เจ้าหน้าที่ยืนยันท้ายฟอร์ม</p>
+
+  {% if errors %}<div class="err">กรอกไม่ครบหรือไม่ถูกต้อง {{ errors|length }} จุด — ดูข้อความสีแดงใต้ช่องนั้น</div>{% endif %}
+
+  {# ไม่มี hx-post: หน้านี้ผู้มาจอดเปิดจากเน็ตมือถือกลางลาน ถ้า htmx โหลดไม่ขึ้น
+     ฟอร์มต้องยัง submit ได้เอง จึงใช้ POST ธรรมดาทั้งหน้า ไม่พึ่ง JavaScript เลย #}
+  <form method="post" action="/in" autocomplete="off">
+    <label for="name">ชื่อ - นามสกุล</label>
+    {# autocorrect/autocapitalize: ชื่อคนไทยมักโดนคีย์บอร์ดมือถือแก้เป็นคำที่มันคุ้นกว่า
+       enterkeyhint=next ให้ปุ่มมุมขวาล่างของแป้นพาไปช่องถัดไป ไม่ใช่กดส่งฟอร์มกลางทาง #}
+    <input type="text" id="name" name="name" value="{{ v.name or '' }}" required
+           class="{{ 'bad' if errors.name }}" placeholder="สมชาย ใจดี"
+           autocapitalize="words" autocorrect="off" spellcheck="false" enterkeyhint="next">
+    {% if errors.name %}<p class="field-err">{{ errors.name }}</p>{% endif %}
+
+    <div class="row">
+      <div class="col">
+        <label for="tel">เบอร์โทร</label>
+        {# type=tel -> มือถือเด้งแป้นตัวเลขขึ้นมาให้ ไม่ต้องสลับแป้นเอง #}
+        <input type="tel" id="tel" name="tel" value="{{ v.tel or '' }}" required
+               class="{{ 'bad' if errors.tel }}" placeholder="0812345678"
+               inputmode="numeric" autocomplete="tel" enterkeyhint="next">
+        {% if errors.tel %}<p class="field-err">{{ errors.tel }}</p>{% endif %}
+      </div>
+      <div class="col">
+        <label for="date">วันที่ฝาก</label>
+        <input type="date" id="date" name="date" value="{{ v.date or '' }}" required
+               class="{{ 'bad' if errors.date }}">
+        {% if errors.date %}<p class="field-err">{{ errors.date }}</p>{% endif %}
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="col">
+        <label for="noplate">ทะเบียนรถ</label>
+        <input type="text" id="noplate" name="noplate" value="{{ v.noplate or '' }}" required
+               class="{{ 'bad' if errors.noplate }}" placeholder="1กก 1234"
+               autocapitalize="characters" autocorrect="off" spellcheck="false" enterkeyhint="next">
+        {% if errors.noplate %}<p class="field-err">{{ errors.noplate }}</p>{% endif %}
+      </div>
+      <div class="col">
+        <label for="province">จังหวัดของทะเบียน</label>
+        {# ให้เลือกไม่ให้พิมพ์ เพราะ "ปทุม" / "ปทุมธานี " / "กรุงเทพฯ" ทำให้ขาออกค้นไม่เจอ #}
+        {# วงล้อเลือกของ iOS ต้องหมุนผ่าน 77 ช่อง จึงยกจังหวัดที่พบบ่อยแถววัดขึ้นมาไว้กลุ่มแรก
+           กลุ่มล่างยังมีครบทั้ง 77 จังหวัด สำหรับคนที่มาจากที่ไกล #}
+        <select id="province" name="province" required class="{{ 'bad' if errors.province }}">
+          <option value="">— เลือกจังหวัด —</option>
+          <optgroup label="พบบ่อย">
+            {% for p in common_provinces %}
+            <option value="{{ p }}" {{ 'selected' if v.province == p }}>{{ p }}</option>
+            {% endfor %}
+          </optgroup>
+          <optgroup label="ทุกจังหวัด">
+            {% for p in provinces %}
+            <option value="{{ p }}" {{ 'selected' if v.province == p }}>{{ p }}</option>
+            {% endfor %}
+          </optgroup>
+        </select>
+        {% if errors.province %}<p class="field-err">{{ errors.province }}</p>{% endif %}
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="col">
+        <label for="brand">ยี่ห้อ <span class="muted">(ไม่บังคับ)</span></label>
+        <input type="text" id="brand" name="brand" value="{{ v.brand or '' }}"
+               placeholder="โตโยต้า">
+      </div>
+      <div class="col">
+        <label for="typecar">ชนิดรถ</label>
+        {# ใช้ select + ช่องพิมพ์ที่โผล่เมื่อเลือก "อื่นๆ" ตามแบบเดียวกับหน้าอัปโหลด
+           (iOS Safari ไม่รองรับ datalist ช่องจะกลายเป็นกล่องเปล่าไม่มีรายการให้เลือก) #}
+        <select id="typecar" name="typecar" required class="{{ 'bad' if errors.typecar }}">
+          <option value="">— เลือกชนิดรถ —</option>
+          {% for t in car_types %}
+          <option value="{{ t }}" {{ 'selected' if v.typecar == t }}>{{ t }}</option>
+          {% endfor %}
+          <option value="__new__" {{ 'selected' if v.typecar == '__new__' }}>อื่นๆ (พิมพ์เอง)</option>
+        </select>
+        <input type="text" id="typecar_new" name="typecar_new" value="{{ v.typecar_new or '' }}"
+               placeholder="เช่น มอเตอร์ไซค์" style="margin-top:.4rem"
+               {{ '' if v.typecar == '__new__' else 'hidden' }}>
+        {% if errors.typecar %}<p class="field-err">{{ errors.typecar }}</p>{% endif %}
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="col">
+        <label for="building">อาคารที่จอด</label>
+        <select id="building" name="building" required class="{{ 'bad' if errors.building }}">
+          <option value="">— เลือกอาคาร —</option>
+          {% for b in buildings %}
+          <option value="{{ b }}" {{ 'selected' if v.building == b }}>{{ b }}</option>
+          {% endfor %}
+        </select>
+        {% if errors.building %}<p class="field-err">{{ errors.building }}</p>{% endif %}
+      </div>
+      <div class="col">
+        <label for="floor">ชั้นที่จอด</label>
+        <select id="floor" name="floor" required class="{{ 'bad' if errors.floor }}">
+          <option value="">— เลือกชั้น —</option>
+          {% for f in floors %}
+          <option value="{{ f }}" {{ 'selected' if v.floor == f }}>{{ f }}</option>
+          {% endfor %}
+        </select>
+        {% if errors.floor %}<p class="field-err">{{ errors.floor }}</p>{% endif %}
+      </div>
+    </div>
+
+    <div class="staff-box">
+    <p class="muted" style="margin:0"><b>ส่วนนี้สำหรับเจ้าหน้าที่</b><br>
+       กรอกด้านบนครบแล้ว ยื่นเครื่องให้เจ้าหน้าที่พิมพ์รหัสและกดยืนยัน</p>
+    <label for="entry_pw">รหัสเจ้าหน้าที่</label>
+    {# autocomplete=off + ล้างค่าทิ้งทุกครั้ง: หน้านี้ถูกเปิดบนเครื่องของผู้มาจอด
+       ห้ามให้เบราว์เซอร์ของเขาจำรหัสไว้ และห้าม render ค่าที่พิมพ์กลับลงไปในหน้า #}
+    <input type="password" id="entry_pw" name="entry_pw" required autocomplete="off"
+           class="{{ 'bad' if errors.entry_pw }}" inputmode="text">
+    {% if errors.entry_pw %}<p class="field-err">{{ errors.entry_pw }}</p>{% endif %}
+
+    <div class="form-actions"><button type="submit">ยืนยันการลงทะเบียน</button></div>
+    </div>
+  </form>
+</div>
+
+<script>
+  // กรอกผิดแล้วต้องพาไปที่ช่องนั้นเลย — บนมือถือ ข้อความสรุปข้างบนกับช่องที่ผิด
+  // มักอยู่คนละหน้าจอ คนจะเห็นแถบแดงแล้วไม่รู้ว่าต้องเลื่อนไปแก้ที่ไหน
+  (function () {
+    var first = document.querySelector('.bad');
+    if (!first) return;
+    first.scrollIntoView({ block: 'center' });
+    first.focus({ preventScroll: true });
+  })();
+
+  // เลือก "อื่นๆ" แล้วค่อยโผล่ช่องพิมพ์ — ถ้า JavaScript ไม่ทำงาน ช่องจะโผล่อยู่แล้ว
+  // ตอน server ส่งกลับมาพร้อม error จึงยังกรอกต่อได้ ไม่ตายน้ำตื้น
+  (function () {
+    var sel = document.getElementById('typecar'), box = document.getElementById('typecar_new');
+    function sync() { box.hidden = sel.value !== '__new__'; box.required = !box.hidden; }
+    sel.addEventListener('change', sync); sync();
+  })();
+</script>
+{% endblock %}

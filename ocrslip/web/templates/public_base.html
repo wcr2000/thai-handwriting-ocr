@@ -1,0 +1,17 @@
+{# layout ของหน้าที่คนนอกเปิด — ห้ามใช้ base.html เพราะ header ของ base มีลิงก์เมนู
+   ของเจ้าหน้าที่ (อัปโหลด/คิวตรวจสอบ) ซึ่งไม่ควรโผล่ให้ผู้มาจอดเห็นหรือกดเข้าไปเจอหน้า login #}
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}ลงทะเบียนจอดรถ{% endblock %}</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="public">
+<div class="public-wrap">
+  <h1 class="public-title">🚗 เอื้อเฟื้อที่จอดรถ</h1>
+  {% block content %}{% endblock %}
+</div>
+</body>
+</html>

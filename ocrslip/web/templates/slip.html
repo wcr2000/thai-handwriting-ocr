@@ -1,12 +1,18 @@
 {% extends "base.html" %}
 {% block content %}
+{% if taken %}
+<div class="err">ใบนี้ถูกปิดว่ารับรถกลับไปแล้วก่อนที่คุณจะกด — ไม่ได้บันทึกทับ
+  ดูด้านล่างว่าใครเป็นผู้ส่งมอบและเมื่อไหร่ ถ้าไม่ใช่รถคันเดียวกัน ให้ตรวจสอบก่อนปล่อยรถ</div>
+{% endif %}
 <div class="row">
+  {% if has_image %}
   <div class="col" style="flex:1 1 480px">
     <div class="card">
       <img class="slip-img" src="/image/{{ slip.id }}" alt="ใบจอดรถ">
       <p class="muted"><a href="/image/{{ slip.id }}?kind=original" target="_blank">ดูรูปต้นฉบับ</a></p>
     </div>
   </div>
+  {% endif %}
   <div class="col">
     <div class="card">
       <h2>{{ slip.name or '—' }}</h2>
@@ -23,22 +29,25 @@
         <tr><th>คนตรวจ</th><td>{{ slip.reviewed_by or '—' }}
             {% if slip.reviewed_at %}<span class="muted">{{ slip.reviewed_at.strftime('%d/%m/%Y %H:%M') }}</span>{% endif %}</td></tr>
         <tr><th>บันทึกเมื่อ</th><td>{{ slip.created_at.strftime('%d/%m/%Y %H:%M') if slip.created_at else '—' }}</td></tr>
+        <tr><th>ที่มาของใบ</th><td>{{ 'ผู้มาจอดกรอกเอง' if slip.entry_source == 'typed' else 'ถ่ายรูปใบ + AI อ่าน' }}</td></tr>
         <tr><th>สถานะรถ</th><td>{{ slip.car_status }}{% if slip.returned_at %} เมื่อ {{ slip.returned_at.strftime('%d/%m/%Y %H:%M') }} โดย {{ slip.returned_by or '—' }}{% endif %}</td></tr>
+        {% if slip.released_to %}<tr><th>ผู้มารับรถ</th><td>{{ slip.released_to }}
+            <span class="badge warn">ไม่ใช่เจ้าของ</span></td></tr>{% endif %}
       </table>
     </div>
-    {% if slip.car_status == 'stored' and user and user.is_admin %}
+    {% if slip.car_status == 'stored' and user %}
     <form method="post" action="/slips/{{ slip.id }}/return" class="card">
       <h3>ยืนยันการรับรถคืน</h3>
-      <p class="muted">เทียบรูปใบจริงกับผู้มารับก่อนกดยืนยัน</p>
+      <p class="muted">ขอดูบัตรประชาชนเทียบชื่อในใบก่อนกดยืนยัน — ดูด้วยตา ไม่ต้องถ่ายเก็บ</p>
       <label for="returned_by">เจ้าหน้าที่ผู้ส่งมอบ</label>
       <input type="text" id="returned_by" name="returned_by" required>
+      {# เคสให้ญาติมารับ เป็นเคสที่ต้องมีร่องรอยมากที่สุด แต่เดิมจดได้แค่ในหมายเหตุรวม #}
+      <label for="released_to">ผู้มารับรถ <span class="muted">(กรอกเฉพาะเมื่อไม่ใช่เจ้าของ)</span></label>
+      <input type="text" id="released_to" name="released_to" placeholder="ชื่อ-นามสกุล ตามบัตรประชาชน">
       <label for="note">หมายเหตุ</label>
       <input type="text" id="note" name="note">
       <p><button type="submit">✓ ยืนยันรับรถกลับแล้ว</button></p>
     </form>
-    {% endif %}
-    {% if slip.car_status == 'stored' and user and not user.is_admin %}
-    <div class="card muted">การรับรถคืนต้องทำโดยผู้ดูแลระบบ</div>
     {% endif %}
     {% if edits %}
     <div class="card">

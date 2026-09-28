@@ -32,3 +32,18 @@ USD_THB = float(os.getenv("USD_THB", "33"))
 SECRET_KEY = os.getenv("SECRET_KEY", "")
 # ตั้ง true เมื่อรันหลัง HTTPS (Render เป็น HTTPS อยู่แล้ว) เพื่อบังคับ Secure cookie
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "").lower() in ("1", "true", "yes")
+
+# --- ฟอร์มขาเข้าที่ผู้มาจอดกรอกเอง (/in) ---
+# รหัสที่เจ้าหน้าที่พิมพ์ปิดท้ายฟอร์ม = คำรับรองว่า "เห็นรถคันนี้จอดจริง"
+# ตรวจฝั่ง server เท่านั้น ห้ามย้ายไปเช็คใน JavaScript เด็ดขาด — ถ้าเช็คในหน้าเว็บ
+# รหัสจะโผล่ใน view-source ของทุกเครื่องที่เปิดหน้านี้ แล้วการหวงรหัสก็ไม่มีความหมาย
+# ไม่มี default โดยเจตนา: ไม่ตั้งค่านี้ = ปิดหน้า /in ไปเลย ดีกว่าเปิดด้วยรหัสที่ใครก็เดาได้
+ENTRY_PASSWORD = os.getenv("ENTRY_PASSWORD", "")
+# ตัวเลือกอาคาร/ชั้นในฟอร์ม คั่นด้วย comma — เป็น dropdown ไม่ใช่ช่องพิมพ์ เพราะพิมพ์เอง
+# จะได้ "อาคาร3ชั้น5" / "ตึก 3 ช.5" / "3-5" ซึ่งเรียงไม่ได้และสรุปที่หน้า dashboard ไม่ได้
+ENTRY_BUILDINGS = tuple(
+    s.strip() for s in os.getenv("ENTRY_BUILDINGS", "อาคาร 1,อาคาร 2,อาคาร 3,อาคาร 4,ลานจอดรอบนอก").split(",") if s.strip()
+)
+ENTRY_FLOORS = tuple(
+    s.strip() for s in os.getenv("ENTRY_FLOORS", "ชั้น 1,ชั้น 2,ชั้น 3,ชั้น 4,ชั้น 5,ชั้น 6,ลานพื้นราบ").split(",") if s.strip()
+)

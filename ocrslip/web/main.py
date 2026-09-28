@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import io
 import math
 import secrets
@@ -19,13 +20,17 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from ..auth import COOKIE_NAME, SESSION_TTL, User, authenticate, make_token, read_token
-from ..config import COOKIE_SECURE, OCR_MODEL, SECRET_KEY, USD_THB
+from ..config import (
+    COOKIE_SECURE, ENTRY_BUILDINGS, ENTRY_FLOORS, ENTRY_PASSWORD, OCR_MODEL, SECRET_KEY, USD_THB,
+)
 from ..db import (
     add_staff, build_filters, clean_person_name, connect, dashboard_stats, export_rows, get_image, get_slip,
+    insert_slip, list_edits, open_slip_by_plate,
     claim_next, claim_one, known_people, list_staff, mark_returned, next_in_queue,
     query_slips, release_claims, review_counts,
     set_staff_active, update_slip,
 )
+from ..normalize import PROVINCE_CHOICES, norm_phone, norm_plate, parse_date
 from ..review import REASON_LABELS, evaluate
 from ..search import search as fuzzy_search
 from .pipeline import ingest
@@ -37,12 +42,16 @@ app = FastAPI(title="ระบบเอื้อเฟื้อที่จอ�
 _SECRET = SECRET_KEY or secrets.token_urlsafe(32)
 
 # หน้าที่เข้าได้โดยไม่ต้องล็อกอิน
-PUBLIC_PATHS = ("/login", "/static", "/health", "/favicon.ico")
+# "/in" = ฟอร์มที่ผู้มาจอดกรอกเอง ต้องเปิดให้คนนอกเข้าได้ ด่านของหน้านี้คือรหัสที่
+# เจ้าหน้าที่พิมพ์ปิดท้าย ไม่ใช่การล็อกอิน (ตรวจรหัสฝั่ง server เท่านั้น ดู config.ENTRY_PASSWORD)
+PUBLIC_PATHS = ("/login", "/static", "/health", "/favicon.ico", "/in")
 # หน้าที่เฉพาะ admin เท่านั้น — จุดที่ย้อนกลับไม่ได้ หรือเป็นข้อมูลส่วนตัวทั้งก้อน
 ADMIN_ONLY = ("/table", "/dashboard", "/export.xlsx", "/staff")
 # "/reject" ไม่อยู่ในนี้ — คนที่นั่งตรวจ (approver) คือคนที่เห็นรูปเบลอ/ใบผิดประเภท
 # ถ้าตีกลับไม่ได้ เขาจะกดอนุมัติข้อมูลขยะแทน ซึ่งแก้ยากกว่า (ตีกลับย้อนได้ด้วย ?edit=1)
-ADMIN_ONLY_SUFFIX = ("/return",)
+# "/return" เคยอยู่ในนี้ แต่คนที่ยืนอยู่จุด checkout คือ staff ไม่ใช่ admin ถ้าปล่อยรถไม่ได้
+# เขาจะปล่อยรถโดยไม่บันทึกอะไรเลย ซึ่งแย่กว่าการให้สิทธิ์ (approver ยังถูกกันด้วย allowlist ล่าง)
+ADMIN_ONLY_SUFFIX = ()
 # role "approver" (คนทำ label) ใช้ allowlist ไม่ใช่ blacklist — route ใหม่ที่ลืมคิดถึงสิทธิ์
 # จะถูกปิดไว้ก่อนเสมอ ไม่ใช่เปิดให้โดยบังเอิญ เขาเห็นแค่ "อัปโหลด" กับ "คิวตรวจ" เท่านั้น
 # (ค้นหา / ใบรายตัว / ตารางข้อมูล / สรุป / รายชื่อทีม ปิดหมด)
@@ -228,6 +237,98 @@ def logout():
     resp = RedirectResponse("/login", status_code=303)
     resp.delete_cookie(COOKIE_NAME)
     return resp
+
+
+# ---------- ฟอร์มขาเข้าที่ผู้มาจอดกรอกเอง ----------
+# ทางนี้ไม่มี OCR และไม่เข้าคิวตรวจ เพราะคนที่รู้ข้อมูลคือคนที่พิมพ์ข้อมูลเอง
+# ไม่มีอะไรให้ "อ่านออกไหม" อีกแล้ว คิวตรวจจึงเหลือรับแค่ใบเขียนมือที่ถ่ายรูปเข้ามา
+
+CAR_TYPES = ("เก๋ง", "กระบะ", "ตู้")
+
+# จังหวัดที่ยกขึ้นไว้กลุ่มแรกของ dropdown — วัดอยู่ปทุมธานี รถส่วนใหญ่มาจากแถวนี้
+# บน iOS การเลือกจังหวัดคือการหมุนวงล้อ ถ้าไม่ยกขึ้นมาก็ต้องหมุนผ่านหลายสิบช่องทุกคัน
+COMMON_PROVINCES = ("ปทุมธานี", "กรุงเทพมหานคร", "นนทบุรี", "นครปฐม", "สมุทรปราการ",
+                    "พระนครศรีอยุธยา", "นครนายก", "สระบุรี")
+
+
+def _entry_choices() -> dict[str, Any]:
+    return {"provinces": PROVINCE_CHOICES, "common_provinces": COMMON_PROVINCES,
+            "buildings": ENTRY_BUILDINGS, "floors": ENTRY_FLOORS, "car_types": CAR_TYPES}
+
+
+@app.get("/in", response_class=HTMLResponse)
+def entry_form(request: Request):
+    if not ENTRY_PASSWORD:
+        return HTMLResponse("ยังไม่ได้เปิดใช้ฟอร์มนี้ (ผู้ดูแลระบบยังไม่ได้ตั้ง ENTRY_PASSWORD)",
+                            status_code=503)
+    today = dt.date.today().isoformat()
+    return render(request, "in.html", errors={}, v={"date": today}, **_entry_choices())
+
+
+@app.post("/in", response_class=HTMLResponse)
+async def entry_submit(request: Request):
+    if not ENTRY_PASSWORD:
+        return HTMLResponse("ยังไม่ได้เปิดใช้ฟอร์มนี้", status_code=503)
+
+    form = await request.form()
+    v = {k: (form.get(k) or "").strip() for k in
+         ("name", "tel", "date", "noplate", "province", "brand", "typecar", "typecar_new",
+          "building", "floor")}
+    car_type = v["typecar_new"] if v["typecar"] == "__new__" else v["typecar"]
+
+    errors: dict[str, str] = {}
+    if len(clean_person_name(v["name"])) < 4 or " " not in clean_person_name(v["name"]):
+        errors["name"] = "กรอกทั้งชื่อและนามสกุล"
+    if len(norm_phone(v["tel"])) != 10:
+        errors["tel"] = "เบอร์โทรต้องเป็นตัวเลข 10 หลัก"
+    if not norm_plate(v["noplate"]):
+        errors["noplate"] = "กรอกทะเบียนรถ"
+    if v["province"] not in PROVINCE_CHOICES:
+        errors["province"] = "เลือกจังหวัดของทะเบียน"
+    if v["building"] not in ENTRY_BUILDINGS:
+        errors["building"] = "เลือกอาคารที่จอด"
+    if v["floor"] not in ENTRY_FLOORS:
+        errors["floor"] = "เลือกชั้นที่จอด"
+    if not car_type:
+        errors["typecar"] = "เลือกชนิดรถ"
+    if parse_date(v["date"]) is None:
+        errors["date"] = "วันที่ไม่ถูกต้อง"
+    # เทียบด้วย compare_digest ไม่ใช่ == เพื่อไม่ให้เวลาที่ใช้เทียบบอกว่าถูกกี่ตัวแรก
+    # ต้องเทียบเป็น bytes: compare_digest ปฏิเสธ str ที่มีอักขระนอก ASCII ซึ่งรหัสภาษาไทยเข้าข่าย
+    # ไม่มี rate limit ที่นี่โดยเจตนา (ตกลงกันไว้ว่าไม่เพิ่มระบบ) — ด่านจริงคือ
+    # เจ้าหน้าที่เป็นคนขอเครื่องมาพิมพ์รหัสเอง ไม่ได้บอกรหัสให้ผู้มาจอด
+    if not secrets.compare_digest(
+        (form.get("entry_pw") or "").encode(), ENTRY_PASSWORD.encode()
+    ):
+        errors["entry_pw"] = "รหัสเจ้าหน้าที่ไม่ถูกต้อง"
+
+    if errors:
+        return render(request, "in.html", errors=errors, v=v, **_entry_choices())
+
+    fields = {"name": clean_person_name(v["name"]), "tel": v["tel"], "date": v["date"],
+              "noplate": v["noplate"], "province": v["province"], "brand": v["brand"] or None,
+              "typecar": car_type, "location": f"{v['building']} {v['floor']}"}
+
+    with connect() as conn:
+        # กันกดส่งซ้ำ (refresh หน้า / กดปุ่มสองที) ไม่ให้กลายเป็นสองใบของรถคันเดียว
+        # ถ้ามีใบของทะเบียนนี้ที่ยังไม่ได้รับรถกลับและเพิ่งลงทะเบียนไปวันนี้ ให้คืนใบเดิม
+        # ใบซ้ำเจ็บที่ขาออก: เจ้าหน้าที่จะเห็นสองแถวเหมือนกันแล้วไม่รู้ว่าต้องปิดใบไหน
+        dup = open_slip_by_plate(conn, norm_plate(v["noplate"]))
+        if dup:
+            slip = dup
+        else:
+            # review_reason ว่าง -> insert_slip ตั้ง needs_review = false ให้เอง
+            slip_id = insert_slip(
+                conn, fields,
+                confidence={}, raw_ocr={}, review_reason=[],
+                ocr_model=None, ocr_variant=None,
+                # กรอกเองแล้วเจ้าหน้าที่ยืนยันแล้ว = ไม่มีอะไรให้ตรวจ เข้าสถานะพร้อมค้นหาเลย
+                review_status="approved", entry_source="typed",
+            )
+            conn.commit()
+            slip = get_slip(conn, slip_id)
+
+    return render(request, "in_done.html", slip=slip, again=bool(dup))
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -488,25 +589,34 @@ def api_search(request: Request, q: str = "", include_pending: bool = False):
 
 
 @app.get("/slips/{slip_id}", response_class=HTMLResponse)
-def slip_detail(request: Request, slip_id: str):
+def slip_detail(request: Request, slip_id: str, taken: int = 0):
     with connect() as conn:
         slip = get_slip(conn, slip_id)
         if not slip:
             return HTMLResponse("ไม่พบใบนี้", status_code=404)
-        edits = conn.execute(
-            "SELECT * FROM ocr_dhammakaya.slip_edits WHERE slip_id=%s ORDER BY edited_at DESC",
-            (slip_id,),
-        ).fetchall()
-    return render(request, "slip.html", slip=slip, edits=edits)
+        # เคยเขียนชื่อ schema ตายตัวว่า ocr_dhammakaya ตรงนี้ ทำให้หน้าใบพัง 500
+        # ทุกครั้งที่ DB_SCHEMA ถูกตั้งเป็นอย่างอื่น (เช่นตอนรันเทสต์) — ย้ายไปใช้ของ db.py
+        edits = list_edits(conn, slip_id)
+        # ใบที่กรอกเองไม่มีรูปหลักฐาน ต้องรู้ก่อน render ไม่งั้นหน้าจะมีกรอบรูปแตกค้างอยู่
+        has_image = get_image(conn, slip_id) is not None
+    return render(request, "slip.html", slip=slip, edits=edits, has_image=has_image,
+                  taken=bool(taken))
 
 
 @app.post("/slips/{slip_id}/return")
 async def do_return(request: Request, slip_id: str):
     form = await request.form()
     with connect() as conn:
-        mark_returned(conn, slip_id, (form.get("returned_by") or None), (form.get("note") or None))
+        ok = mark_returned(
+            conn, slip_id,
+            (form.get("returned_by") or None),
+            (form.get("note") or None),
+            clean_person_name(form.get("released_to") or "") or None,
+        )
         conn.commit()
-    return RedirectResponse(f"/slips/{slip_id}", status_code=303)
+    # ปิดไม่สำเร็จ = มีคนปิดไปก่อนแล้ว ต้องบอกให้เห็นชัด ไม่ใช่เด้งกลับหน้าเดิมเงียบ ๆ
+    # เหมือนกดสำเร็จ — เจ้าหน้าที่จะไม่รู้ว่ารถคันนี้อาจถูกปล่อยให้คนอื่นไปแล้ว
+    return RedirectResponse(f"/slips/{slip_id}" + ("" if ok else "?taken=1"), status_code=303)
 
 
 @app.get("/image/{slip_id}")

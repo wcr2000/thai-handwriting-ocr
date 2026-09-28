@@ -1,0 +1,28 @@
+{% extends "public_base.html" %}
+{% block title %}ลงทะเบียนแล้ว — {{ slip.plate_raw }}{% endblock %}
+{% block content %}
+{# หน้าเทา = สัญญาณว่าจบแล้ว แก้อะไรไม่ได้อีก และเป็นภาพที่ผู้มาจอดแคปเก็บไว้
+   ทุกอย่างที่เจ้าหน้าที่ต้องใช้ค้นตอนขาออกต้องอยู่ในภาพนี้ (ชื่อ เบอร์ ทะเบียน เลขอ้างอิง เวลา)
+   และห้ามมีรหัสเจ้าหน้าที่อยู่ในภาพเด็ดขาด #}
+<div class="card done-card">
+  <p class="done-stamp">✓ เจ้าหน้าที่ยืนยันแล้ว</p>
+  {% if again %}
+  <p class="err" style="margin:.6rem 0">ทะเบียนนี้ลงทะเบียนไว้แล้ว — นี่คือใบเดิม ไม่ได้สร้างใบใหม่ซ้ำ</p>
+  {% endif %}
+  <table>
+    <tr><th>ชื่อ - นามสกุล</th><td>{{ slip.name or '—' }}</td></tr>
+    <tr><th>เบอร์โทร</th><td>{{ slip.tel or '—' }}</td></tr>
+    <tr><th>ทะเบียน</th><td><b>{{ slip.plate_raw or '—' }}</b> {{ slip.province or '' }}</td></tr>
+    <tr><th>รถ</th><td>{{ slip.brand or '—' }} ({{ slip.car_type or '—' }})</td></tr>
+    <tr><th>ที่จอด</th><td>{{ slip.location or '—' }}</td></tr>
+    {# ต้องเป็นรูปแบบเดียวกับ "บันทึกเมื่อ" ข้างล่าง ไม่งั้นในภาพที่แคปไว้จะมีวันที่สองแบบ
+       ปนกัน (2026-09-28 กับ 28/09/2026) ซึ่งอ่านแล้วสะดุดและชวนให้เข้าใจผิดว่าคนละวัน #}
+    <tr><th>วันที่ฝาก</th><td>{{ slip.deposit_date.strftime('%d/%m/%Y') if slip.deposit_date else '—' }}</td></tr>
+    <tr><th>เลขอ้างอิง</th><td><code>{{ slip.id|string|upper|truncate(8, true, '') }}</code></td></tr>
+    <tr><th>บันทึกเมื่อ</th><td>{{ slip.created_at.strftime('%d/%m/%Y %H:%M') if slip.created_at else '—' }}</td></tr>
+  </table>
+  <p class="done-note">📸 กรุณาแคปหน้าจอนี้เก็บไว้ ใช้ตอนมารับรถกลับ</p>
+  <p class="muted">ถ้าลืมแคป ไม่เป็นไร — ตอนมารับรถ เจ้าหน้าที่ค้นจากชื่อ เบอร์โทร
+     หรือทะเบียนได้ และจะขอดูบัตรประชาชนเพื่อเทียบชื่อ</p>
+</div>
+{% endblock %}

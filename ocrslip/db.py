@@ -151,6 +151,7 @@ def insert_slip(
     uploaded_by: str | None = None,
     photographer: str | None = None,
     review_status: str = "pending",
+    entry_source: str | None = None,
 ) -> str:
     row = build_row(fields)
     row.update(
@@ -167,6 +168,7 @@ def insert_slip(
         raw_ocr=json.dumps(raw_ocr, ensure_ascii=False),
         created_by=created_by,
         uploaded_by=uploaded_by,
+        entry_source=entry_source,
         # ถ้าไม่ได้ระบุคนถ่าย ให้ถือว่าเป็นคนเดียวกับคนอัปโหลด
         photographer=photographer or uploaded_by,
     )
@@ -270,21 +272,63 @@ def update_slip(
     return changed
 
 
-def mark_returned(conn: psycopg.Connection, slip_id: str, by: str | None, note: str | None) -> None:
-    conn.execute(
+def mark_returned(
+    conn: psycopg.Connection,
+    slip_id: str,
+    by: str | None,
+    note: str | None,
+    released_to: str | None = None,
+) -> bool:
+    """ปิดใบว่ารับรถกลับแล้ว คืน False ถ้าใบนี้ถูกปิดไปก่อนแล้ว (ไม่เขียนทับของคนที่กดก่อน)
+
+    เงื่อนไข car_status = 'stored' ต้องอยู่ "ใน" UPDATE ไม่ใช่เช็คก่อนแล้วค่อยเขียน —
+    ที่จุด checkout มีเจ้าหน้าที่หลายคนหันจอคนละเครื่อง การกดใบเดียวกันพร้อมกันเกิดขึ้นจริง
+    ถ้าปล่อยให้ทับได้ ชื่อคนส่งมอบกับเวลาจะกลายเป็นของคนที่กดทีหลัง ซึ่งคือการลบร่องรอย
+    ของคนที่ปล่อยรถไปจริง (ปัญหาเดียวกับที่คอมมิต 66fdce4 แก้ไว้ที่ขั้นอนุมัติ)
+    """
+    cur = conn.execute(
         f"""UPDATE {DB_SCHEMA}.slips
-            SET car_status = 'returned', returned_at = now(), returned_by = %s, returned_note = %s
-            WHERE id = %s""",
-        (by, note, slip_id),
+            SET car_status = 'returned', returned_at = now(), returned_by = %s,
+                returned_note = %s, released_to = %s
+            WHERE id = %s AND car_status = 'stored'""",
+        (by, note, released_to, slip_id),
     )
+    return cur.rowcount == 1
 
 
 # ---------- อ่านข้อมูล ----------
+
+def open_slip_by_plate(
+    conn: psycopg.Connection, plate_norm: str, *, hours: int = 12
+) -> dict[str, Any] | None:
+    """ใบของทะเบียนนี้ที่ยังไม่ได้รับรถกลับและเพิ่งลงทะเบียนไปไม่นาน
+
+    ใช้กันการกดส่งฟอร์มขาเข้าซ้ำ (refresh หน้า / กดปุ่มสองที) ไม่ให้รถคันเดียวได้สองใบ
+    ใบซ้ำไม่ได้เจ็บตอนบันทึก แต่เจ็บตอนขาออก — เจ้าหน้าที่เห็นสองแถวเหมือนกัน
+    แล้วไม่รู้ว่าต้องปิดใบไหน ปิดผิดใบก็เหลือใบค้างที่ไม่มีใครมารับตลอดไป
+    """
+    cur = conn.execute(
+        f"""SELECT * FROM {DB_SCHEMA}.slips
+            WHERE plate_norm = %s AND car_status = 'stored'
+              AND created_at > now() - (%s || ' hours')::interval
+            ORDER BY created_at DESC LIMIT 1""",
+        (plate_norm, hours),
+    )
+    return cur.fetchone()
 
 def get_slip(conn: psycopg.Connection, slip_id: str) -> dict[str, Any]:
     cur = conn.execute(f"SELECT * FROM {DB_SCHEMA}.slips WHERE id = %s", (slip_id,))
     return cur.fetchone() or {}
 
+
+
+def list_edits(conn: psycopg.Connection, slip_id: str) -> list[dict[str, Any]]:
+    """ประวัติการแก้ค่าของใบนี้ ใหม่สุดขึ้นก่อน"""
+    cur = conn.execute(
+        f"SELECT * FROM {DB_SCHEMA}.slip_edits WHERE slip_id = %s ORDER BY edited_at DESC",
+        (slip_id,),
+    )
+    return cur.fetchall()
 
 def get_image(conn: psycopg.Connection, slip_id: str, kind: str = "processed") -> bytes | None:
     cur = conn.execute(
