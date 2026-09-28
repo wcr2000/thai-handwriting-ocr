@@ -155,11 +155,22 @@ ALTER TABLE ocr_dhammakaya.slips ADD COLUMN IF NOT EXISTS claimed_by   text;
 ALTER TABLE ocr_dhammakaya.slips ADD COLUMN IF NOT EXISTS claimed_name text;
 ALTER TABLE ocr_dhammakaya.slips ADD COLUMN IF NOT EXISTS claimed_at   timestamptz;
 
+-- ใบที่เป็น "ของซ้ำ" ของใบที่ตรวจไปแล้ว (ใบกระดาษใบเดียวกัน ถูกอัปเข้ามาสองรอบ)
+-- ชี้ไปที่ใบที่ถือเป็นตัวจริง แล้วถอนตัวเองออกจากคิว — ไม่ลบ เพราะรูปหลักฐานกับ
+-- ร่องรอยว่าใครอัปเข้ามาเมื่อไหร่ยังมีค่าตอนสอบย้อนหลัง และ admin จะลบทีหลังก็ได้
+-- ON DELETE SET NULL: ถ้าตัวจริงถูกลบ ใบซ้ำต้องกลับเข้าคิว ไม่ใช่หายไปทั้งคู่
+ALTER TABLE ocr_dhammakaya.slips ADD COLUMN IF NOT EXISTS superseded_by uuid
+    REFERENCES ocr_dhammakaya.slips(id) ON DELETE SET NULL;
+ALTER TABLE ocr_dhammakaya.slips ADD COLUMN IF NOT EXISTS superseded_at timestamptz;
+CREATE INDEX IF NOT EXISTS slips_superseded_idx
+    ON ocr_dhammakaya.slips (superseded_by) WHERE superseded_by IS NOT NULL;
+
 -- คิวอ่านเฉพาะกอง pending ซึ่งเป็นส่วนน้อยของตาราง partial index จึงเล็กและตรงงาน
 -- เรียงตรงกับ ORDER BY ของคำสั่งจอง เพื่อให้หยิบใบหัวคิวได้โดยไม่ต้อง sort ใหม่
+-- superseded_by ต้องอยู่ใน predicate ด้วย เพราะคำสั่งจองกรองด้วยเงื่อนไขเดียวกันนี้
 CREATE INDEX IF NOT EXISTS slips_claimable_idx
     ON ocr_dhammakaya.slips (needs_review DESC, created_at)
-    WHERE review_status = 'pending';
+    WHERE review_status = 'pending' AND superseded_by IS NULL;
 CREATE INDEX IF NOT EXISTS slips_claimed_by_idx
     ON ocr_dhammakaya.slips (claimed_by) WHERE claimed_by IS NOT NULL;
 

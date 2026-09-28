@@ -10,6 +10,8 @@
   <p class="filters">
     <a href="/review?filter=needs"    class="{{ 'active' if active=='needs' }}">ต้องตรวจ ({{ counts.needs_review }})</a>
     <a href="/review?filter=quick"    class="{{ 'active' if active=='quick' }}">ผ่านเร็ว ({{ counts.quick_pass }})</a>
+    {# กองใบซ้ำต้องมองเห็นได้ ไม่ใช่ซ่อนหายไปเฉย ๆ — ถ้าตีว่าซ้ำผิด ต้องมีที่ให้เจอ #}
+    <a href="/review?filter=dup"      class="{{ 'active' if active=='dup' }}">ซ้ำ ({{ counts.superseded }})</a>
     {# approver เห็นเฉพาะกองที่ยังต้องทำ — กองที่ปิดงานแล้วเป็นคลังข้อมูลของทั้งระบบ #}
     {% if not (user and user.is_approver) %}
     <a href="/review?filter=approved" class="{{ 'active' if active=='approved' }}">อนุมัติแล้ว ({{ counts.approved }})</a>
@@ -50,7 +52,8 @@
       <td>{% for reason in s.review_reason %}<span class="badge warn">{{ reason_labels.get(reason, reason) }}</span>{% endfor %}
         {# ป้ายบอกว่ามีคนถืออยู่ ไม่ซ่อนแถวทิ้ง เพราะยอดของกองกับจำนวนแถวจะไม่ตรงกันแล้วคนงง
            การจองเป็นคำแนะนำ ไม่ใช่การล็อก ยังคลิกเข้าไปได้ถ้าจงใจ #}
-        {% if s.claim_live %}<span class="badge">{{ s.claimed_name or 'มีคน' }}กำลังตรวจ</span>{% endif %}</td>
+        {% if s.claim_live %}<span class="badge">{{ s.claimed_name or 'มีคน' }}กำลังตรวจ</span>{% endif %}
+        {% if s.superseded_by %}<span class="badge">ซ้ำกับใบที่ตรวจแล้ว</span>{% endif %}</td>
       <td><a href="/review/{{ s.id }}">ตรวจ →</a></td>
     </tr>
     {% else %}

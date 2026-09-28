@@ -8,7 +8,7 @@ import psycopg
 from PIL import Image
 
 from ..config import DB_SCHEMA, OCR_MODEL
-from ..db import add_image, image_seen, insert_slip
+from ..db import add_image, insert_slip, slip_with_image
 from ..imageio import encode_jpeg
 from ..normalize import norm_phone, norm_plate
 from ..ocr import OcrResult, read_slip
@@ -102,6 +102,20 @@ def ingest(
     pre = preprocess(raw)
     original_jpeg = encode_jpeg(pre.raw, quality=85)
 
+    # ด่านกันอัปซ้ำ — ต้องอยู่ "ก่อน" ยิง model สองเหตุผล: ไม่สร้างใบซ้ำให้คนตรวจต้องทำงานฟรี
+    # และไม่จ่ายค่า OCR ให้รูปที่อ่านไปแล้ว (ของจริงเคยได้ใบเกินมา 650 ใบจากการกดส่งซ้ำ)
+    #
+    # เทียบด้วย hash ของรูป "ต้นฉบับ" ไม่ใช่รูปที่ preprocess แล้ว เพราะไบต์ของรูป processed
+    # ขึ้นกับคำตอบของ model (มุมหมุน / ตัดสินใจ retry ด้วยภาพเต็ม) รูปเดิมยิงสองครั้งจึงได้
+    # ไบต์ไม่เท่ากันบ่อย — ด่านเดิมที่เทียบรูป processed จับใบซ้ำได้แค่ 200 จาก 650 ใบ
+    # ส่วนรูปต้นฉบับมาจาก encode_jpeg(pre.raw) ซึ่งคำนวณจากไฟล์ที่อัปมาล้วน ๆ ผลเท่าเดิมทุกครั้ง
+    if (twin := slip_with_image(conn, original_jpeg)) is not None:
+        return {
+            "ok": True, "duplicate_of": twin, "id": twin["id"],
+            "fields": {"name": twin["name"], "tel": twin["tel"], "noplate": twin["plate_raw"]},
+            "reasons": [], "problems": {}, "latency_s": 0.0,
+        }
+
     res, used, full_frame = read_with_fallback(pre)
     if not res.ok:
         return {"ok": False, "error": res.error}
@@ -113,7 +127,9 @@ def ingest(
 
     fields = {k: v for k, v in res.fields.items()}
     reasons, problems = evaluate(fields, res.confidence, count_duplicates(conn, fields))
-    if image_seen(conn, processed_jpeg):
+    # รูปต้นฉบับไม่ซ้ำ แต่รูปที่ crop แล้วไปตรงกับใบอื่น = ถ่ายใบเดียวกันสองรูปคนละมุม
+    # เคสนี้กันแข็งไม่ได้ (ไฟล์ต่างกันจริง) จึงชู flag ให้คนตรวจตัดสินเหมือนเดิม
+    if slip_with_image(conn, processed_jpeg) is not None:
         reasons = sorted({*reasons, "duplicate_image"})
 
     slip_id = insert_slip(

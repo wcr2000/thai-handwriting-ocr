@@ -62,6 +62,19 @@
 </div>
 {% endif %}
 
+{# ใบที่ถูกตีว่าซ้ำกับใบที่ตรวจไปแล้ว — คิวไม่จ่ายใบนี้ให้ใครอีก แต่ยังเปิดดูได้
+   ต้องบอกให้เห็นชัดพร้อมทางไปดูใบตัวจริง ไม่งั้นคนที่เปิดมาจะไม่รู้ว่าทำไมกดอนุมัติแล้วเงียบ #}
+{% if slip.superseded_by %}
+<div class="err" style="background:#eef1f6; border-color:#c8d0dc; color:#42506b">
+  <strong>ใบนี้เป็นของซ้ำ</strong> — ใบกระดาษใบเดียวกันถูกอัปเข้ามาสองรอบ และใบตัวจริงตรวจไปแล้ว
+  ระบบจึงไม่จ่ายใบนี้เข้าคิวอีก
+  <div style="margin-top:.5rem">
+    <a class="btn" href="/review/{{ slip.superseded_by }}">ดูใบตัวจริง</a>
+    <a href="/review/next" style="margin-left:.6rem">ขอใบถัดไปในคิว</a>
+  </div>
+</div>
+{% endif %}
+
 {% if taken %}
 <div class="err" style="background:#fff3cd; border-color:#e6c300; color:#7a5c00">
   <strong>ใบนี้ตรวจไปแล้ว</strong> — {{ slip.review_status == 'approved' and 'อนุมัติโดย' or 'ตีกลับโดย' }}

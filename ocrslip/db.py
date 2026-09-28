@@ -14,7 +14,7 @@ from typing import Any, Iterable
 import psycopg
 from psycopg.rows import dict_row
 
-from .config import DATABASE_URL, DB_SCHEMA, REVIEW_CLAIM_MINUTES
+from .config import APP_TIMEZONE, DATABASE_URL, DB_SCHEMA, REVIEW_CLAIM_MINUTES
 from .normalize import (
     _base, norm_brand, norm_cartype, norm_name, norm_phone, norm_plate, norm_province, parse_date,
 )
@@ -26,7 +26,11 @@ SCHEMA_SQL = ROOT / "db" / "schema.sql"
 def connect() -> psycopg.Connection:
     if not DATABASE_URL:
         raise RuntimeError("ยังไม่ได้ตั้ง DATABASE_URL ใน .env")
-    return psycopg.connect(DATABASE_URL, row_factory=dict_row)
+    # -c TimeZone ต้องอยู่ตรงนี้ ไม่ใช่ไปแปลงตอน render — now() ที่เขียนลง returned_at/
+    # reviewed_at และ interval ของการจองใบ ล้วนอ้างเขตเวลาของ session นี้ ถ้าแปลงทีหลัง
+    # เฉพาะที่หน้าจอ จะมีที่ตกหล่นเสมอ (เคสที่เจอ: ใบปิดเวลา 16:15 แต่หน้าใบโชว์ 09:15)
+    return psycopg.connect(
+        DATABASE_URL, row_factory=dict_row, options=f"-c TimeZone={APP_TIMEZONE}")
 
 
 def split_sql(sql: str) -> list[str]:
@@ -208,13 +212,20 @@ def replace_image(
     add_image(conn, slip_id, kind, jpeg, size)
 
 
-def image_seen(conn: psycopg.Connection, jpeg: bytes) -> bool:
-    """เคยอัปโหลดรูปนี้ (byte ตรงกันเป๊ะ) มาก่อนหรือยัง"""
+def slip_with_image(conn: psycopg.Connection, jpeg: bytes) -> dict[str, Any] | None:
+    """ใบที่ถือรูปนี้ (byte ตรงกันเป๊ะ) อยู่แล้ว — None = ยังไม่เคยเห็นรูปนี้
+
+    คืน "ใบ" ไม่ใช่ True/False เพราะคนที่อัปซ้ำต้องได้รู้ว่าใบเดิมคือใบไหนและอยู่สถานะไหน
+    เอาใบเก่าสุดเสมอ ถ้าเคยมีซ้ำอยู่แล้วก็ให้ทุกคนชี้ไปที่ใบเดียวกัน ไม่ใช่ไล่ชี้ต่อกันเป็นลูกโซ่
+    """
     cur = conn.execute(
-        f"SELECT 1 FROM {DB_SCHEMA}.slip_images WHERE sha256 = %s LIMIT 1",
+        f"""SELECT s.id::text AS id, s.name, s.tel, s.plate_raw, s.review_status,
+                   s.uploaded_by, s.created_at
+            FROM {DB_SCHEMA}.slip_images i JOIN {DB_SCHEMA}.slips s ON s.id = i.slip_id
+            WHERE i.sha256 = %s ORDER BY s.created_at LIMIT 1""",
         (hashlib.sha256(jpeg).hexdigest(),),
     )
-    return cur.fetchone() is not None
+    return cur.fetchone()
 
 
 def update_slip(
@@ -296,6 +307,110 @@ def mark_returned(
     return cur.rowcount == 1
 
 
+def norm_loc(alias: str) -> str:
+    """นิพจน์ SQL เทียบที่จอดแบบไม่ถือสาช่องว่าง/ตัวพิมพ์ ("อาคาร 1  ชั้น 2" = "อาคาร 1 ชั้น 2")
+
+    OCR อ่านใบกระดาษใบเดียวกันสองรูปได้ช่องว่างไม่เท่ากันเป็นเรื่องปกติ ถ้าเทียบตรง ๆ
+    ใบซ้ำจริงจะหลุดการจับเพราะเว้นวรรคต่างกันอย่างเดียว
+    """
+    return f"lower(btrim(regexp_replace(coalesce({alias}.location, ''), '\\s+', ' ', 'g')))"
+
+
+# ใบซ้ำสองแบบที่ต้องแยกกัน:
+#   * รูปต้นฉบับ hash ตรงกัน = ไฟล์เดียวกันถูกยิงเข้ามาสองรอบ ชัดเจน 100% ถอนออกจากคิวได้เลย
+#   * ทะเบียน+เบอร์+วันที่+ที่จอด ตรงกัน = ใบกระดาษใบเดียวกันถูกถ่ายสองรูป (คนละมุม hash จึงต่าง)
+#
+# แบบหลังเดาจากค่าในใบ จึงต้องกัน "การฝากรอบใหม่" ให้หลุดออกไปสองชั้น:
+#   1. วันที่ฝากต้องตรงกัน — กันรถคันเดิมที่เอามาฝากใหม่เดือนหน้า
+#   2. ที่จอดต้องตรงกัน — กันรอบใหม่ "ในวันเดียวกัน" (เช้าฝาก บ่ายรับ เย็นฝากอีก)
+#      ซึ่งข้อ 1 กันไม่ได้เลย เพราะทะเบียน/เบอร์/วันที่ตรงกันหมดทั้งที่เป็นคนละรอบ
+#      รอบใหม่ได้ช่องจอดใหม่เสมอ ส่วนใบกระดาษใบเดียวกันสองรูปย่อมเขียนที่จอดเดียวกัน
+#   3. ต้องยัง stored ทั้งคู่ — ใบที่คืนรถไปแล้วปิดรอบของตัวเองไปแล้ว ใบถัดมาคือรอบใหม่
+#      (ชั้นนี้ช่วยเฉพาะตอนงานเอกสารตามหลังของจริง ไม่ใช่ด่านหลัก)
+#
+# พลาดทางไหนก็ได้ไม่เท่ากัน: ถ้าเดาว่า "ไม่ซ้ำ" ผิด คนตรวจเสียเวลาทำใบซ้ำใบเดียว
+# ถ้าเดาว่า "ซ้ำ" ผิด รถจอดอยู่จริงแต่ไม่มีใบ active ไปโผล่เอาตอนเจ้าของมารับแล้วหาใบไม่เจอ
+# เงื่อนไขชุดนี้จึงเอียงไปทางปล่อยให้ค้างคิวไว้ก่อน
+def same_slip() -> str:
+    """เงื่อนไข SQL ว่าใบ d กับใบ k เป็นใบเดียวกัน
+
+    ต้องเป็นฟังก์ชัน ไม่ใช่ค่าคงที่ระดับโมดูล — f-string ที่ประกอบตอน import จะฝังชื่อ
+    schema ณ ตอนนั้นไว้ตายตัว พอเทสต์ชี้ schema อื่น คำสั่งยังวิ่งไป ocr_dhammakaya
+    เหมือนเดิม (บั๊กเดียวกับที่ reject_slip เคยเจอ)
+    """
+    return f"""(
+    EXISTS (SELECT 1 FROM {DB_SCHEMA}.slip_images a
+                     JOIN {DB_SCHEMA}.slip_images b ON a.sha256 = b.sha256
+             WHERE a.slip_id = d.id AND b.slip_id = k.id)
+    OR (coalesce(k.plate_norm, '') <> '' AND coalesce(k.tel_digits, '') <> ''
+        AND k.deposit_date IS NOT NULL AND coalesce(btrim(k.location), '') <> ''
+        AND d.plate_norm = k.plate_norm AND d.tel_digits = k.tel_digits
+        AND d.deposit_date = k.deposit_date
+        AND {norm_loc('d')} = {norm_loc('k')}
+        AND d.car_status = 'stored' AND k.car_status = 'stored')
+)"""
+
+
+def reject_slip(
+    conn: psycopg.Connection, slip_id: str, reason: str, reviewer: str | None
+) -> None:
+    """ตีกลับใบที่ใช้ไม่ได้ (รูปเบลอ / ไม่ใช่ใบฝากรถ) — ไม่แตะค่าข้อมูลในใบ
+
+    SQL ต้องอยู่ที่นี่ ไม่ใช่ใน route: เดิมเขียนชื่อ schema ตายตัวไว้ใน main.py
+    คำสั่งจึงไปลง ocr_dhammakaya เสมอ ไม่ว่า DB_SCHEMA จะถูกตั้งเป็นอะไร —
+    ตอนรันเทสต์ที่ชี้ schema อื่น การตีกลับจึงเงียบหาย (0 แถว) แต่ยังตอบ 303 เหมือนสำเร็จ
+    """
+    conn.execute(
+        f"""UPDATE {DB_SCHEMA}.slips
+               SET review_status = 'rejected', needs_review = false, review_reason = %s,
+                   reviewed_by = %s, reviewed_at = now(),
+                   -- ใบที่ออกจากกอง pending แล้วไม่ต้องมีใครถืออีก
+                   claimed_by = NULL, claimed_name = NULL, claimed_at = NULL
+             WHERE id = %s""",
+        ([reason], reviewer, slip_id),
+    )
+
+
+def mark_superseded(conn: psycopg.Connection, keeper_id: str) -> int:
+    """ถอนใบที่ยังค้างคิวและเป็นใบเดียวกับ keeper ออกจากคิว คืนจำนวนใบที่ถอน
+
+    เรียกทันทีหลังอนุมัติ — จุดนั้นคือจุดเดียวที่รู้แน่ว่า "ใบนี้มีคนตรวจแล้ว"
+    ที่เหลือที่เหมือนกันจึงเป็นของซ้ำที่ไม่ต้องให้ใครตรวจอีก
+
+    แตะเฉพาะใบที่ยัง pending เท่านั้น ใบที่ตรวจไปแล้ว (ทั้งอนุมัติและตีกลับ) ไม่แตะ —
+    งานที่คนทำไปแล้วต้องไม่ถูกกลบด้วยการเดาของสคริปต์ ถ้ามีใบซ้ำที่อนุมัติไปแล้ว
+    ให้ admin ตัดสินใจลบเองจากรายงาน (python -m ocrslip.dedup)
+    """
+    cur = conn.execute(
+        f"""UPDATE {DB_SCHEMA}.slips d
+               SET superseded_by = k.id, superseded_at = now(),
+                   -- ใบที่ออกจากคิวแล้วไม่ต้องมีใครถืออีก
+                   claimed_by = NULL, claimed_name = NULL, claimed_at = NULL
+              FROM {DB_SCHEMA}.slips k
+             WHERE k.id = %(keep)s AND d.id <> k.id
+               AND d.review_status = 'pending' AND d.superseded_by IS NULL
+               AND {same_slip()}""",
+        {"keep": keeper_id},
+    )
+    return cur.rowcount
+
+
+def delete_slip(conn: psycopg.Connection, slip_id: str) -> dict[str, Any] | None:
+    """ลบใบถาวร คืนข้อมูลใบที่ลบไป (None ถ้าไม่มีใบนี้แล้ว)
+
+    รูปหลักฐานกับประวัติการแก้ไขหายตามไปด้วยผ่าน ON DELETE CASCADE ซึ่งคือสิ่งที่ต้องการ —
+    ของที่ลบคือใบขยะ (ใบทดสอบ กรอกมั่ว ยิงซ้ำ) การเก็บซากไว้มีแต่ทำให้ตัวเลขสรุปเพี้ยน
+
+    คืนแถวที่ลบด้วย DELETE ... RETURNING ไม่ใช่ SELECT ก่อนแล้วค่อย DELETE
+    เพื่อให้สิ่งที่บันทึกลง log เป็นแถวที่ถูกลบไปจริง ๆ ไม่ใช่แถวที่อ่านมาตอนนั้น
+    """
+    cur = conn.execute(
+        f"""DELETE FROM {DB_SCHEMA}.slips WHERE id = %s
+            RETURNING id::text AS id, name, tel, plate_raw, car_status, entry_source""",
+        (slip_id,),
+    )
+    return cur.fetchone()
+
 # ---------- ค่าตั้งที่แก้จากหน้าเว็บได้ ----------
 
 def get_settings(conn: psycopg.Connection) -> dict[str, str]:
@@ -340,6 +455,60 @@ def open_slip_by_plate(
         (plate_norm, hours),
     )
     return cur.fetchone()
+
+def deposit_rounds(
+    conn: psycopg.Connection, plate_norms: list[str]
+) -> dict[str, dict[str, Any]]:
+    """ใบของทะเบียนที่ถูกเอามาฝากหลายรอบ -> {slip_id: {"round": n, "total": m}}
+
+    คนกลุ่มหนึ่งเอารถมาฝาก รับกลับ แล้วเอามาฝากใหม่ เห็นมาแล้ว 2-3 รอบต่อคัน
+    ข้อมูลถูกอยู่แล้ว (1 ใบ = 1 รอบ) แต่หน้าค้นหาแสดงเป็นแถวคล้าย ๆ กันเรียงตามคะแนน
+    เจ้าหน้าที่ขาออกจึงต้องไล่อ่านวันที่เองว่าใบไหนคือรอบปัจจุบัน — ปิดผิดใบเมื่อไหร่
+    จะเหลือใบค้างที่ไม่มีใครมารับตลอดไป การบอกเลขรอบตรง ๆ ถูกกว่าให้คนเดาเอง
+
+    คืนเฉพาะทะเบียนที่มีมากกว่า 1 รอบ — ใบเดี่ยว ๆ ติดป้าย "รอบที่ 1 จาก 1" มีแต่รกตา
+    ไม่นับใบที่ถูกตีว่าซ้ำหรือตีกลับ เพราะไม่ใช่การฝากจริงสักรอบ
+    """
+    plates = [p for p in {p for p in plate_norms} if p]
+    if not plates:
+        return {}
+    rows = conn.execute(
+        f"""SELECT id::text AS id, round, total FROM (
+                SELECT id,
+                       row_number() OVER w AS round,
+                       count(*) OVER (PARTITION BY plate_norm) AS total
+                  FROM {DB_SCHEMA}.slips
+                 WHERE plate_norm = ANY(%s)
+                   AND superseded_by IS NULL AND review_status <> 'rejected'
+                WINDOW w AS (PARTITION BY plate_norm
+                             ORDER BY deposit_date NULLS LAST, created_at)
+            ) t WHERE total > 1""",
+        (plates,),
+    ).fetchall()
+    return {r["id"]: {"round": r["round"], "total": r["total"]} for r in rows}
+
+
+def deposit_history(conn: psycopg.Connection, plate_norm: str) -> list[dict[str, Any]]:
+    """ทุกรอบการฝากของทะเบียนนี้ เรียงตามรอบ — ไว้โชว์ในหน้าใบตอนจะปล่อยรถ
+
+    เจ้าหน้าที่ต้องเห็นได้ทันทีว่าใบที่เปิดอยู่คือรอบไหน และรอบอื่นปิดไปหมดหรือยัง
+    """
+    if not plate_norm:
+        return []
+    return conn.execute(
+        f"""SELECT id::text AS id, round, deposit_date, location, car_status,
+                   review_status, returned_at
+              FROM (SELECT id, deposit_date, location, car_status, review_status,
+                           returned_at,
+                           row_number() OVER (ORDER BY deposit_date NULLS LAST,
+                                              created_at) AS round
+                      FROM {DB_SCHEMA}.slips
+                     WHERE plate_norm = %s
+                       AND superseded_by IS NULL AND review_status <> 'rejected') t
+             ORDER BY round""",
+        (plate_norm,),
+    ).fetchall()
+
 
 def get_slip(conn: psycopg.Connection, slip_id: str) -> dict[str, Any]:
     cur = conn.execute(f"SELECT * FROM {DB_SCHEMA}.slips WHERE id = %s", (slip_id,))
@@ -403,10 +572,12 @@ def next_in_queue(conn: psycopg.Connection, slip_id: str) -> tuple[str | None, i
     # ซึ่งบังคับให้อ่านแถวที่ sort แล้วทั้งกอง (วัดที่ 66,000 ใบ: 96 ms -> 25 ms)
     row = conn.execute(
         f"""SELECT (SELECT id FROM {DB_SCHEMA}.slips
-                     WHERE review_status = 'pending' AND id <> %(id)s
+                     WHERE review_status = 'pending' AND superseded_by IS NULL
+                       AND id <> %(id)s
                      ORDER BY needs_review DESC, created_at ASC LIMIT 1) AS next_id,
                    (SELECT count(*) FROM {DB_SCHEMA}.slips
-                     WHERE review_status = 'pending' AND id <> %(id)s) AS remaining""",
+                     WHERE review_status = 'pending' AND superseded_by IS NULL
+                       AND id <> %(id)s) AS remaining""",
         {"id": slip_id},
     ).fetchone()
     return (str(row["next_id"]) if row["next_id"] else None), row["remaining"]
@@ -456,6 +627,7 @@ def claim_next(conn: psycopg.Connection, worker: str, name: str | None = None) -
                SET claimed_by = %(me)s, claimed_name = %(name)s, claimed_at = now()
              WHERE id = (SELECT id FROM {DB_SCHEMA}.slips
                           WHERE review_status = 'pending'
+                            AND superseded_by IS NULL
                             AND (claimed_at IS NULL
                                  OR claimed_at < now() - %(lease)s * interval '1 minute')
                           ORDER BY needs_review DESC, created_at ASC
@@ -583,8 +755,12 @@ def set_staff_active(conn: psycopg.Connection, staff_id: int, active: bool) -> N
 def review_counts(conn: psycopg.Connection) -> dict[str, int]:
     cur = conn.execute(
         f"""SELECT
-              count(*) FILTER (WHERE review_status = 'pending' AND needs_review)       AS needs_review,
-              count(*) FILTER (WHERE review_status = 'pending' AND NOT needs_review)   AS quick_pass,
+              -- กองที่ต้องทำต้องไม่นับใบซ้ำ ไม่งั้นยอดบนแถบกองจะไม่ตรงกับจำนวนแถวที่เห็น
+              count(*) FILTER (WHERE review_status = 'pending' AND superseded_by IS NULL
+                               AND needs_review)                                       AS needs_review,
+              count(*) FILTER (WHERE review_status = 'pending' AND superseded_by IS NULL
+                               AND NOT needs_review)                                   AS quick_pass,
+              count(*) FILTER (WHERE superseded_by IS NOT NULL)                        AS superseded,
               count(*) FILTER (WHERE review_status = 'approved')                       AS approved,
               count(*) FILTER (WHERE review_status = 'rejected')                       AS rejected,
               count(*) FILTER (WHERE car_status = 'stored' AND review_status='approved') AS stored,
@@ -614,6 +790,7 @@ def build_filters(
     needs_review: bool | None = None,
     car_status: str | None = None,
     car_type: str | None = None,
+    superseded: bool | None = None,
     uploaded_by: str | None = None,
     reviewed_by: str | None = None,
 ) -> tuple[str, dict]:
@@ -637,6 +814,9 @@ def build_filters(
     if car_type:
         where.append("car_type = %(car_type)s")
         params["car_type"] = car_type
+    # ใบซ้ำไม่ได้หายไปจากระบบ แค่ไม่อยู่ในกองที่ต้องทำ — จึงเป็นตัวกรอง ไม่ใช่การซ่อนถาวร
+    if superseded is not None:
+        where.append(f"superseded_by IS {'NOT NULL' if superseded else 'NULL'}")
     # กรองตามคน: เทียบแบบไม่สนตัวพิมพ์/ช่องว่างหัวท้าย เพราะชื่อที่พิมพ์เองตอนอัปโหลดหรือตอนตรวจ
     # อาจต่างจากชื่อในรายการแค่ช่องว่าง แล้วจะกลายเป็นคนละคนในสายตา query
     for key, val in (("uploaded_by", uploaded_by), ("reviewed_by", reviewed_by)):
@@ -709,7 +889,7 @@ def query_slips(
                    deposit_date, review_status, needs_review, review_reason,
                    car_status, returned_at, returned_by, uploaded_by, photographer,
                    reviewed_by, ocr_model, created_at,
-                   claimed_name, claimed_at,
+                   claimed_name, claimed_at, superseded_by,
                    -- คำนวณที่ฐานข้อมูลเพราะเวลาของ Postgres คือตัวเดียวกับที่ใช้ตัดสิน
                    -- ว่าการจองหมดอายุหรือยัง ถ้าไปเทียบฝั่ง Python นาฬิกาคนละตัวกัน
                    (claimed_at IS NOT NULL

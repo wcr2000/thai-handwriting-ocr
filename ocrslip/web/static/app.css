@@ -170,3 +170,10 @@ img { max-width: 100%; }
 .staff-box { background:#f4f6f9; border:1px solid var(--line); border-radius:8px;
              padding:.8rem; margin-top:1.4rem; }
 .staff-box > :first-child { margin-top:0; }
+
+/* ---- กล่องลบใบ (admin) ---- */
+/* พับเก็บไว้เป็นค่าเริ่มต้นและใช้สีแดงทั้งกล่อง เพราะเป็นปุ่มเดียวในระบบที่ย้อนกลับไม่ได้
+   ต้องดูไม่เหมือนปุ่มอื่นเลย ไม่ใช่กลมกลืนไปกับปุ่ม "บันทึก" ที่กดผิดแล้วแก้ได้ */
+.danger-zone { border-color:#e99; }
+.danger-zone > summary { cursor:pointer; color:var(--bad); font-weight:700; }
+.danger-zone > summary::marker { color:var(--bad); }

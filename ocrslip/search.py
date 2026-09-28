@@ -70,7 +70,12 @@ def search(conn: psycopg.Connection, query: str, *, include_pending: bool = Fals
     for r in rows:
         score, why = _score(r, kind, name_q, tel_q, plate_q, brand_q)
         scored.append({**r, "score": score, "match_on": why})
-    scored.sort(key=lambda r: -r["score"])
+    # เรียงสามชั้น: คะแนนก่อน แล้วใบที่รถยังจอดอยู่ แล้วรอบล่าสุด
+    # รถคันเดิมที่เอามาฝากหลายรอบได้คะแนนเท่ากันทุกใบ (ทะเบียน/ชื่อ/เบอร์ชุดเดียวกัน)
+    # ถ้าไม่มีชั้นที่สอง ลำดับของใบที่ยังจอดอยู่กับใบที่รับรถไปแล้วขึ้นกับว่า Postgres
+    # คืนแถวมาทางไหน เจ้าหน้าที่ขาออกจึงอาจเปิดใบรอบที่ปิดไปแล้วเป็นใบแรก
+    scored.sort(key=lambda r: r["created_at"], reverse=True)
+    scored.sort(key=lambda r: (-r["score"], r["car_status"] != "stored"))
     return scored[:limit]
 
 

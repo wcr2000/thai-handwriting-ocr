@@ -35,10 +35,10 @@ def _pointed_at_test_db():
     (test_web_headers, test_review_queue) อ่านฐานข้อมูลตาม DATABASE_URL จริง
     ถ้าปล่อยให้ค้างชี้ที่ฐานทดสอบ มันจะไปเจอข้อมูลสังเคราะห์ที่ไม่มีรูปแล้วพัง
     """
-    from ocrslip import config, db, recheck, reprocess, search
+    from ocrslip import config, db, dedup, recheck, reprocess, search
     from ocrslip.web import pipeline
 
-    targets = (config, db, search, recheck, reprocess, pipeline)
+    targets = (config, db, dedup, search, recheck, reprocess, pipeline)
     saved = [(m, getattr(m, "DATABASE_URL", None), getattr(m, "DB_SCHEMA", None))
              for m in targets]
     for m in targets:

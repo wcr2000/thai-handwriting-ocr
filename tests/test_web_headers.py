@@ -85,13 +85,20 @@ def test_static_still_answers_304_with_etag():
 
 def test_image_keeps_its_own_cache_policy(accounts):
     """รูปหลักฐานไม่เคยเปลี่ยน ให้ cache ได้นาน — middleware ต้องไม่ไปทับ"""
-    from ocrslip.db import connect, list_slips
+    from ocrslip.config import DB_SCHEMA
+    from ocrslip.db import connect
 
+    # ต้องเจาะจงใบที่ "มีรูป" ไม่ใช่ใบล่าสุดเฉย ๆ — ใบที่ผู้มาจอดกรอกเอง (entry_source
+    # typed) ไม่มีรูปหลักฐาน ถ้าใบล่าสุดเป็นแบบนั้น /image ตอบ 404 แล้วเทสต์ฟ้องผิดเรื่อง
     with connect() as conn:
-        slips = list_slips(conn, limit=1)
-    if not slips:
-        pytest.skip("ยังไม่มีข้อมูลใน DB")
-    r = accounts("admin").get(f"/image/{slips[0]['id']}")
+        row = conn.execute(
+            f"""SELECT s.id::text AS id FROM {DB_SCHEMA}.slips s
+                 WHERE EXISTS (SELECT 1 FROM {DB_SCHEMA}.slip_images i WHERE i.slip_id = s.id)
+                 ORDER BY s.created_at DESC LIMIT 1"""
+        ).fetchone()
+    if not row:
+        pytest.skip("ยังไม่มีใบที่มีรูปหลักฐานใน DB")
+    r = accounts("admin").get(f"/image/{row['id']}")
     assert "max-age" in r.headers.get("cache-control", "")
     assert "no-store" not in r.headers.get("cache-control", "")
 
