@@ -296,6 +296,22 @@ def mark_returned(
     return cur.rowcount == 1
 
 
+def delete_slip(conn: psycopg.Connection, slip_id: str) -> dict[str, Any] | None:
+    """ลบใบถาวร คืนข้อมูลใบที่ลบไป (None ถ้าไม่มีใบนี้แล้ว)
+
+    รูปหลักฐานกับประวัติการแก้ไขหายตามไปด้วยผ่าน ON DELETE CASCADE ซึ่งคือสิ่งที่ต้องการ —
+    ของที่ลบคือใบขยะ (ใบทดสอบ กรอกมั่ว ยิงซ้ำ) การเก็บซากไว้มีแต่ทำให้ตัวเลขสรุปเพี้ยน
+
+    คืนแถวที่ลบด้วย DELETE ... RETURNING ไม่ใช่ SELECT ก่อนแล้วค่อย DELETE
+    เพื่อให้สิ่งที่บันทึกลง log เป็นแถวที่ถูกลบไปจริง ๆ ไม่ใช่แถวที่อ่านมาตอนนั้น
+    """
+    cur = conn.execute(
+        f"""DELETE FROM {DB_SCHEMA}.slips WHERE id = %s
+            RETURNING id::text AS id, name, tel, plate_raw, car_status, entry_source""",
+        (slip_id,),
+    )
+    return cur.fetchone()
+
 # ---------- ค่าตั้งที่แก้จากหน้าเว็บได้ ----------
 
 def get_settings(conn: psycopg.Connection) -> dict[str, str]:

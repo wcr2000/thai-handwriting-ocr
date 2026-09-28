@@ -25,7 +25,7 @@ from ..config import (
 )
 from ..db import (
     add_staff, build_filters, clean_person_name, connect, dashboard_stats, export_rows, get_image, get_slip,
-    get_settings, insert_slip, list_edits, open_slip_by_plate, set_setting,
+    delete_slip, get_settings, insert_slip, list_edits, open_slip_by_plate, set_setting,
     claim_next, claim_one, known_people, list_staff, mark_returned, next_in_queue,
     query_slips, release_claims, review_counts,
     set_staff_active, update_slip,
@@ -51,7 +51,8 @@ ADMIN_ONLY = ("/table", "/dashboard", "/export.xlsx", "/staff", "/settings")
 # ถ้าตีกลับไม่ได้ เขาจะกดอนุมัติข้อมูลขยะแทน ซึ่งแก้ยากกว่า (ตีกลับย้อนได้ด้วย ?edit=1)
 # "/return" เคยอยู่ในนี้ แต่คนที่ยืนอยู่จุด checkout คือ staff ไม่ใช่ admin ถ้าปล่อยรถไม่ได้
 # เขาจะปล่อยรถโดยไม่บันทึกอะไรเลย ซึ่งแย่กว่าการให้สิทธิ์ (approver ยังถูกกันด้วย allowlist ล่าง)
-ADMIN_ONLY_SUFFIX = ()
+# "/delete" ตรงข้าม — ย้อนกลับไม่ได้และลบรูปหลักฐานทิ้งด้วย จึงต้องเป็น admin เท่านั้น
+ADMIN_ONLY_SUFFIX = ("/delete",)
 # role "approver" (คนทำ label) ใช้ allowlist ไม่ใช่ blacklist — route ใหม่ที่ลืมคิดถึงสิทธิ์
 # จะถูกปิดไว้ก่อนเสมอ ไม่ใช่เปิดให้โดยบังเอิญ เขาเห็นแค่ "อัปโหลด" กับ "คิวตรวจ" เท่านั้น
 # (ค้นหา / ใบรายตัว / ตารางข้อมูล / สรุป / รายชื่อทีม ปิดหมด)
@@ -605,8 +606,8 @@ async def reject(request: Request, slip_id: str):
 
 
 @app.get("/search", response_class=HTMLResponse)
-def search_page(request: Request):
-    return render(request, "search.html")
+def search_page(request: Request, deleted: str = ""):
+    return render(request, "search.html", deleted=deleted)
 
 
 @app.get("/api/search", response_class=HTMLResponse)
@@ -646,6 +647,22 @@ async def do_return(request: Request, slip_id: str):
     # เหมือนกดสำเร็จ — เจ้าหน้าที่จะไม่รู้ว่ารถคันนี้อาจถูกปล่อยให้คนอื่นไปแล้ว
     return RedirectResponse(f"/slips/{slip_id}" + ("" if ok else "?taken=1"), status_code=303)
 
+
+@app.post("/slips/{slip_id}/delete")
+async def do_delete(request: Request, slip_id: str):
+    """ลบใบถาวร — สำหรับใบทดสอบ/ใบกรอกมั่ว ที่เก็บไว้มีแต่ทำให้ตัวเลขสรุปเพี้ยน"""
+    account = getattr(request.state, "user", None) and request.state.user.username
+    with connect() as conn:
+        gone = delete_slip(conn, slip_id)
+        conn.commit()
+    if not gone:
+        return HTMLResponse("ไม่พบใบนี้ (อาจถูกลบไปแล้ว)", status_code=404)
+    # ไม่มีตาราง audit ของการลบ เพราะ slip_edits ถูก cascade ทิ้งไปพร้อมใบอยู่แล้ว
+    # จึงบันทึกลง log ของ process แทน — Render เก็บ log ไว้ให้ย้อนดูได้ว่าใครลบใบไหนเมื่อไหร่
+    print(f"[delete] slip={gone['id']} plate={gone.get('plate_raw')!r} "
+          f"name={gone.get('name')!r} car_status={gone.get('car_status')} by={account}")
+    return RedirectResponse(
+        f"/search?deleted={quote(str(gone.get('plate_raw') or gone['id']))}", status_code=303)
 
 @app.get("/image/{slip_id}")
 def image(slip_id: str, kind: str = "processed"):

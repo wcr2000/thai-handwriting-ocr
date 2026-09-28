@@ -1,5 +1,8 @@
 {% extends "base.html" %}
 {% block content %}
+{% if deleted %}
+<div class="card" style="background:#e3f5e9; border-color:#9c9">ลบใบ <b>{{ deleted }}</b> ถาวรแล้ว</div>
+{% endif %}
 <div class="card">
   <h2>ค้นหาใบจอดรถ</h2>
   <p class="muted">พิมพ์ชื่อ เบอร์โทร หรือทะเบียนก็ได้ · สะกดผิดหรือเลขเพี้ยน 1-2 ตัวก็ยังหาเจอ</p>

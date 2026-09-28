@@ -49,6 +49,23 @@
       <p><button type="submit">✓ ยืนยันรับรถกลับแล้ว</button></p>
     </form>
     {% endif %}
+    {% if user and user.is_admin %}
+    {# ใช้ <details> ไม่ใช่ confirm() ของ JavaScript — ปุ่มที่ย้อนกลับไม่ได้ต้องกันพลาด
+       ได้แม้ JS ไม่ทำงาน และการต้องกดเปิดกล่องก่อนคือด่านที่เห็นด้วยตา ไม่ใช่ popup
+       ที่คนกด OK ทิ้งโดยไม่อ่าน #}
+    <details class="card danger-zone">
+      <summary>ลบใบนี้ถาวร</summary>
+      <p class="muted">สำหรับใบทดสอบหรือใบที่กรอกมั่วเท่านั้น — รูปหลักฐานกับประวัติ
+         การแก้ไขจะหายไปด้วย และ<b>กู้คืนไม่ได้</b></p>
+      {% if slip.car_status == 'stored' %}
+      <p class="err">ใบนี้ยังไม่ได้รับรถกลับ ถ้าเป็นรถจริงที่จอดอยู่ การลบจะทำให้
+         ตอนเจ้าของมารับ ค้นไม่เจอทั้งระบบ</p>
+      {% endif %}
+      <form method="post" action="/slips/{{ slip.id }}/delete">
+        <button type="submit" class="danger">ยืนยันลบถาวร</button>
+      </form>
+    </details>
+    {% endif %}
     {% if edits %}
     <div class="card">
       <h3>ประวัติการแก้ไข</h3>
