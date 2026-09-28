@@ -59,10 +59,11 @@ def test_approver_can_open_its_own_pages(login, path):
     assert login("approve").get(path).status_code == 200
 
 
-def test_approver_cannot_reject_or_return(login):
+def test_approver_can_reject_but_not_return(login):
+    """ตีกลับคือส่วนหนึ่งของการตรวจ (คนตรวจเห็นรูปเบลอเอง) แต่ 'รับรถกลับ' ยังเป็นของ admin"""
     c = login("approve")
     slip_id = "00000000-0000-0000-0000-000000000000"
-    assert c.post(f"/review/{slip_id}/reject", data={"reason": "x"}).status_code == 403
+    assert c.post(f"/review/{slip_id}/reject", data={"reason": "x"}).status_code != 403
     assert c.post(f"/slips/{slip_id}/return", data={}).status_code == 403
 
 
