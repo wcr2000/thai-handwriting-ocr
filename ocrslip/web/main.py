@@ -40,7 +40,9 @@ _SECRET = SECRET_KEY or secrets.token_urlsafe(32)
 PUBLIC_PATHS = ("/login", "/static", "/health", "/favicon.ico")
 # หน้าที่เฉพาะ admin เท่านั้น — จุดที่ย้อนกลับไม่ได้ หรือเป็นข้อมูลส่วนตัวทั้งก้อน
 ADMIN_ONLY = ("/table", "/dashboard", "/export.xlsx", "/staff")
-ADMIN_ONLY_SUFFIX = ("/return", "/reject")
+# "/reject" ไม่อยู่ในนี้ — คนที่นั่งตรวจ (approver) คือคนที่เห็นรูปเบลอ/ใบผิดประเภท
+# ถ้าตีกลับไม่ได้ เขาจะกดอนุมัติข้อมูลขยะแทน ซึ่งแก้ยากกว่า (ตีกลับย้อนได้ด้วย ?edit=1)
+ADMIN_ONLY_SUFFIX = ("/return",)
 # role "approver" (คนทำ label) ใช้ allowlist ไม่ใช่ blacklist — route ใหม่ที่ลืมคิดถึงสิทธิ์
 # จะถูกปิดไว้ก่อนเสมอ ไม่ใช่เปิดให้โดยบังเอิญ เขาเห็นแค่ "อัปโหลด" กับ "คิวตรวจ" เท่านั้น
 # (ค้นหา / ใบรายตัว / ตารางข้อมูล / สรุป / รายชื่อทีม ปิดหมด)

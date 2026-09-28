@@ -142,13 +142,18 @@
   </div>
 </form>
 
-{% if user and user.is_admin %}
+{# ใครที่ตรวจใบนี้ได้ก็ตีกลับได้ — คนตรวจคือคนที่เห็นกับตาว่ารูปเบลอหรือไม่ใช่ใบจอดรถ
+   ถ้าต้องรอ admin มากด เขาจะกดอนุมัติข้อมูลที่อ่านไม่ออกทิ้งไว้แทน ซึ่งตามเก็บยากกว่า #}
+{% if user and not taken %}
 <form method="post" action="/review/{{ slip.id }}/reject" class="card" style="margin-top:.8rem; padding:.7rem 1rem">
   <div class="row" style="align-items:flex-end; gap:.6rem">
     <div style="flex:1 1 320px">
       <label for="reason" style="margin-top:0">ตีกลับ — รูปเบลอ / ไม่ใช่ใบจอดรถ / ข้อมูลใช้ไม่ได้</label>
       <input type="text" id="reason" name="reason" placeholder="เหตุผล">
     </div>
+    {# ช่อง "ผู้ตรวจ" อยู่ในฟอร์มอนุมัติ คนละฟอร์มกัน ค่าจึงไม่ติดมาด้วย
+       ต้องคัดลอกมาตอนกดส่ง ไม่งั้นใบที่ถูกตีกลับจะไม่รู้ว่าใครเป็นคนกด #}
+    <input type="hidden" name="reviewed_by" id="reject_reviewed_by">
     <div><button type="submit" class="danger">ตีกลับ</button></div>
   </div>
 </form>
@@ -176,10 +181,15 @@
     } catch (e) {}
     sync();
 
+    function pickedName() { return sel.value === '__new__' ? box.value.trim() : sel.value; }
+
     sel.form.addEventListener('submit', function () {
-      var name = sel.value === '__new__' ? box.value.trim() : sel.value;
-      try { localStorage.setItem('reviewed_by', name); } catch (e) {}
+      try { localStorage.setItem('reviewed_by', pickedName()); } catch (e) {}
     });
+
+    // ฟอร์มตีกลับอยู่นอกฟอร์มอนุมัติ ต้องส่งชื่อคนตรวจไปเองตอนกด
+    var rj = document.getElementById('reject_reviewed_by');
+    if (rj) rj.form.addEventListener('submit', function () { rj.value = pickedName(); });
   })();
 </script>
 {% endblock %}
