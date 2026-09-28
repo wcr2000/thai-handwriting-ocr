@@ -60,7 +60,12 @@ def test_approver_can_open_its_own_pages(login, path):
 
 
 def test_approver_can_reject_but_not_return(login):
-    """ตีกลับคือส่วนหนึ่งของการตรวจ (คนตรวจเห็นรูปเบลอเอง) แต่ 'รับรถกลับ' ยังเป็นของ admin"""
+    """ตีกลับคือส่วนหนึ่งของการตรวจ (คนตรวจเห็นรูปเบลอเอง) แต่ 'รับรถกลับ' ยังปิดไว้
+
+    ตอนนี้ staff ปล่อยรถได้แล้ว (คนที่ยืนจุด checkout คือ staff ไม่ใช่ admin)
+    แต่ approver ต้องยังทำไม่ได้ — เขาไม่เคยเห็นรถและไม่เคยเจอเจ้าของ
+    ที่กันไว้คือ allowlist ของ approver ไม่ใช่ ADMIN_ONLY_SUFFIX ซึ่งว่างไปแล้ว
+    """
     c = login("approve")
     slip_id = "00000000-0000-0000-0000-000000000000"
     assert c.post(f"/review/{slip_id}/reject", data={"reason": "x"}).status_code != 403

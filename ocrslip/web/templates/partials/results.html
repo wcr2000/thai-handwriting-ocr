@@ -5,7 +5,11 @@
   <p class="muted">พบ {{ rows|length }} ใบที่ใกล้เคียง เรียงจากคะแนนความเหมือนมากไปน้อย</p>
   {% for r in rows %}
   <div class="row" style="border-bottom:1px solid var(--line); padding:.6rem 0">
-    <div style="flex:0 0 140px"><img class="slip-img" src="/image/{{ r.id }}" loading="lazy" alt=""></div>
+    {# ใบที่ผู้มาจอดกรอกเอง ไม่มีรูปใบจอดรถ ถ้ายัด <img> ไปจะได้กรอบรูปแตกทุกแถว #}
+    <div style="flex:0 0 140px">
+      {% if r.entry_source == 'typed' %}<div class="no-img">กรอกเอง<br>ไม่มีรูปใบ</div>
+      {% else %}<img class="slip-img" src="/image/{{ r.id }}" loading="lazy" alt="">{% endif %}
+    </div>
     <div class="col">
       <div><span class="score">{{ '%.0f'|format(r.score) }}%</span>
            <span class="muted">ตรงที่ {{ r.match_on }}</span>

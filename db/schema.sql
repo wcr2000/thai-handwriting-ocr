@@ -167,3 +167,12 @@ ALTER TABLE ocr_dhammakaya.slips ADD COLUMN IF NOT EXISTS uploaded_by  text;
 ALTER TABLE ocr_dhammakaya.slips ADD COLUMN IF NOT EXISTS photographer text;
 CREATE INDEX IF NOT EXISTS slips_uploaded_by_idx  ON ocr_dhammakaya.slips (uploaded_by);
 CREATE INDEX IF NOT EXISTS slips_photographer_idx ON ocr_dhammakaya.slips (photographer);
+
+-- ใบที่ผู้มาจอดกรอกเอง (ขาเข้าแบบไม่ใช้กระดาษ) กับใบที่มาจากการถ่ายรูปใบเขียนมือ
+-- ต้องแยกกันได้ เพราะใบที่กรอกเองไม่มีรูปหลักฐานและไม่ผ่านคิวตรวจ
+-- ค่า NULL = ใบเก่าทั้งหมด ซึ่งมาจาก OCR
+ALTER TABLE ocr_dhammakaya.slips ADD COLUMN IF NOT EXISTS entry_source text;
+
+-- ชื่อคนที่มารับรถ เก็บเฉพาะตอนที่ไม่ใช่เจ้าของ (ให้ญาติมารับ)
+-- เป็นเคสที่ต้องมีร่องรอยมากที่สุด แต่เดิมบันทึกไว้ได้แค่ในหมายเหตุรวม
+ALTER TABLE ocr_dhammakaya.slips ADD COLUMN IF NOT EXISTS released_to text;

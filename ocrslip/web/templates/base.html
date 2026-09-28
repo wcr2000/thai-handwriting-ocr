@@ -17,7 +17,8 @@
     <a href="/">อัปโหลด</a>
     <a href="/review">คิวตรวจสอบ</a>
     {% if not (user and user.is_approver) %}
-    <a href="/search">ค้นหา{% if user and user.is_admin %} / รับรถกลับ{% endif %}</a>
+    <a href="/in" target="_blank">ฟอร์มขาเข้า</a>
+    <a href="/search">ค้นหา / รับรถกลับ</a>
     {% endif %}
     {% if user and user.is_admin %}
     <a href="/table">ตารางข้อมูล</a>
