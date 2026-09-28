@@ -296,6 +296,31 @@ def mark_returned(
     return cur.rowcount == 1
 
 
+# ---------- ค่าตั้งที่แก้จากหน้าเว็บได้ ----------
+
+def get_settings(conn: psycopg.Connection) -> dict[str, str]:
+    """ค่าตั้งทั้งหมดที่เคยถูกบันทึกจากหน้าเว็บ (คีย์ที่ไม่เคยตั้งจะไม่อยู่ใน dict)"""
+    cur = conn.execute(f"SELECT key, value FROM {DB_SCHEMA}.app_settings")
+    return {r["key"]: r["value"] for r in cur.fetchall()}
+
+
+def set_setting(conn: psycopg.Connection, key: str, value: str, by: str | None = None) -> None:
+    """บันทึกค่าตั้ง — ค่าว่างแปลว่า "เลิกตั้งจากหน้าเว็บ" จึงลบแถวทิ้งให้ตกไปใช้ env
+
+    ต้องลบ ไม่ใช่เก็บสตริงว่างไว้ ไม่งั้นการล้างช่องในหน้าตั้งค่าจะกลายเป็นการ
+    ตั้งค่าเป็น "ว่าง" ทับค่าใน env แทนที่จะเป็นการถอยกลับไปใช้ค่าตั้งต้น
+    """
+    if not value.strip():
+        conn.execute(f"DELETE FROM {DB_SCHEMA}.app_settings WHERE key = %s", (key,))
+        return
+    conn.execute(
+        f"""INSERT INTO {DB_SCHEMA}.app_settings (key, value, updated_by)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (key) DO UPDATE
+            SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = now()""",
+        (key, value.strip(), by),
+    )
+
 # ---------- อ่านข้อมูล ----------
 
 def open_slip_by_plate(

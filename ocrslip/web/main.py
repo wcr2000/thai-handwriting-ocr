@@ -25,7 +25,7 @@ from ..config import (
 )
 from ..db import (
     add_staff, build_filters, clean_person_name, connect, dashboard_stats, export_rows, get_image, get_slip,
-    insert_slip, list_edits, open_slip_by_plate,
+    get_settings, insert_slip, list_edits, open_slip_by_plate, set_setting,
     claim_next, claim_one, known_people, list_staff, mark_returned, next_in_queue,
     query_slips, release_claims, review_counts,
     set_staff_active, update_slip,
@@ -46,7 +46,7 @@ _SECRET = SECRET_KEY or secrets.token_urlsafe(32)
 # เจ้าหน้าที่พิมพ์ปิดท้าย ไม่ใช่การล็อกอิน (ตรวจรหัสฝั่ง server เท่านั้น ดู config.ENTRY_PASSWORD)
 PUBLIC_PATHS = ("/login", "/static", "/health", "/favicon.ico", "/in")
 # หน้าที่เฉพาะ admin เท่านั้น — จุดที่ย้อนกลับไม่ได้ หรือเป็นข้อมูลส่วนตัวทั้งก้อน
-ADMIN_ONLY = ("/table", "/dashboard", "/export.xlsx", "/staff")
+ADMIN_ONLY = ("/table", "/dashboard", "/export.xlsx", "/staff", "/settings")
 # "/reject" ไม่อยู่ในนี้ — คนที่นั่งตรวจ (approver) คือคนที่เห็นรูปเบลอ/ใบผิดประเภท
 # ถ้าตีกลับไม่ได้ เขาจะกดอนุมัติข้อมูลขยะแทน ซึ่งแก้ยากกว่า (ตีกลับย้อนได้ด้วย ?edit=1)
 # "/return" เคยอยู่ในนี้ แต่คนที่ยืนอยู่จุด checkout คือ staff ไม่ใช่ admin ถ้าปล่อยรถไม่ได้
@@ -251,9 +251,31 @@ COMMON_PROVINCES = ("ปทุมธานี", "กรุงเทพมหา�
                     "พระนครศรีอยุธยา", "นครนายก", "สระบุรี")
 
 
-def _entry_choices() -> dict[str, Any]:
+# คีย์ใน app_settings — ต้องมีที่เดียว ไม่งั้นหน้าอ่านกับหน้าเขียนสะกดต่างกันเมื่อไหร่
+# ค่าที่ตั้งไว้จะหายเงียบ ๆ โดยไม่มีอะไรพัง
+SETTING_BUILDINGS = "entry_buildings"
+SETTING_FLOORS = "entry_floors"
+
+
+def _lines(text: str) -> tuple[str, ...]:
+    """แปลง textarea เป็นรายการตัวเลือก ตัดบรรทัดว่างและช่องว่างหัวท้ายทิ้ง"""
+    return tuple(line.strip() for line in text.splitlines() if line.strip())
+
+
+def _entry_lists(conn) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """อาคาร/ชั้นที่ใช้จริง — ตั้งจากหน้าเว็บได้ ถ้ายังไม่เคยตั้งก็ใช้ค่าใน env
+
+    ต้องอ่านทุก request ไม่ใช่ cache ไว้ตอน process เริ่ม เพราะเหตุผลทั้งหมดที่ย้าย
+    มาไว้บนหน้าเว็บคือ "แก้แล้วมีผลทันทีโดยไม่ต้องรีสตาร์ต" ตารางนี้มีไม่กี่แถว
+    """
+    saved = get_settings(conn)
+    return (_lines(saved.get(SETTING_BUILDINGS, "")) or ENTRY_BUILDINGS,
+            _lines(saved.get(SETTING_FLOORS, "")) or ENTRY_FLOORS)
+
+
+def _entry_choices(buildings, floors) -> dict[str, Any]:
     return {"provinces": PROVINCE_CHOICES, "common_provinces": COMMON_PROVINCES,
-            "buildings": ENTRY_BUILDINGS, "floors": ENTRY_FLOORS, "car_types": CAR_TYPES}
+            "buildings": buildings, "floors": floors, "car_types": CAR_TYPES}
 
 
 @app.get("/in", response_class=HTMLResponse)
@@ -262,7 +284,10 @@ def entry_form(request: Request):
         return HTMLResponse("ยังไม่ได้เปิดใช้ฟอร์มนี้ (ผู้ดูแลระบบยังไม่ได้ตั้ง ENTRY_PASSWORD)",
                             status_code=503)
     today = dt.date.today().isoformat()
-    return render(request, "in.html", errors={}, v={"date": today}, **_entry_choices())
+    with connect() as conn:
+        buildings, floors = _entry_lists(conn)
+    return render(request, "in.html", errors={}, v={"date": today},
+                  **_entry_choices(buildings, floors))
 
 
 @app.post("/in", response_class=HTMLResponse)
@@ -271,6 +296,8 @@ async def entry_submit(request: Request):
         return HTMLResponse("ยังไม่ได้เปิดใช้ฟอร์มนี้", status_code=503)
 
     form = await request.form()
+    with connect() as conn:
+        buildings, floors = _entry_lists(conn)
     v = {k: (form.get(k) or "").strip() for k in
          ("name", "tel", "date", "noplate", "province", "brand", "typecar", "typecar_new",
           "building", "floor")}
@@ -285,9 +312,9 @@ async def entry_submit(request: Request):
         errors["noplate"] = "กรอกทะเบียนรถ"
     if v["province"] not in PROVINCE_CHOICES:
         errors["province"] = "เลือกจังหวัดของทะเบียน"
-    if v["building"] not in ENTRY_BUILDINGS:
+    if v["building"] not in buildings:
         errors["building"] = "เลือกอาคารที่จอด"
-    if v["floor"] not in ENTRY_FLOORS:
+    if v["floor"] not in floors:
         errors["floor"] = "เลือกชั้นที่จอด"
     if not car_type:
         errors["typecar"] = "เลือกชนิดรถ"
@@ -303,7 +330,8 @@ async def entry_submit(request: Request):
         errors["entry_pw"] = "รหัสเจ้าหน้าที่ไม่ถูกต้อง"
 
     if errors:
-        return render(request, "in.html", errors=errors, v=v, **_entry_choices())
+        return render(request, "in.html", errors=errors, v=v,
+                      **_entry_choices(buildings, floors))
 
     fields = {"name": clean_person_name(v["name"]), "tel": v["tel"], "date": v["date"],
               "noplate": v["noplate"], "province": v["province"], "brand": v["brand"] or None,
@@ -628,6 +656,30 @@ def image(slip_id: str, kind: str = "processed"):
     return Response(data, media_type="image/jpeg",
                     headers={"Cache-Control": "private, max-age=86400"})
 
+
+@app.get("/settings", response_class=HTMLResponse)
+def settings_page(request: Request, saved: int = 0):
+    with connect() as conn:
+        stored = get_settings(conn)
+        buildings, floors = _entry_lists(conn)
+    return render(
+        request, "settings.html",
+        buildings="\n".join(buildings), floors="\n".join(floors),
+        # บอกให้ชัดว่าค่าที่เห็นมาจากไหน ไม่งั้นผู้ดูแลจะไม่รู้ว่ากำลังดูค่าตั้งต้นจาก env
+        # อยู่หรือดูค่าที่ตัวเองตั้งไว้ แล้วลบทิ้งโดยคิดว่า "ลบแล้วก็ยังเป็นค่านี้แหละ"
+        from_db={"buildings": SETTING_BUILDINGS in stored, "floors": SETTING_FLOORS in stored},
+        entry_open=bool(ENTRY_PASSWORD), saved=bool(saved))
+
+
+@app.post("/settings")
+async def settings_save(request: Request):
+    form = await request.form()
+    account = getattr(request.state, "user", None) and request.state.user.username
+    with connect() as conn:
+        set_setting(conn, SETTING_BUILDINGS, str(form.get("buildings") or ""), account)
+        set_setting(conn, SETTING_FLOORS, str(form.get("floors") or ""), account)
+        conn.commit()
+    return RedirectResponse("/settings?saved=1", status_code=303)
 
 @app.get("/staff", response_class=HTMLResponse)
 def staff_page(request: Request, error: str = ""):
