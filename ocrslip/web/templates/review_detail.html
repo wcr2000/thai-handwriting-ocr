@@ -13,6 +13,8 @@
   main { max-width:1500px; }
   .rev { display:grid; grid-template-columns:minmax(0,1.15fr) minmax(360px,.85fr); gap:1rem;
          height:calc(100vh - 150px); height:calc(100dvh - 150px); min-height:520px; }
+  /* ไม่มีรูปให้เทียบ = ไม่มีเหตุผลต้องล็อกความสูงไว้เท่าจอ ปล่อยฟอร์มสูงตามเนื้อหา */
+  .rev.no-img { grid-template-columns:minmax(0,1fr); height:auto; min-height:0; max-width:720px; }
   .rev-img { background:#fff; border:1px solid var(--line); border-radius:10px; padding:.6rem;
              display:flex; flex-direction:column; min-height:0; }
   /* ให้ <a> เป็นตัวยืด ไม่งั้นรูปจะสูงตามสัดส่วนภาพแล้วเหลือที่ว่างข้างล่างเยอะ */
@@ -88,7 +90,11 @@
 </div>
 {% endif %}
 
-<form method="post" action="/review/{{ slip.id }}/approve" class="rev">
+{# ใบที่ผู้มาจอดกรอกเอง (/in) ไม่มีรูปใบกระดาษ ถ้ายัด <img> ไปจะได้กรอบรูปแตกครึ่งจอ
+   พร้อมบรรทัด "อ่านโดย None" — และตั้งแต่หน้า /slips มีลิงก์ "แก้ไขข้อมูลใบนี้"
+   ใบกลุ่มนี้คือใบที่ถูกเปิดเข้ามาบ่อยที่สุด ให้ฟอร์มกินเต็มความกว้างไปเลยดีกว่า #}
+<form method="post" action="/review/{{ slip.id }}/approve" class="rev{{ ' no-img' if not has_image }}">
+  {% if has_image %}
   <div class="rev-img">
     <a href="/image/{{ slip.id }}?kind=original" target="_blank" title="คลิกเพื่อดูรูปต้นฉบับเต็ม">
       <img src="/image/{{ slip.id }}?kind=processed" alt="ใบจอดรถ"></a>
@@ -100,13 +106,16 @@
        {% if slip.ocr_cost_usd %}· ใบนี้ {{ '%.3f'|format(slip.ocr_cost_usd|float * usd_thb) }} บาท{% endif %}
        {% if slip.ocr_latency_s %}· {{ slip.ocr_latency_s }} วิ{% endif %}</p>
   </div>
+  {% endif %}
 
   <div class="rev-form">
     <div class="body">
       <div style="margin-bottom:.3rem">
         <strong style="display:block; margin-bottom:.2rem">ตรวจและแก้ข้อมูล</strong>
         {% for reason in slip.review_reason %}<span class="badge warn">{{ reason_labels.get(reason, reason) }}</span>{% endfor %}
-        {% if not slip.review_reason %}<span class="badge ok">AI มั่นใจทุกช่อง</span>{% endif %}
+        {# ใบที่กรอกเองไม่เคยผ่าน AI จะบอกว่า "AI มั่นใจทุกช่อง" ไม่ได้ #}
+        {% if not slip.review_reason %}<span class="badge ok">{{ 'ผู้มาจอดกรอกเอง เจ้าหน้าที่ยืนยันแล้ว'
+           if slip.entry_source == 'typed' else 'AI มั่นใจทุกช่อง' }}</span>{% endif %}
       </div>
 
       <div class="grid2">
@@ -118,8 +127,14 @@
         {{ f('brand', 'ยี่ห้อ / รุ่น / สี', slip.brand, problems) }}
         <div class="fld">
           <label for="typecar">ประเภทรถ</label>
+          {# รายการนี้เคย hardcode ไว้ 4 อย่าง แต่ฟอร์มขาเข้าให้ผู้มาจอดพิมพ์ชนิดรถเองได้
+             (suv, มอเตอร์ไซค์, ...) ค่าที่ไม่อยู่ในรายการจึงไม่มี option ให้ selected
+             <select> เลยส่งค่าว่างกลับมา = เปิดใบมาแก้เบอร์แล้วชนิดรถหายไปเงียบ ๆ
+             ต้องเอาค่าที่ใบนี้ถืออยู่ใส่เข้าไปในรายการด้วยเสมอ #}
+          {% set opts = [''] + car_types|list + ['อื่นๆ'] %}
+          {% if slip.car_type and slip.car_type not in opts %}{% set opts = opts + [slip.car_type] %}{% endif %}
           <select id="typecar" name="typecar">
-            {% for t in ['', 'ตู้', 'กระบะ', 'เก๋ง', 'อื่นๆ'] %}
+            {% for t in opts %}
             <option value="{{ t }}" {{ 'selected' if slip.car_type == t }}>{{ t or '— ไม่ระบุ —' }}</option>{% endfor %}
           </select>
         </div>
@@ -138,9 +153,12 @@
         </div>
       </div>
 
+      {# ใบที่กรอกเองไม่ได้ผ่าน AI จึงไม่มีคะแนนความมั่นใจ ขึ้นหัวข้อว่างไว้เฉย ๆ ชวนสงสัยเปล่า ๆ #}
+      {% if slip.ocr_confidence %}
       <p class="muted" style="margin:.6rem 0 0">ความมั่นใจของ AI:
-        {% for k, v in (slip.ocr_confidence or {}).items() %}<span
+        {% for k, v in slip.ocr_confidence.items() %}<span
           class="{{ 'badge warn' if v < 0.85 else '' }}">{{ k }} {{ '%.2f'|format(v) }}</span>{{ ' · ' if not loop.last }}{% endfor %}</p>
+      {% endif %}
     </div>
 
     {# ใบที่ตรวจไปแล้วยังแสดงข้อมูลกับรูปได้ (ไว้เทียบว่าเพื่อนกรอกอะไรไว้)

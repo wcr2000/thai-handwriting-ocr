@@ -23,7 +23,9 @@
       <div><strong>{{ r.name or '—' }}</strong> · {{ r.tel or '—' }}</div>
       <div>ทะเบียน {{ r.plate_raw or '—' }} {{ r.province or '' }} · {{ r.brand or '—' }} ({{ r.car_type or '—' }})</div>
       <div class="muted">ที่จอด: {{ r.location or '—' }} · เข้าจอดเมื่อ {{ r.deposit_date or '—' }}</div>
-      <div><a href="/slips/{{ r.id }}">เปิดดูใบจริง / รับรถกลับ →</a></div>
+      {# เบอร์ผิดมักโผล่ตอนขาออก (โทรตามไม่ติด) ซึ่งคือหน้านี้ ไม่ใช่หน้าคิวตรวจ #}
+      <div><a href="/slips/{{ r.id }}">เปิดดูใบจริง / รับรถกลับ →</a>
+           <a href="/review/{{ r.id }}?edit=1" style="margin-left:.8rem">✎ แก้ไขข้อมูล</a></div>
     </div>
   </div>
   {% endfor %}
