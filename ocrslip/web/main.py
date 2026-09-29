@@ -32,7 +32,8 @@ from ..db import (
     query_slips, reject_slip, release_claims, review_counts,
     set_staff_active, update_slip,
 )
-from ..normalize import PROVINCE_CHOICES, norm_phone, norm_plate, parse_date
+from ..normalize import (PROVINCE_CHOICES, norm_phone, norm_plate, normalize_field,
+                         parse_date)
 from ..review import REASON_LABELS, evaluate
 from ..dedup import group_duplicates, load_slips
 from ..search import search as fuzzy_search
@@ -713,13 +714,28 @@ DUP_META = (("review_status", "สถานะตรวจ"), ("reviewed_by", "�
             ("created_at", "เข้าระบบเมื่อ"))
 
 
+# ชื่อคอลัมน์ในตารางไม่ตรงกับชื่อช่องบนใบที่ NORMALIZERS รู้จัก
+DUP_NORM_KEY = {"plate_raw": "noplate", "car_type": "typecar", "deposit_date": "date"}
+
+
 def _cell(slip: dict, field: str) -> str:
     return str(slip.get(field) or "").strip()
 
 
+def _norm_cell(slip: dict, field: str) -> str:
+    """ค่าที่ใช้ "เทียบ" — คนละตัวกับ _cell ที่ใช้ "โชว์"
+
+    ต้องผ่าน normalizer ตัวเดียวกับที่ระบบใช้ตัดสินว่าใบซ้ำกันไหม ไม่งั้นหน้านี้จะฟ้องว่า
+    ขัดกันทั้งที่ต่างกันแค่เว้นวรรค แล้วส่งงานที่ไม่มีอะไรให้ตัดสินไปให้คนกดทีละกลุ่ม
+    ของจริงที่เจอ: '1ขก1111' กับ '1ขก 1111' และ '0890000127' กับ '089 000 0127'
+    ซึ่ง plate_norm/tel_digits ในคลังเท่ากันเป๊ะอยู่แล้ว — ใบสองใบนี้ไม่มีอะไรต่างกันเลย
+    """
+    return normalize_field(DUP_NORM_KEY.get(field, field), slip.get(field))
+
+
 def _clashes(group: list[dict[str, Any]]) -> set[str]:
     """ช่องข้อมูลที่ใบในกลุ่มไม่ตรงกัน — ว่าง = ทุกใบเหมือนกันหมด เก็บใบไหนก็ได้"""
-    return {f for f, _ in DUP_FIELDS if len({_cell(s, f) for s in group}) > 1}
+    return {f for f, _ in DUP_FIELDS if len({_norm_cell(s, f) for s in group}) > 1}
 
 
 def _identical(groups: list[list[dict[str, Any]]]) -> list[list[dict[str, Any]]]:

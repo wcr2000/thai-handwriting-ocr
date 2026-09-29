@@ -212,3 +212,50 @@ def test_bulk_needs_admin(approved_twins, worker):
     assert worker("staff").post("/dups/resolve-identical",
                                 follow_redirects=False).status_code == 403
     assert ids_left() == {a, b}
+
+
+def test_whitespace_only_difference_is_not_a_conflict(approved_twins, worker):
+    """'1ขก1111' กับ '1ขก 1111' คือทะเบียนเดียวกัน ห้ามส่งไปให้คนตัดสิน
+
+    ของจริงที่เจอบนหน้าเว็บ: ใบสองใบมาจากรูปเดียวกัน (hash ตรงกัน) ต่างกันแค่ที่ AI
+    ใส่เว้นวรรคในทะเบียนกับเบอร์ไม่เหมือนกัน หน้านี้เคยไฮไลต์ว่า "ขัดกัน" ทั้งที่
+    plate_norm/tel_digits ในคลังเท่ากันเป๊ะ — คนเลยต้องมานั่งกดกลุ่มที่ไม่มีอะไรให้ตัดสิน
+    """
+    a, b = approved_twins(("นภา ทดสอบ", "นภา ทดสอบ"))
+    from ocrslip.db import connect
+    with connect() as conn:
+        conn.execute(f"UPDATE {TEST_SCHEMA}.slips SET tel = '0890000127', "
+                     f"plate_raw = '1ขก1111' WHERE id = %s", (a,))
+        conn.execute(f"UPDATE {TEST_SCHEMA}.slips SET tel = '089 000 0127', "
+                     f"plate_raw = '1ขก 1111' WHERE id = %s", (b,))
+        conn.commit()
+
+    html = worker("admin").get("/dups").text
+    assert 'class="clash"' not in html, "เว้นวรรคต่างกันไม่ใช่ความขัดแย้ง"
+    assert "รวบกลุ่มที่ไม่มีอะไรให้ตัดสินทีเดียว" in html
+
+
+def test_bulk_collapses_a_whitespace_only_group(approved_twins, worker):
+    """และกลุ่มแบบนั้นต้องถูกปุ่มรวบเก็บได้เลย ไม่ใช่ค้างไว้ให้คนกด"""
+    a, b = approved_twins(("นภา ทดสอบ", "นภา ทดสอบ"))
+    from ocrslip.db import connect
+    with connect() as conn:
+        conn.execute(f"UPDATE {TEST_SCHEMA}.slips SET plate_raw = '1ขก1111' WHERE id = %s", (a,))
+        conn.execute(f"UPDATE {TEST_SCHEMA}.slips SET plate_raw = '1ขก 1111' WHERE id = %s", (b,))
+        conn.commit()
+
+    worker("admin").post("/dups/resolve-identical", follow_redirects=False)
+    assert ids_left() == {a}, "ต้องเหลือใบเก่าสุดใบเดียว"
+
+
+def test_a_real_difference_is_still_a_conflict(approved_twins, worker):
+    """กันแก้เกิน: ทะเบียนที่ตัวอักษรคนละตัวยังต้องเป็นความขัดแย้งเหมือนเดิม"""
+    a, b = approved_twins(("นภา ทดสอบ", "นภา ทดสอบ"))
+    from ocrslip.db import connect
+    with connect() as conn:
+        conn.execute(f"UPDATE {TEST_SCHEMA}.slips SET plate_raw = '1ขก1111' WHERE id = %s", (a,))
+        conn.execute(f"UPDATE {TEST_SCHEMA}.slips SET plate_raw = '1ขข 1111' WHERE id = %s", (b,))
+        conn.commit()
+
+    html = worker("admin").get("/dups").text
+    assert html.count('class="clash"') == 1
