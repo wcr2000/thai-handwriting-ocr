@@ -540,6 +540,10 @@ def review_one(request: Request, slip_id: str, edit: int = 0):
             people=known_people(conn),
             taken=(slip["review_status"] != "pending" and not edit),
             held_by=held,
+            # ใบที่ผู้มาจอดกรอกเองไม่มีรูปหลักฐาน ต้องรู้ก่อน render แบบเดียวกับหน้า /slips
+            # ไม่งั้นครึ่งซ้ายของหน้าเป็นกรอบรูปแตก — และตั้งแต่มีลิงก์ "แก้ไขข้อมูลใบนี้"
+            # ใบกลุ่มนี้แหละคือใบที่ถูกเปิดเข้ามาบ่อยที่สุด
+            has_image=get_image(conn, slip_id) is not None, car_types=CAR_TYPES,
         )
 
 
@@ -581,6 +585,7 @@ async def approve(request: Request, slip_id: str):
                 request, "review_detail.html",
                 slip={**slip, **{k: v for k, v in fields.items() if v}},
                 problems=blocking, next_id=None, remaining=0, people=known_people(conn),
+                has_image=get_image(conn, slip_id) is not None, car_types=CAR_TYPES,
                 error=("ยังมีช่องบังคับที่ว่างอยู่ (ชื่อ / เบอร์โทร / ทะเบียน) กรอกให้ครบก่อนอนุมัติ"
                        if blocking else
                        "ต้องระบุชื่อผู้ตรวจก่อน จะได้รู้ว่าใบนี้ใครเป็นคนอนุมัติ"),
@@ -602,6 +607,7 @@ async def approve(request: Request, slip_id: str):
                 request, "review_detail.html",
                 slip=slip, problems={}, next_id=next_id, remaining=remaining,
                 people=known_people(conn), taken=True,
+                has_image=get_image(conn, slip_id) is not None, car_types=CAR_TYPES,
             )
         # ใบนี้มีคนตรวจแล้ว ใบที่เหลือซึ่งเป็นใบเดียวกันจึงไม่ต้องให้ใครตรวจอีก
         # ต้องอยู่ในทรานแซกชันเดียวกับการอนุมัติ ไม่งั้นถ้าล้มกลางทางจะได้ใบที่ถูกถอน
