@@ -14,7 +14,7 @@
   .rev { display:grid; grid-template-columns:minmax(0,1.15fr) minmax(360px,.85fr); gap:1rem;
          height:calc(100vh - 150px); height:calc(100dvh - 150px); min-height:520px; }
   /* ไม่มีรูปให้เทียบ = ไม่มีเหตุผลต้องล็อกความสูงไว้เท่าจอ ปล่อยฟอร์มสูงตามเนื้อหา */
-  .rev.no-img { grid-template-columns:minmax(0,1fr); height:auto; min-height:0; max-width:720px; }
+  .rev.rev-noimg { grid-template-columns:minmax(0,1fr); height:auto; min-height:0; max-width:720px; }
   .rev-img { background:#fff; border:1px solid var(--line); border-radius:10px; padding:.6rem;
              display:flex; flex-direction:column; min-height:0; }
   /* ให้ <a> เป็นตัวยืด ไม่งั้นรูปจะสูงตามสัดส่วนภาพแล้วเหลือที่ว่างข้างล่างเยอะ */
@@ -93,7 +93,7 @@
 {# ใบที่ผู้มาจอดกรอกเอง (/in) ไม่มีรูปใบกระดาษ ถ้ายัด <img> ไปจะได้กรอบรูปแตกครึ่งจอ
    พร้อมบรรทัด "อ่านโดย None" — และตั้งแต่หน้า /slips มีลิงก์ "แก้ไขข้อมูลใบนี้"
    ใบกลุ่มนี้คือใบที่ถูกเปิดเข้ามาบ่อยที่สุด ให้ฟอร์มกินเต็มความกว้างไปเลยดีกว่า #}
-<form method="post" action="/review/{{ slip.id }}/approve" class="rev{{ ' no-img' if not has_image }}">
+<form method="post" action="/review/{{ slip.id }}/approve" class="rev{{ ' rev-noimg' if not has_image }}">
   {% if has_image %}
   <div class="rev-img">
     <a href="/image/{{ slip.id }}?kind=original" target="_blank" title="คลิกเพื่อดูรูปต้นฉบับเต็ม">
@@ -175,7 +175,10 @@
 
 {# ใครที่ตรวจใบนี้ได้ก็ตีกลับได้ — คนตรวจคือคนที่เห็นกับตาว่ารูปเบลอหรือไม่ใช่ใบจอดรถ
    ถ้าต้องรอ admin มากด เขาจะกดอนุมัติข้อมูลที่อ่านไม่ออกทิ้งไว้แทน ซึ่งตามเก็บยากกว่า #}
-{% if user and not taken %}
+{# เฉพาะใบที่ยังอยู่ในคิวเท่านั้น — ใบที่อนุมัติไปแล้วถูกเปิดมาทาง "แก้ไขข้อมูล"
+   ซึ่งคือคนที่ตั้งใจมาแก้เบอร์ ไม่ใช่มาตัดสินว่ารูปอ่านออกไหม ถ้าปุ่มตีกลับอยู่ตรงนั้น
+   แล้วมือลั่น รถที่จอดอยู่จริงจะหลุดจากผลค้นหา แล้วตอนเจ้าของมารับจะหาไม่เจอ #}
+{% if user and not taken and slip.review_status == 'pending' %}
 <form method="post" action="/review/{{ slip.id }}/reject" class="card" style="margin-top:.8rem; padding:.7rem 1rem">
   <div class="row" style="align-items:flex-end; gap:.6rem">
     <div style="flex:1 1 320px">

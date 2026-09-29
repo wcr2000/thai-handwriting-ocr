@@ -77,6 +77,12 @@ th { color:var(--muted); font-weight:600; }
                border-top: 1px solid var(--line); padding-top: .45rem; }
 }
 
+/* ปุ่มแก้ไขข้อมูลบนหน้าใบ — บนมือถือให้เต็มความกว้างเป็นเป้าให้นิ้วโป้ง
+   คนที่กดปุ่มนี้คือเจ้าหน้าที่ที่ยืนอยู่ข้างรถ ถือเครื่องมือเดียว */
+@media (max-width: 620px) {
+  .btn.edit-slip { display: block; text-align: center; padding: .7rem 1rem; }
+}
+
 /* กันหน้าเลื่อนแนวนอนทั้งหน้าในทุกขนาดจอ
    ห้ามใส่ overflow-x:hidden บน body เด็ดขาด — เมื่อ overflow-x เป็น hidden แล้ว overflow-y
    จะกลายเป็น auto ทำให้ body เป็น scroll container เอง แล้ว position:sticky ข้างในจะไม่ยึดขอบจอ
