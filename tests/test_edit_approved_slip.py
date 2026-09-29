@@ -95,6 +95,15 @@ def test_edit_form_keeps_a_car_type_that_is_not_in_the_dropdown(typed_slip):
     assert '<option value="suv" selected>suv</option>' in html.replace(" >", ">")
 
 
+def test_edit_form_of_approved_slip_has_no_reject_button(typed_slip):
+    """คนที่กดเข้ามาแก้เบอร์ ไม่ควรมีปุ่ม "ตีกลับ" รออยู่ใต้ฟอร์ม
+
+    ตีกลับใบที่รถจอดอยู่จริง = ใบหลุดจากผลค้นหา ตอนเจ้าของมารับจะหาไม่เจอ
+    """
+    html = _login("staff").get(f"/review/{typed_slip}?edit=1").text
+    assert f"/review/{typed_slip}/reject" not in html
+
+
 def test_saving_fixes_the_field_and_keeps_the_slip_approved(typed_slip):
     """ของจริงที่ต้องได้: เบอร์เปลี่ยน สถานะไม่หลุด และรู้ว่าใครแก้"""
     from ocrslip.db import connect
