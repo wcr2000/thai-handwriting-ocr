@@ -18,7 +18,10 @@
            {% if r.review_status != 'approved' %}<span class="badge warn">ยังไม่ผ่านการตรวจ</span>{% endif %}
            {# ทะเบียนที่เอามาฝากหลายรอบ ต้องบอกว่าแถวนี้คือรอบไหน ไม่งั้นทุกแถวหน้าตาเหมือนกัน #}
            {% set n = rounds.get(r.id|string) %}
-           {% if n %}<span class="badge">ฝากรอบที่ {{ n.round }} จาก {{ n.total }}</span>{% endif %}
+           {% if n and n.total > 1 %}<span class="badge">ฝากรอบที่ {{ n.round }} จาก {{ n.total }}</span>{% endif %}
+           {# วันเดียวกันมีหลายใบ = ใบเดียวกันถูกถ่าย/อัปซ้ำ ที่ตัวจับซ้ำตอนอนุมัติไม่ได้จับไว้
+              ต้องบอกตรง ๆ ว่าเป็นใบซ้ำ ไม่ใช่ปล่อยให้อ่านเป็นการมาฝากคนละหน #}
+           {% if n and n.dup > 1 %}<span class="badge warn">อาจเป็นใบซ้ำ · วันนี้มี {{ n.dup }} ใบ</span>{% endif %}
       </div>
       <div><strong>{{ r.name or '—' }}</strong> · {{ r.tel or '—' }}</div>
       <div>ทะเบียน {{ r.plate_raw or '—' }} {{ r.province or '' }} · {{ r.brand or '—' }} ({{ r.car_type or '—' }})</div>

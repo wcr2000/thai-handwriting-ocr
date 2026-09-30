@@ -51,6 +51,36 @@ def rounds(pgenv):
     return _make
 
 
+@pytest.fixture
+def dup_day(rounds):
+    """ใบของทะเบียนเดียวกัน N ใบใน "วันเดียวกัน" = ใบกระดาษใบเดียวที่ถูกอัปซ้ำ
+
+    จงใจให้ที่จอดกับสถานะรถไม่เหมือนกัน — นั่นคือเหตุผลที่ของจริงหลุดตัวจับซ้ำ
+    ตอนอนุมัติมาได้ (db.same_slip() ต้องการที่จอดตรงกันและยังไม่คืนรถทั้งคู่)
+    """
+    from ocrslip.db import connect
+    from ocrslip.normalize import norm_phone, norm_plate
+
+    assert rounds  # พึ่ง fixture เดิมเพื่อล้างตาราง ไม่ต้องมีสองที่ที่รู้วิธีล้าง
+
+    def _make(n: int = 3, *, day: str | None = "2026-09-26"):
+        with connect() as conn:
+            ids = [conn.execute(
+                f"""INSERT INTO {TEST_SCHEMA}.slips
+                    (name, tel, tel_digits, plate_raw, plate_norm, deposit_date, location,
+                     review_status, needs_review, car_status, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, 'approved', false, %s,
+                            now() + (%s || ' second')::interval)
+                    RETURNING id::text""",
+                ("สมศรี ทดสอบ", TEL, norm_phone(TEL), PLATE, norm_plate(PLATE), day,
+                 ["", "ดำ", " ดำ "][i % 3], "returned" if i == 2 else "stored", i),
+            ).fetchone()["id"] for i in range(n)]
+            conn.commit()
+        return ids
+
+    return _make
+
+
 def test_a_car_deposited_once_gets_no_round_label(rounds):
     """ใบเดี่ยว ๆ ไม่ต้องติดป้าย "รอบที่ 1 จาก 1" — มีแต่รกตา"""
     from ocrslip.db import connect, deposit_rounds
@@ -173,6 +203,71 @@ def test_slip_page_of_a_single_round_has_no_history_card(rounds, worker):
     page = worker("staff").get(f"/slips/{only[0]}").text
 
     assert "ฝากมาแล้ว" not in page
+
+
+# ---------- ใบเดียวกันที่ถูกอัปซ้ำ (วันเดียวกัน) ----------
+
+def test_slips_of_the_same_day_are_one_round_not_many(dup_day):
+    """ใบซ้ำสามใบของวันเดียวกันต้องไม่กลายเป็น "ฝากรอบที่ 1/2/3 จาก 3"
+
+    ที่มา: ใบกระดาษใบเดียวถูกถ่ายมาสามรูป ทั้งสามหลุดตัวจับซ้ำตอนอนุมัติมาได้
+    (ที่จอดพิมพ์ไม่เท่ากัน ใบหนึ่งว่าง อีกใบถูกปิดไปแล้ว) ป้ายบอกรอบจึงไปอ่านว่า
+    รถคันนี้มาฝากสามหน ซึ่งไม่จริงและทำให้เจ้าหน้าที่ขาออกไล่ปิดใบผิด
+    """
+    from ocrslip.db import connect, deposit_rounds
+
+    ids = dup_day(3)
+    with connect() as conn:
+        got = deposit_rounds(conn, [_plate_norm()])
+
+    assert [got[i]["round"] for i in ids] == [1, 1, 1]
+    assert {got[i]["total"] for i in ids} == {1}, "วันเดียว = รอบเดียว"
+    assert {got[i]["dup"] for i in ids} == {3}, "ต้องบอกได้ว่าวันนั้นมีสามใบ"
+
+
+def test_search_calls_same_day_slips_duplicates_not_extra_rounds(dup_day, worker):
+    ids = dup_day(3)
+    page = worker("staff").get(f"/api/search?q={PLATE}").text
+
+    assert "อาจเป็นใบซ้ำ · วันนี้มี 3 ใบ" in page
+    assert "ฝากรอบที่" not in page, "รอบเดียว ไม่ต้องมีป้ายบอกรอบ"
+    assert len(ids) == 3
+
+
+def test_a_real_second_round_still_counts_even_with_a_duplicate(dup_day):
+    """ฝากจริงสองรอบ + รอบแรกมีใบซ้ำ = ยังต้องเป็น "จาก 2 รอบ" ไม่ใช่ 3"""
+    from ocrslip.db import connect, deposit_rounds
+
+    twins = dup_day(2, day="2026-09-10")
+    later = dup_day(1, day="2026-09-20")[0]
+    with connect() as conn:
+        got = deposit_rounds(conn, [_plate_norm()])
+
+    assert [got[i]["round"] for i in twins] == [1, 1]
+    assert got[later]["round"] == 2
+    assert {got[i]["total"] for i in twins + [later]} == {2}
+    assert got[later]["dup"] == 1, "รอบที่สองมีใบเดียว ไม่ต้องฟ้องว่าซ้ำ"
+
+
+def test_slips_without_a_deposit_date_are_not_duplicates_of_each_other(dup_day):
+    """ใบที่อ่านวันที่ไม่ออกทุกใบมีวันเดียวกันคือ NULL — ต้องไม่ถูกเหมาว่าซ้ำกันหมด"""
+    from ocrslip.db import connect, deposit_rounds
+
+    ids = dup_day(2, day=None)
+    with connect() as conn:
+        got = deposit_rounds(conn, [_plate_norm()])
+
+    assert {got[i]["dup"] for i in ids} == {1}
+    assert {got[i]["total"] for i in ids} == {2}, "แยกไม่ได้ ก็ต้องนับเป็นคนละรอบไว้ก่อน"
+
+
+def test_slip_page_marks_the_duplicate_rows(dup_day, worker):
+    ids = dup_day(2)
+    page = worker("staff").get(f"/slips/{ids[0]}").text
+
+    assert "ทะเบียนนี้ฝากมาแล้ว 1 รอบ" in page and "(2 ใบ)" in page
+    assert "ซ้ำ" in page
+    assert f"/slips/{ids[1]}" in page, "ต้องกระโดดไปดูใบซ้ำอีกใบได้"
 
 
 def _plate_norm() -> str:

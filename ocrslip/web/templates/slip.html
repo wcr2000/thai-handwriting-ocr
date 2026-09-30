@@ -47,15 +47,18 @@
     {# ทะเบียนที่เอามาฝากหลายรอบ ต้องเห็นทุกรอบก่อนกดปล่อยรถ ไม่ใช่ย้อนกลับไปเดาที่หน้าค้นหา #}
     {% if history %}
     <div class="card">
-      <h3>ทะเบียนนี้ฝากมาแล้ว {{ history|length }} รอบ</h3>
-      <p class="muted">แต่ละรอบเป็นคนละใบ ใบที่เปิดอยู่คือแถวที่ไฮไลต์ไว้ —
-         ก่อนกดปล่อยรถ ดูให้แน่ว่าเป็นรอบที่รถยังจอดอยู่</p>
+      {# history|length คือจำนวน "ใบ" ซึ่งไม่เท่ากับจำนวนรอบเมื่อมีใบซ้ำอยู่ด้วย #}
+      <h3>ทะเบียนนี้ฝากมาแล้ว {{ history|map(attribute='round')|max }} รอบ
+          ({{ history|length }} ใบ)</h3>
+      <p class="muted">ใบที่เปิดอยู่คือแถวที่ไฮไลต์ไว้ — ก่อนกดปล่อยรถ ดูให้แน่ว่าเป็นรอบที่รถยังจอดอยู่
+         สองแถวที่เลขรอบเท่ากันคือใบของวันเดียวกัน = ใบซ้ำ ให้ปิดใบเดียวพอ</p>
       <table>
         <tr><th>รอบ</th><th>วันที่เข้าจอด</th><th>ที่จอด</th><th>สถานะรถ</th><th></th></tr>
         {% for h in history %}
         <tr>
           <td>{% if h.id == slip.id|string %}<strong>{{ h.round }} ← ใบนี้</strong>
-              {% else %}{{ h.round }}{% endif %}</td>
+              {% else %}{{ h.round }}{% endif %}
+              {% if h.dup > 1 %}<span class="badge warn">ซ้ำ</span>{% endif %}</td>
           <td>{{ h.deposit_date or '—' }}</td>
           <td>{{ h.location or '—' }}</td>
           <td>{% if h.car_status == 'stored' %}<span class="badge ok">ยังจอดอยู่</span>
