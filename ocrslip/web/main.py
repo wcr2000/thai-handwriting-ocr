@@ -24,6 +24,7 @@ from ..auth import COOKIE_NAME, SESSION_TTL, User, authenticate, make_token, rea
 from ..config import (
     COOKIE_SECURE, ENTRY_BUILDINGS, ENTRY_FLOORS, ENTRY_PASSWORD, OCR_MODEL, SECRET_KEY, USD_THB,
 )
+from ..daystamp import QUOTES, day_stamp, quote_cycle_days
 from ..db import (
     add_staff, build_filters, clean_person_name, connect, dashboard_stats, export_rows, get_image, get_slip,
     delete_slip, deposit_history, deposit_rounds, get_settings, insert_slip, list_edits,
@@ -260,6 +261,7 @@ COMMON_PROVINCES = ("ปทุมธานี", "กรุงเทพมหา�
 # ค่าที่ตั้งไว้จะหายเงียบ ๆ โดยไม่มีอะไรพัง
 SETTING_BUILDINGS = "entry_buildings"
 SETTING_FLOORS = "entry_floors"
+SETTING_QUOTES = "day_quotes"
 
 
 def _lines(text: str) -> tuple[str, ...]:
@@ -276,6 +278,14 @@ def _entry_lists(conn) -> tuple[tuple[str, ...], tuple[str, ...]]:
     saved = get_settings(conn)
     return (_lines(saved.get(SETTING_BUILDINGS, "")) or ENTRY_BUILDINGS,
             _lines(saved.get(SETTING_FLOORS, "")) or ENTRY_FLOORS)
+
+
+def _day_quotes(conn) -> tuple[str, ...]:
+    """คำคมบนแถบสีประจำวัน — ตั้งจากหน้าเว็บได้ ถ้ายังไม่เคยตั้งก็ใช้ชุดที่มากับโค้ด
+
+    อ่านทุกครั้งที่มีคนลงทะเบียนเหมือนอาคาร/ชั้น เพราะเหตุผลเดียวกัน: แก้แล้วต้องมีผลทันที
+    """
+    return _lines(get_settings(conn).get(SETTING_QUOTES, "")) or QUOTES
 
 
 def _entry_choices(buildings, floors) -> dict[str, Any]:
@@ -361,7 +371,11 @@ async def entry_submit(request: Request):
             conn.commit()
             slip = get_slip(conn, slip_id)
 
-    return render(request, "in_done.html", slip=slip, again=bool(dup))
+        # คำนวณแถบสีในนี้ ไม่ใช่ใน template เพราะคำคมอยู่ในฐานข้อมูล และ template
+        # เปิด connection เองไม่ได้ — ใบที่ไม่มีวันที่ฝากจะได้ stamp = None แล้วไม่แสดงแถบ
+        stamp = day_stamp(slip["deposit_date"], _day_quotes(conn))
+
+    return render(request, "in_done.html", slip=slip, again=bool(dup), stamp=stamp)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -858,12 +872,15 @@ def settings_page(request: Request, saved: int = 0):
     with connect() as conn:
         stored = get_settings(conn)
         buildings, floors = _entry_lists(conn)
+        quotes = _day_quotes(conn)
     return render(
         request, "settings.html",
         buildings="\n".join(buildings), floors="\n".join(floors),
+        quotes="\n".join(quotes), quote_days=quote_cycle_days(quotes),
         # บอกให้ชัดว่าค่าที่เห็นมาจากไหน ไม่งั้นผู้ดูแลจะไม่รู้ว่ากำลังดูค่าตั้งต้นจาก env
         # อยู่หรือดูค่าที่ตัวเองตั้งไว้ แล้วลบทิ้งโดยคิดว่า "ลบแล้วก็ยังเป็นค่านี้แหละ"
-        from_db={"buildings": SETTING_BUILDINGS in stored, "floors": SETTING_FLOORS in stored},
+        from_db={"buildings": SETTING_BUILDINGS in stored, "floors": SETTING_FLOORS in stored,
+                 "quotes": SETTING_QUOTES in stored},
         entry_open=bool(ENTRY_PASSWORD), saved=bool(saved))
 
 
@@ -874,6 +891,7 @@ async def settings_save(request: Request):
     with connect() as conn:
         set_setting(conn, SETTING_BUILDINGS, str(form.get("buildings") or ""), account)
         set_setting(conn, SETTING_FLOORS, str(form.get("floors") or ""), account)
+        set_setting(conn, SETTING_QUOTES, str(form.get("quotes") or ""), account)
         conn.commit()
     return RedirectResponse("/settings?saved=1", status_code=303)
 
