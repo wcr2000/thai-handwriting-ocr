@@ -5,10 +5,13 @@
 จึงเน้นสองเรื่อง: แก้แล้วมีผลทันทีโดยไม่ต้องรีสตาร์ต และสิทธิ์ต้องเป็นของ admin เท่านั้น
 """
 
+import datetime as dt
+
 import pytest
 from fastapi.testclient import TestClient
 
 from ocrslip import auth
+from ocrslip.daystamp import day_stamp
 from ocrslip.web import main
 from ocrslip.web.main import app
 
@@ -109,3 +112,31 @@ def test_settings_page_never_offers_to_edit_the_entry_password(admin):
     assert ENTRY_PW not in html
     assert 'name="entry_pw"' not in html
     assert 'name="entry_password"' not in html
+
+
+def test_saved_quotes_show_up_on_the_slip_right_away(admin):
+    """คำคมที่ทีมตั้งเอง ต้องขึ้นบนใบที่ผู้มาจอดแคปเก็บไว้ทันที
+
+    28/09/2026 เป็นวันจันทร์ ใส่คำคมบรรทัดเดียวเพื่อให้รู้แน่ว่าจะได้บรรทัดไหน
+    ไม่ต้องคำนวณว่าวันนั้นวนไปถึงคำคมอันที่เท่าไหร่
+    """
+    admin.post("/settings", data={"buildings": "อาคารบุญ", "floors": "ชั้น 1",
+                                  "quotes": "คำคมของทีมเราเอง"})
+
+    r = TestClient(app).post("/in", data={**GOOD, "building": "อาคารบุญ", "floor": "ชั้น 1"})
+    assert "คำคมของทีมเราเอง" in r.text
+    assert "วันจันทร์" in r.text
+
+
+def test_clearing_the_quotes_falls_back_to_the_built_in_set(admin):
+    """ล้างคำคมจนหมดต้องกลับไปใช้ชุดที่มากับระบบ ไม่ใช่ได้แถบเปล่า ๆ หรือหน้าพัง
+
+    หน้านี้คือหน้าสุดท้ายของการลงทะเบียน ถ้ามันพังคือรถเข้ามาจอดแล้วแต่ไม่มีใบให้แคป
+    """
+    admin.post("/settings", data={"buildings": "อาคารบุญ", "floors": "ชั้น 1",
+                                  "quotes": "คำคมของทีมเราเอง"})
+    admin.post("/settings", data={"buildings": "อาคารบุญ", "floors": "ชั้น 1", "quotes": "  \n "})
+
+    r = TestClient(app).post("/in", data={**GOOD, "building": "อาคารบุญ", "floor": "ชั้น 1"})
+    assert "คำคมของทีมเราเอง" not in r.text
+    assert day_stamp(dt.date(2026, 9, 28))["quote"] in r.text

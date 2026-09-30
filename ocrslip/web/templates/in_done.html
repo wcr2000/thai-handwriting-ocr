@@ -21,6 +21,15 @@
     <tr><th>เลขอ้างอิง</th><td><code>{{ slip.id|string|upper|truncate(8, true, '') }}</code></td></tr>
     <tr><th>บันทึกเมื่อ</th><td>{{ slip.created_at.strftime('%d/%m/%Y %H:%M') if slip.created_at else '—' }}</td></tr>
   </table>
+  {# แถบสีประจำวันของ "วันที่ฝาก" — ไว้ให้เจ้าหน้าที่กวาดตาเทียบกับสติกเกอร์ของวันนั้น
+     ตอนผู้มาจอดยื่นภาพที่แคปไว้ให้ดู ต้องอยู่เหนือคำสั่งให้แคปและอยู่ในกรอบเดียวกับตาราง
+     ไม่งั้นมันจะหลุดออกนอกภาพที่แคปแล้วไม่มีประโยชน์อะไรเลย #}
+  {% if stamp %}
+  <div class="day-stamp" style="--stamp-ink:{{ stamp.ink }}; --stamp-wash:{{ stamp.wash }}">
+    <p class="day-stamp-day"><span class="day-stamp-dot"></span>วัน{{ stamp.day }}</p>
+    <p class="day-stamp-quote">{{ stamp.quote }}</p>
+  </div>
+  {% endif %}
   <p class="done-note">📸 กรุณาแคปหน้าจอนี้เก็บไว้ ใช้ตอนมารับรถกลับ</p>
   <p class="muted">ถ้าลืมแคป ไม่เป็นไร — ตอนมารับรถ เจ้าหน้าที่ค้นจากชื่อ เบอร์โทร
      หรือทะเบียนได้ และจะขอดูบัตรประชาชนเพื่อเทียบชื่อ</p>
