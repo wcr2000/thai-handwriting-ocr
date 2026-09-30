@@ -456,56 +456,74 @@ def open_slip_by_plate(
     )
     return cur.fetchone()
 
+def _rounds_base(*, one: bool = False) -> str:
+    """ใบที่นับเป็นการฝากจริง + คีย์ของ "รอบ" (วันที่เข้าจอด)
+
+    ใบที่ไม่มีวันที่เข้าจอดจับกลุ่มกับใครไม่ได้ จึงให้เป็นรอบของตัวเอง (คีย์ผูกกับ id)
+    ถ้าปล่อยให้ NULL จับกลุ่มกันเอง ใบที่อ่านวันที่ไม่ออกทุกใบจะถูกฟ้องว่าเป็นใบซ้ำกันหมด
+    """
+    return f"""SELECT id, plate_norm, deposit_date, location, car_status,
+                      review_status, returned_at, created_at,
+                      coalesce(deposit_date::text, 'id:' || id::text) AS gkey
+                 FROM {DB_SCHEMA}.slips
+                WHERE plate_norm {'= %s' if one else '= ANY(%s)'}
+                  AND superseded_by IS NULL AND review_status <> 'rejected'"""
+
+
 def deposit_rounds(
     conn: psycopg.Connection, plate_norms: list[str]
 ) -> dict[str, dict[str, Any]]:
-    """ใบของทะเบียนที่ถูกเอามาฝากหลายรอบ -> {slip_id: {"round": n, "total": m}}
+    """ใบของทะเบียนที่มีหลายใบ -> {slip_id: {"round": n, "total": m, "dup": k}}
 
     คนกลุ่มหนึ่งเอารถมาฝาก รับกลับ แล้วเอามาฝากใหม่ เห็นมาแล้ว 2-3 รอบต่อคัน
-    ข้อมูลถูกอยู่แล้ว (1 ใบ = 1 รอบ) แต่หน้าค้นหาแสดงเป็นแถวคล้าย ๆ กันเรียงตามคะแนน
-    เจ้าหน้าที่ขาออกจึงต้องไล่อ่านวันที่เองว่าใบไหนคือรอบปัจจุบัน — ปิดผิดใบเมื่อไหร่
-    จะเหลือใบค้างที่ไม่มีใครมารับตลอดไป การบอกเลขรอบตรง ๆ ถูกกว่าให้คนเดาเอง
+    หน้าค้นหาแสดงเป็นแถวคล้าย ๆ กันเรียงตามคะแนน เจ้าหน้าที่ขาออกจึงต้องไล่อ่านวันที่เอง
+    ว่าใบไหนคือรอบปัจจุบัน — ปิดผิดใบเมื่อไหร่จะเหลือใบค้างที่ไม่มีใครมารับตลอดไป
 
-    คืนเฉพาะทะเบียนที่มีมากกว่า 1 รอบ — ใบเดี่ยว ๆ ติดป้าย "รอบที่ 1 จาก 1" มีแต่รกตา
-    ไม่นับใบที่ถูกตีว่าซ้ำหรือตีกลับ เพราะไม่ใช่การฝากจริงสักรอบ
+    "รอบ" นับตามวันที่เข้าจอด ไม่ใช่นับใบ — ใบเดียวกันที่ถ่ายมาสองสามรูป (คนละ hash
+    ที่จอดพิมพ์ไม่เท่ากัน หรือใบหนึ่งถูกปิดไปแล้ว) หลุดตัวจับซ้ำตอนอนุมัติมาได้
+    ถ้านับใบ ใบซ้ำสามใบของวันเดียวจะกลายเป็นป้าย "ฝากรอบที่ 1/2/3 จาก 3" ซึ่งโกหก
+    เจ้าหน้าที่เต็ม ๆ ว่ารถคันนี้มาฝากสามหน — dup จึงบอกไปตรง ๆ ว่าวันเดียวกันนี้มีกี่ใบ
+    ให้หน้าเว็บติดป้าย "อาจซ้ำ" แทนที่จะแต่งเลขรอบปลอมขึ้นมา
+
+    คืนเฉพาะใบที่มีอะไรให้บอก (หลายรอบ หรือมีใบร่วมวัน) — ใบเดี่ยว ๆ ติดป้าย
+    "รอบที่ 1 จาก 1" มีแต่รกตา ไม่นับใบที่ถูกตีว่าซ้ำหรือตีกลับ เพราะไม่ใช่การฝากจริงสักรอบ
     """
     plates = [p for p in {p for p in plate_norms} if p]
     if not plates:
         return {}
     rows = conn.execute(
-        f"""SELECT id::text AS id, round, total FROM (
-                SELECT id,
-                       row_number() OVER w AS round,
-                       count(*) OVER (PARTITION BY plate_norm) AS total
-                  FROM {DB_SCHEMA}.slips
-                 WHERE plate_norm = ANY(%s)
-                   AND superseded_by IS NULL AND review_status <> 'rejected'
-                WINDOW w AS (PARTITION BY plate_norm
-                             ORDER BY deposit_date NULLS LAST, created_at)
-            ) t WHERE total > 1""",
+        f"""SELECT id::text AS id, round, total, dup FROM (
+                SELECT id, plate_norm, round, dup,
+                       max(round) OVER (PARTITION BY plate_norm) AS total
+                  FROM (SELECT id, plate_norm,
+                               dense_rank() OVER (PARTITION BY plate_norm
+                                                  ORDER BY gkey) AS round,
+                               count(*) OVER (PARTITION BY plate_norm, gkey) AS dup
+                          FROM ({_rounds_base()}) b) r
+            ) t WHERE total > 1 OR dup > 1""",
         (plates,),
     ).fetchall()
-    return {r["id"]: {"round": r["round"], "total": r["total"]} for r in rows}
+    return {r["id"]: {"round": r["round"], "total": r["total"], "dup": r["dup"]}
+            for r in rows}
 
 
 def deposit_history(conn: psycopg.Connection, plate_norm: str) -> list[dict[str, Any]]:
-    """ทุกรอบการฝากของทะเบียนนี้ เรียงตามรอบ — ไว้โชว์ในหน้าใบตอนจะปล่อยรถ
+    """ทุกใบของทะเบียนนี้ เรียงตามรอบ — ไว้โชว์ในหน้าใบตอนจะปล่อยรถ
 
     เจ้าหน้าที่ต้องเห็นได้ทันทีว่าใบที่เปิดอยู่คือรอบไหน และรอบอื่นปิดไปหมดหรือยัง
+    เลขรอบนับตามวันที่เข้าจอดเหมือน deposit_rounds() สองใบของวันเดียวกันจึงได้เลขรอบ
+    เดียวกัน (= ใบซ้ำ) ไม่ใช่กลายเป็นคนละรอบ ดูเหตุผลเต็มที่ deposit_rounds()
     """
     if not plate_norm:
         return []
     return conn.execute(
-        f"""SELECT id::text AS id, round, deposit_date, location, car_status,
+        f"""SELECT id::text AS id, round, dup, deposit_date, location, car_status,
                    review_status, returned_at
-              FROM (SELECT id, deposit_date, location, car_status, review_status,
-                           returned_at,
-                           row_number() OVER (ORDER BY deposit_date NULLS LAST,
-                                              created_at) AS round
-                      FROM {DB_SCHEMA}.slips
-                     WHERE plate_norm = %s
-                       AND superseded_by IS NULL AND review_status <> 'rejected') t
-             ORDER BY round""",
+              FROM (SELECT b.*,
+                           dense_rank() OVER (ORDER BY gkey) AS round,
+                           count(*) OVER (PARTITION BY gkey) AS dup
+                      FROM ({_rounds_base(one=True)}) b) t
+             ORDER BY round, created_at""",
         (plate_norm,),
     ).fetchall()
 
