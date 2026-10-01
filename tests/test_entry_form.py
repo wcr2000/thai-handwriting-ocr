@@ -94,9 +94,18 @@ def test_province_and_building_must_come_from_the_list(pw):
 
 @pytest.fixture
 def clean(pgenv):
+    """ฐานข้อมูลว่าง + ตัวเลือกอาคาร/ชั้นกลับไปเป็นค่าตั้งต้นของโค้ด
+
+    ต้องล้าง app_settings ด้วย ไม่ใช่แค่ slips: GOOD ส่ง "อาคาร 1 / ชั้น 2" ซึ่งเป็น
+    ค่าตั้งต้นในโค้ด แต่ /in ตรวจกับลิสต์ที่อ่านจาก app_settings ถ้าตารางนั้นมีลิสต์ของ
+    test_entry_settings ค้างอยู่ (ฐานข้อมูลทดสอบไม่ได้ถูกสร้างใหม่ทุกรอบ) /in จะตีกลับว่า
+    "เลือกอาคารที่จอด" แล้วเทสต์กลุ่มนี้ล้มทั้งแถบ — ล้มเฉพาะการรันรอบที่สองบนฐานเดิม
+    ซึ่งเป็นความล้มแบบที่ไล่หาสาเหตุยากที่สุด
+    """
     from ocrslip.db import connect
     with connect() as conn:
         conn.execute(f"TRUNCATE {TEST_SCHEMA}.slips CASCADE")
+        conn.execute(f"TRUNCATE {TEST_SCHEMA}.app_settings")
         conn.commit()
 
 
@@ -196,9 +205,11 @@ def test_mobile_touch_rule_covers_every_input_type_we_use():
     css = Path("ocrslip/web/static/app.css").read_text(encoding="utf-8")
     forms = " ".join(
         Path(f"ocrslip/web/templates/{n}").read_text(encoding="utf-8")
-        for n in ("in.html", "slip.html", "index.html")
+        for n in ("in.html", "out.html", "out_pick.html", "slip.html", "index.html")
     )
-    used = set(re.findall(r'<input[^>]*type="(\w+)"', forms)) - {"hidden", "checkbox", "file"}
+    # radio ไม่อยู่ในกฎนี้โดยเจตนา: ปุ่มวิทยุในหน้าเลือกใบขาออกมี .pick-row เป็นเป้ากด
+    # ทั้งแถว (สูงกว่า 44px อยู่แล้ว) การขยายตัววงกลมให้สูง 44px จะดันแถวเตี้ย ๆ บวมเกินจอ
+    used = set(re.findall(r'<input[^>]*type="(\w+)"', forms)) - {"hidden", "checkbox", "file", "radio"}
 
     block = css.split("@media (max-width: 820px)", 1)[1].split("}", 1)[0]
     covered = set(re.findall(r"input\[type=(\w+)\]", block))
