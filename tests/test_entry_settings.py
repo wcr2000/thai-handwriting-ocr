@@ -125,7 +125,9 @@ def test_saved_quotes_show_up_on_the_slip_right_away(admin):
 
     r = TestClient(app).post("/in", data={**GOOD, "building": "อาคารบุญ", "floor": "ชั้น 1"})
     assert "คำคมของทีมเราเอง" in r.text
-    assert "วันจันทร์" in r.text
+    # แถบไม่มีชื่อวันเป็นตัวหนังสือแล้ว เหลือ "สี" เป็นตัวบอกวัน — ยืนยันที่สีแทน
+    # #a67c00 คือสีวันจันทร์ใน DAY_COLORS ถ้าแถบหลุดไปใช้สีของวันที่เปิดหน้า เทสต์นี้จะจับได้
+    assert "#a67c00" in r.text
 
 
 def test_clearing_the_quotes_falls_back_to_the_built_in_set(admin):
