@@ -1,0 +1,47 @@
+{% extends "public_base.html" %}
+{% block title %}เลือกใบที่จะปล่อยรถ{% endblock %}
+{% block content %}
+{# ทะเบียนเดียวมีใบที่ยังจอดอยู่หลายใบ — ระบบเดาแทนไม่ได้ว่าใบไหนคือรอบที่มารับวันนี้
+   ปิดผิดใบแล้วจะเหลือใบค้างที่ไม่มีใครมารับตลอดไป หน้านี้จึงให้เจ้าหน้าที่เลือกเอง
+   และต้องพิมพ์รหัสใหม่อีกครั้ง เพราะรหัสที่พิมพ์รอบแรกห้าม render กลับลงมาในหน้า #}
+<div class="card">
+  <h2 style="margin-top:0">ทะเบียนนี้มีใบที่ยังจอดอยู่ {{ picks|length }} ใบ</h2>
+  <p class="muted">เลือกใบที่ตรงกับรถคันที่มารับ แล้วให้เจ้าหน้าที่พิมพ์รหัสยืนยันอีกครั้ง</p>
+
+  <form method="post" action="/out" autocomplete="off">
+    {# ส่งค่าที่กรอกไว้กลับไปด้วย ฝั่ง server ค้นใหม่แล้วตรวจว่า slip_id ที่เลือกอยู่ในผลค้นจริง
+       ไม่ใช่เชื่อ id ที่ส่งมาตรง ๆ (ไม่ใช่ความลับทั้งคู่ ต่างจากรหัสเจ้าหน้าที่) #}
+    <input type="hidden" name="tel" value="{{ v.tel or '' }}">
+    <input type="hidden" name="noplate" value="{{ v.noplate or '' }}">
+
+    {% for s in picks %}
+    {% set r = rounds.get(s.id|string) %}
+    <label class="pick-row">
+      {# ไม่ติ๊กใบไหนไว้ล่วงหน้า แม้แต่ใบบนสุด — หน้านี้โผล่มาเพราะระบบเดาไม่ได้ว่าใบไหน
+         ถ้าติ๊กให้ก่อน เจ้าหน้าที่ที่รีบจะพิมพ์รหัสแล้วกดยืนยันโดยไม่ได้อ่านว่าเลือกใบอะไรอยู่
+         ซึ่งพาไปสู่สิ่งที่หน้านี้ตั้งใจจะกันพอดี คือปิดผิดใบ #}
+      <input type="radio" name="slip_id" value="{{ s.id }}" required>
+      <span>
+        <b>{{ s.plate_raw or '—' }}</b> {{ s.province or '' }} · {{ s.name or '—' }}<br>
+        <span class="muted">ฝากวันที่
+          {{ s.deposit_date.strftime('%d/%m/%Y') if s.deposit_date else '—' }}
+          · {{ s.location or 'ไม่ระบุที่จอด' }}
+          · เลขอ้างอิง <code>{{ s.id|string|upper|truncate(8, true, '') }}</code>
+          {% if r %}· ฝากรอบที่ {{ r.round }} จาก {{ r.total }}{% endif %}
+          {% if r and r.dup > 1 %}· <b>อาจเป็นใบซ้ำของวันเดียวกัน</b>{% endif %}
+        </span>
+      </span>
+    </label>
+    {% endfor %}
+
+    <div class="staff-box">
+    <p class="muted" style="margin:0"><b>ส่วนนี้สำหรับเจ้าหน้าที่</b><br>
+       เลือกใบด้านบนแล้วพิมพ์รหัสซ้ำอีกครั้งเพื่อยืนยันการนำรถออก</p>
+    <label for="entry_pw">รหัสเจ้าหน้าที่</label>
+    <input type="password" id="entry_pw" name="entry_pw" required autocomplete="off"
+           inputmode="text">
+    <div class="form-actions"><button type="submit">ยืนยันการนำรถออก</button></div>
+    </div>
+  </form>
+</div>
+{% endblock %}

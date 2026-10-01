@@ -1,0 +1,54 @@
+{% extends "public_base.html" %}
+{% block title %}ขอรับรถกลับ{% endblock %}
+{% block content %}
+<div class="card">
+  <h2 style="margin-top:0">ขอรับรถกลับ</h2>
+  <p class="muted">กรอกเบอร์โทรกับทะเบียนรถที่ลงทะเบียนไว้ แล้วยื่นเครื่องให้เจ้าหน้าที่ยืนยันท้ายฟอร์ม</p>
+
+  {% if errors %}<div class="err">กรอกไม่ครบหรือไม่ถูกต้อง {{ errors|length }} จุด — ดูข้อความสีแดงใต้ช่องนั้น</div>{% endif %}
+
+  {# ไม่มี hx-post เหมือนขาเข้า: หน้านี้ถูกเปิดจากเน็ตมือถือกลางลาน ถ้า htmx โหลดไม่ขึ้น
+     ฟอร์มต้องยัง submit ได้เอง จึงใช้ POST ธรรมดาทั้งหน้า ไม่พึ่ง JavaScript เลย #}
+  <form method="post" action="/out" autocomplete="off">
+    <label for="tel">เบอร์โทร</label>
+    {# type=tel -> มือถือเด้งแป้นตัวเลขขึ้นมาให้ ไม่ต้องสลับแป้นเอง
+       ฝั่ง server เทียบจาก tel_digits ที่เหลือแต่ตัวเลข ขีดหรือช่องว่างจึงไม่ทำให้ค้นไม่เจอ #}
+    <input type="tel" id="tel" name="tel" value="{{ v.tel or '' }}" required
+           class="{{ 'bad' if errors.tel }}" placeholder="0812345678"
+           inputmode="numeric" autocomplete="off" enterkeyhint="next">
+    {% if errors.tel %}<p class="field-err">{{ errors.tel }}</p>{% endif %}
+
+    <label for="noplate">ทะเบียนรถ</label>
+    {# ไม่ต้องถามจังหวัด: ฝั่ง server เทียบจาก plate_norm ซึ่งตัดชื่อจังหวัด ช่องว่าง ขีด จุด
+       ออกไปแล้วตอนลงทะเบียน ถามเพิ่มมีแต่จะพลาดตรงที่คนเลือกจังหวัดคนละอันกับขาเข้า #}
+    <input type="text" id="noplate" name="noplate" value="{{ v.noplate or '' }}" required
+           class="{{ 'bad' if errors.noplate }}" placeholder="1กก 1234"
+           autocapitalize="characters" autocorrect="off" spellcheck="false" enterkeyhint="next">
+    {% if errors.noplate %}<p class="field-err">{{ errors.noplate }}</p>{% endif %}
+
+    <div class="staff-box">
+    <p class="muted" style="margin:0"><b>ส่วนนี้สำหรับเจ้าหน้าที่</b><br>
+       ตรวจบัตรประชาชนเทียบชื่อบนใบก่อน แล้วพิมพ์รหัสและกดยืนยันการนำรถออก</p>
+    <label for="entry_pw">รหัสเจ้าหน้าที่</label>
+    {# autocomplete=off + ไม่ render ค่าที่พิมพ์กลับลงไปในหน้า: หน้านี้เปิดบนเครื่องของผู้มาจอด
+       ห้ามให้เบราว์เซอร์ของเขาจำรหัสไว้ และห้ามให้รหัสหลุดออกไปกับ HTML เด็ดขาด #}
+    <input type="password" id="entry_pw" name="entry_pw" required autocomplete="off"
+           class="{{ 'bad' if errors.entry_pw }}" inputmode="text">
+    {% if errors.entry_pw %}<p class="field-err">{{ errors.entry_pw }}</p>{% endif %}
+
+    <div class="form-actions"><button type="submit">ยืนยันการนำรถออก</button></div>
+    </div>
+  </form>
+</div>
+
+<script>
+  // กรอกผิดแล้วต้องพาไปที่ช่องนั้นเลย — บนมือถือ ข้อความสรุปข้างบนกับช่องที่ผิด
+  // มักอยู่คนละหน้าจอ คนจะเห็นแถบแดงแล้วไม่รู้ว่าต้องเลื่อนไปแก้ที่ไหน
+  (function () {
+    var first = document.querySelector('.bad');
+    if (!first) return;
+    first.scrollIntoView({ block: 'center' });
+    first.focus({ preventScroll: true });
+  })();
+</script>
+{% endblock %}

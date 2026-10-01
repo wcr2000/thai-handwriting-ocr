@@ -456,6 +456,28 @@ def open_slip_by_plate(
     )
     return cur.fetchone()
 
+
+def slips_by_plate(conn: psycopg.Connection, plate_norm: str) -> list[dict[str, Any]]:
+    """ทุกใบที่นับเป็นใบจริงของทะเบียนนี้ ใบใหม่สุดก่อน — ใช้ที่ฟอร์มขาออก (/out)
+
+    ต้องคืน "ทั้ง" ใบที่ยังจอดอยู่และใบที่ปิดไปแล้ว ไม่ใช่กรองเอาแต่ใบที่ยังจอด:
+    คนที่เอารถออกไปแล้วแต่กดฟอร์มซ้ำ กับคนที่พิมพ์ทะเบียนผิด ต้องได้ข้อความคนละแบบ
+    ("ใบนี้รับรถกลับไปแล้วเมื่อ..." กับ "ไม่พบใบของทะเบียนนี้") เพราะวิธีแก้คนละเรื่องกัน
+    ถ้าได้ข้อความเดียวกัน คนแรกจะยืนกรอกซ้ำอยู่อย่างนั้นโดยไม่รู้ว่ารถถูกปล่อยไปแล้ว
+
+    ไม่เอาใบที่ถูกตีว่าซ้ำ (superseded_by) หรือถูกตีกลับ (rejected) เพราะไม่ใช่การฝากจริง
+    """
+    if not plate_norm:
+        return []
+    cur = conn.execute(
+        f"""SELECT * FROM {DB_SCHEMA}.slips
+            WHERE plate_norm = %s AND superseded_by IS NULL AND review_status <> 'rejected'
+            ORDER BY created_at DESC""",
+        (plate_norm,),
+    )
+    return cur.fetchall()
+
+
 def _rounds_base(*, one: bool = False) -> str:
     """ใบที่นับเป็นการฝากจริง + คีย์ของ "รอบ" (วันที่เข้าจอด)
 

@@ -1,0 +1,32 @@
+{% extends "public_base.html" %}
+{% block title %}นำรถออกแล้ว — {{ slip.plate_raw }}{% endblock %}
+{% block content %}
+{# หน้าเทา = สัญญาณว่าจบแล้ว แก้อะไรไม่ได้อีก และเป็นภาพที่ผู้มาจอดแคปเก็บไว้เป็นหลักฐาน
+   ว่ารถออกไปแล้วเมื่อไหร่ ทุกอย่างที่ต้องใช้อ้างอิงทีหลังต้องอยู่ในภาพนี้
+   (ทะเบียน เลขอ้างอิง วันที่ฝาก เวลาที่ออก) และห้ามมีรหัสเจ้าหน้าที่อยู่ในภาพเด็ดขาด #}
+<div class="card done-card">
+  <p class="done-stamp">✓ นำรถออกแล้ว</p>
+  <table>
+    <tr><th>ชื่อ - นามสกุล</th><td>{{ slip.name or '—' }}</td></tr>
+    <tr><th>เบอร์โทร</th><td>{{ slip.tel or '—' }}</td></tr>
+    <tr><th>ทะเบียน</th><td><b>{{ slip.plate_raw or '—' }}</b> {{ slip.province or '' }}</td></tr>
+    <tr><th>รถ</th><td>{{ slip.brand or '—' }} ({{ slip.car_type or '—' }})</td></tr>
+    <tr><th>ที่จอด</th><td>{{ slip.location or '—' }}</td></tr>
+    {# วันที่ทุกช่องในใบนี้ต้องเป็นรูปแบบเดียวกัน (dd/mm/yyyy) ไม่งั้นในภาพที่แคปไว้
+       จะมีวันที่สองแบบปนกัน ซึ่งอ่านแล้วสะดุดและชวนให้เข้าใจผิดว่าคนละวัน #}
+    <tr><th>วันที่ฝาก</th><td>{{ slip.deposit_date.strftime('%d/%m/%Y') if slip.deposit_date else '—' }}</td></tr>
+    <tr><th>เลขอ้างอิง</th><td><code>{{ slip.id|string|upper|truncate(8, true, '') }}</code></td></tr>
+    <tr><th>นำรถออกเมื่อ</th><td><b>{{ slip.returned_at.strftime('%d/%m/%Y %H:%M') if slip.returned_at else '—' }}</b></td></tr>
+  </table>
+  {# แถบสีของ "วันที่นำรถออก" ไม่ใช่วันที่ฝาก — ใบนี้เป็นหลักฐานของขาออก
+     ต้องอยู่เหนือคำสั่งให้แคปและอยู่ในกรอบเดียวกับตาราง ไม่งั้นจะหลุดออกนอกภาพที่แคป #}
+  {% if stamp %}
+  <div class="day-stamp" style="--stamp-ink:{{ stamp.ink }}; --stamp-wash:{{ stamp.wash }}">
+    <p class="day-stamp-day"><span class="day-stamp-dot"></span>วัน{{ stamp.day }}</p>
+    <p class="day-stamp-quote">{{ stamp.quote }}</p>
+  </div>
+  {% endif %}
+  <p class="done-note">📸 กรุณาแคปหน้าจอนี้เก็บไว้ เป็นหลักฐานว่านำรถออกเรียบร้อยแล้ว</p>
+  <p class="muted">ใบนี้ถูกปิดแล้ว ถ้านำรถมาฝากอีกครั้ง ต้องลงทะเบียนใหม่ที่ฟอร์มขาเข้า</p>
+</div>
+{% endblock %}

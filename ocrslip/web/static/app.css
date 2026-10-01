@@ -126,7 +126,7 @@ img { max-width: 100%; }
   .ai-loading-bar span { width:100%; animation:none; }
 }
 
-/* ---- หน้าที่คนนอกเปิด (/in) ---- */
+/* ---- หน้าที่คนนอกเปิด (/in, /out) ---- */
 /* กว้างจำกัดและจัดกลาง เพราะเปิดบนมือถือเป็นหลัก แต่ไม่อยากให้ยืดเต็มจอบนแท็บเล็ต */
 .public-wrap { max-width:560px; margin:0 auto; padding:1rem; }
 .public-title { font-size:1.1rem; margin:.4rem 0 .8rem; }
@@ -161,12 +161,23 @@ img { max-width: 100%; }
 .day-stamp-quote { margin:.15rem 0 0; font-size:.85rem; font-weight:600; opacity:.9;
                    line-height:1.55; }
 
+/* ---- หน้าเลือกใบตอนขาออก (out_pick) ---- */
+/* ทั้งแถวต้องกดได้ ไม่ใช่ต้องจิ้มวงกลมเล็ก ๆ ให้ตรง — เจ้าหน้าที่กดบนมือถือของผู้มาจอด
+   ด้วยนิ้วโป้ง และกดผิดใบที่นี่หมายถึงเหลือใบค้างที่ไม่มีใครมารับตลอดไป
+   align-items:start เพราะข้อความในแถวสูงไม่เท่ากัน (บางใบมีป้าย "อาจเป็นใบซ้ำ") */
+.pick-row { display:flex; gap:.6rem; align-items:start; cursor:pointer;
+            border:1px solid var(--line); border-radius:8px; padding:.7rem;
+            margin:.5rem 0; background:#fff; }
+.pick-row:has(input:checked) { border-color:var(--ok); background:#f2fbf4; }
+/* ปุ่มวิทยุต้องใหญ่กว่าค่าเริ่มต้นของเบราว์เซอร์ ด้วยเหตุผลเดียวกับกฎ 44px ของฟอร์มขาเข้า */
+.pick-row input[type=radio] { width:1.3rem; height:1.3rem; margin:.1rem 0 0; flex:none; }
+
 /* ที่ว่างแทนรูปใบ สำหรับใบที่กรอกเอง — ต้องสูงเท่ากรอบรูปเดิม ไม่งั้นแถวในผลค้นหาเตี้ยสลับกัน */
 .no-img { display:flex; align-items:center; justify-content:center; text-align:center;
           height:100px; border:1px dashed var(--line); border-radius:8px;
           color:var(--muted); font-size:.8rem; background:#fff; }
 
-/* ---------- /in บนจอโทรศัพท์ ---------- */
+/* ---------- /in กับ /out บนจอโทรศัพท์ ---------- */
 /* ฟอร์มนี้ถูกกรอกด้วยนิ้วโป้งข้างเดียว ยืนอยู่ข้างรถ แดดส่องจอ — ทุกอย่างจึงต้องใหญ่
    กดง่าย และปุ่มยืนยันต้องอยู่ในระยะนิ้วตลอด ไม่ใช่ต้องเลื่อนลงไปหาที่ก้นฟอร์ม */
 @media (max-width: 620px) {

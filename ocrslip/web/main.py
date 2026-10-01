@@ -28,7 +28,7 @@ from ..daystamp import QUOTES, day_stamp, quote_cycle_days
 from ..db import (
     add_staff, build_filters, clean_person_name, connect, dashboard_stats, export_rows, get_image, get_slip,
     delete_slip, deposit_history, deposit_rounds, get_settings, insert_slip, list_edits,
-    open_slip_by_plate, set_setting,
+    open_slip_by_plate, set_setting, slips_by_plate,
     claim_next, claim_one, known_people, list_staff, mark_returned, mark_superseded, next_in_queue,
     query_slips, reject_slip, release_claims, review_counts,
     set_staff_active, update_slip,
@@ -47,9 +47,10 @@ app = FastAPI(title="ระบบเอื้อเฟื้อที่จอ�
 _SECRET = SECRET_KEY or secrets.token_urlsafe(32)
 
 # หน้าที่เข้าได้โดยไม่ต้องล็อกอิน
-# "/in" = ฟอร์มที่ผู้มาจอดกรอกเอง ต้องเปิดให้คนนอกเข้าได้ ด่านของหน้านี้คือรหัสที่
-# เจ้าหน้าที่พิมพ์ปิดท้าย ไม่ใช่การล็อกอิน (ตรวจรหัสฝั่ง server เท่านั้น ดู config.ENTRY_PASSWORD)
-PUBLIC_PATHS = ("/login", "/static", "/health", "/favicon.ico", "/in")
+# "/in" = ฟอร์มที่ผู้มาจอดกรอกเอง "/out" = ฟอร์มขอรับรถกลับ ทั้งสองต้องเปิดให้คนนอกเข้าได้
+# ด่านของสองหน้านี้คือรหัสที่เจ้าหน้าที่พิมพ์ปิดท้าย ไม่ใช่การล็อกอิน
+# (ตรวจรหัสฝั่ง server เท่านั้น ดู config.ENTRY_PASSWORD)
+PUBLIC_PATHS = ("/login", "/static", "/health", "/favicon.ico", "/in", "/out")
 # หน้าที่เฉพาะ admin เท่านั้น — จุดที่ย้อนกลับไม่ได้ หรือเป็นข้อมูลส่วนตัวทั้งก้อน
 ADMIN_ONLY = ("/table", "/dashboard", "/export.xlsx", "/staff", "/settings", "/dups")
 # "/reject" ไม่อยู่ในนี้ — คนที่นั่งตรวจ (approver) คือคนที่เห็นรูปเบลอ/ใบผิดประเภท
@@ -376,6 +377,105 @@ async def entry_submit(request: Request):
         stamp = day_stamp(slip["deposit_date"], _day_quotes(conn))
 
     return render(request, "in_done.html", slip=slip, again=bool(dup), stamp=stamp)
+
+
+# ใบที่ปิดผ่าน /out ไม่มีชื่อเจ้าหน้าที่ให้บันทึก — หน้านี้ไม่มีล็อกอิน มีแต่รหัสที่ใช้ร่วมกัน
+# จึงมาร์กที่มาไว้ตรง ๆ ดีกว่าเดาชื่อคน และยังแยกออกจากใบที่ปิดจากหน้าเจ้าหน้าที่ได้ตอนสอบย้อน
+# released_to ปล่อยว่างไว้เสมอ: ช่องนั้นหมายถึง "คนมารับที่ไม่ใช่เจ้าของ" (ดู slip.html)
+# เส้นทางนี้คือเจ้าของกรอกเบอร์ตัวเองมา ถ้าเติมชื่อบนใบลงไปจะกลายเป็นการบันทึกว่า
+# เราตรวจบัตรใครมาแล้ว ซึ่งไม่จริง
+RETURNED_BY_OUT = "ฟอร์มขาออก"
+RETURNED_NOTE_OUT = "ผู้มาจอดกรอกเบอร์โทร+ทะเบียนเอง เจ้าหน้าที่ยืนยันด้วยรหัส"
+
+
+@app.get("/out", response_class=HTMLResponse)
+def pickup_form(request: Request):
+    if not ENTRY_PASSWORD:
+        return HTMLResponse("ยังไม่ได้เปิดใช้ฟอร์มนี้ (ผู้ดูแลระบบยังไม่ได้ตั้ง ENTRY_PASSWORD)",
+                            status_code=503)
+    return render(request, "out.html", errors={}, v={})
+
+
+@app.post("/out", response_class=HTMLResponse)
+async def pickup_submit(request: Request):
+    """ขอรับรถกลับ: ผู้มาจอดกรอกเบอร์โทร + ทะเบียน แล้วเจ้าหน้าที่พิมพ์รหัสปิดท้าย
+
+    ทะเบียนเป็นกุญแจ เบอร์โทรเป็นตัวยืนยัน — เทียบจากคอลัมน์ที่ normalize ไว้แล้วตอน insert
+    (plate_norm ตัดช่องว่าง/ขีด/ชื่อจังหวัดออก, tel_digits เหลือแต่ตัวเลข) จึงไม่ต้องสนใจว่า
+    คนกรอกจะพิมพ์ "กก 1234", "กก-1234" หรือ "081-234-5678" มา
+    """
+    if not ENTRY_PASSWORD:
+        return HTMLResponse("ยังไม่ได้เปิดใช้ฟอร์มนี้", status_code=503)
+
+    form = await request.form()
+    v = {k: (form.get(k) or "").strip() for k in ("tel", "noplate")}
+    tel, plate = norm_phone(v["tel"]), norm_plate(v["noplate"])
+    slip_id = (form.get("slip_id") or "").strip()
+
+    errors: dict[str, str] = {}
+    if len(tel) != 10:
+        errors["tel"] = "เบอร์โทรต้องเป็นตัวเลข 10 หลัก"
+    if not plate:
+        errors["noplate"] = "กรอกทะเบียนรถ"
+    # ตรวจรหัส "ก่อน" จะไปค้นฐานข้อมูล และตีกลับทันทีถ้าผิด — ไม่ใช่ค้นก่อนแล้วค่อยเช็ค
+    # ไม่งั้น /out จะกลายเป็นเครื่องมือให้คนนอกยิงถามว่าทะเบียนไหนจอดอยู่ที่นี่บ้าง
+    # โดยไม่ต้องรู้รหัสเลย (ข้อความ "ไม่พบใบ" กับ "เบอร์ไม่ตรง" ก็บอกความจริงไปแล้วครึ่งหนึ่ง)
+    # เทียบด้วย compare_digest เป็น bytes เหมือนขาเข้า ด้วยเหตุผลเดียวกัน
+    if not secrets.compare_digest(
+        (form.get("entry_pw") or "").encode(), ENTRY_PASSWORD.encode()
+    ):
+        errors["entry_pw"] = "รหัสเจ้าหน้าที่ไม่ถูกต้อง"
+    if errors:
+        return render(request, "out.html", errors=errors, v=v)
+
+    with connect() as conn:
+        rows = slips_by_plate(conn, plate)
+        stored = [r for r in rows if r["car_status"] == "stored"]
+        # เบอร์โทรเป็นตัวยืนยัน ไม่ใช่กุญแจ: ใบที่มาจากรูป OCR อ่านเบอร์ไม่ออกก็มี
+        # ถ้าบังคับให้ตรงทุกใบ คนที่มารับรถจริงจะถูกบล็อกด้วยข้อมูลที่เราเองอ่านไม่ได้
+        # ส่วนใบที่ "มี" เบอร์เก็บไว้ ต้องตรงเท่านั้น และทะเบียน+รหัสเจ้าหน้าที่ยังบังคับเสมอ
+        match = [r for r in stored if not (r["tel_digits"] or "") or r["tel_digits"] == tel]
+
+        if not rows:
+            errors["noplate"] = "ไม่พบใบจอดของทะเบียนนี้ — ตรวจตัวอักษรกับตัวเลขอีกครั้ง"
+        elif not stored:
+            last = rows[0]
+            when = (last["returned_at"].strftime("%d/%m/%Y %H:%M")
+                    if last["returned_at"] else "ก่อนหน้านี้")
+            errors["noplate"] = f"ใบของทะเบียนนี้รับรถกลับไปแล้วเมื่อ {when}"
+        elif not match:
+            errors["tel"] = "เบอร์โทรไม่ตรงกับใบจอดของทะเบียนนี้"
+        if errors:
+            return render(request, "out.html", errors=errors, v=v)
+
+        # slip_id มาจากหน้าเลือกใบ ต้องหาใน match เท่านั้น ไม่ใช่เชื่อค่าที่ส่งมา —
+        # ไม่งั้นใครที่รู้รหัสยิง id ใบของคนอื่นมาปิดได้ทั้งที่กรอกทะเบียนคนละคัน
+        chosen = next((r for r in match if str(r["id"]) == slip_id), None)
+        if chosen is None and len(match) > 1:
+            # ทะเบียนเดียวมีใบที่ยังจอดอยู่หลายใบ (มาฝากใหม่ทับใบเก่า / ใบซ้ำที่หลุดตัวจับซ้ำ)
+            # เดาแทนไม่ได้ ปิดผิดใบแล้วจะเหลือใบค้างที่ไม่มีใครมารับตลอดไป ให้เลือกเอง
+            # เรียงตามวันที่ฝากใหม่สุดขึ้นก่อน ไม่ใช่ลำดับที่ใบถูกบันทึกเข้าระบบ —
+            # ใบของรอบปัจจุบันคือใบที่คนส่วนใหญ่มารับ ต้องอยู่บนสุดที่ตาไปถึงก่อน
+            # (ใบที่ถ่ายรูปเข้าระบบทีหลังอาจเป็นใบของรอบเก่าก็ได้ สองอย่างนี้ไม่เท่ากัน)
+            picks = sorted(match, key=lambda r: (r["deposit_date"] is not None,
+                                                 r["deposit_date"]), reverse=True)
+            return render(request, "out_pick.html", v=v, picks=picks,
+                          rounds=deposit_rounds(conn, [plate]))
+        chosen = chosen or match[0]
+
+        ok = mark_returned(conn, str(chosen["id"]), RETURNED_BY_OUT, RETURNED_NOTE_OUT)
+        conn.commit()
+        if not ok:
+            # mark_returned คืน False = ใบถูกปิดไปก่อนแล้ว (เจ้าหน้าที่กดจากหน้าใบ หรือกดซ้ำ)
+            # ต้องบอกให้เห็น ไม่ใช่ขึ้นใบสรุปเหมือนเพิ่งปิดสำเร็จ
+            errors["noplate"] = "ใบนี้ถูกปิดไปแล้วเมื่อครู่นี้ — สอบถามเจ้าหน้าที่"
+            return render(request, "out.html", errors=errors, v=v)
+
+        slip = get_slip(conn, str(chosen["id"]))
+        # แถบสีของ "วันรับรถกลับ" ไม่ใช่วันที่ฝาก — ภาพนี้คือหลักฐานว่าออกไปวันไหน
+        stamp = day_stamp(slip["returned_at"], _day_quotes(conn))
+
+    return render(request, "out_done.html", slip=slip, stamp=stamp)
 
 
 @app.get("/", response_class=HTMLResponse)
