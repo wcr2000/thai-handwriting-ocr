@@ -145,17 +145,21 @@ img { max-width: 100%; }
                 padding:.3rem .8rem .3rem 0; vertical-align:top; }
 .done-card td { padding:.3rem 0; }
 
-/* แถบสีประจำวัน — ใหญ่พอให้เจ้าหน้าที่เห็นสีตอนผู้มาจอดยื่นมือถือให้ดูจากระยะแขน
-   ไม่ใช่ต้องรับมือถือมาเพ่ง จึงกินเต็มความกว้างการ์ดและสูงกว่าแถวในตารางอย่างชัดเจน
+/* แถบสีประจำวัน — สิ่งที่ต้องเห็นจากระยะยื่นมือถือให้ดูคือ "สี" ไม่ใช่ตัวหนังสือ
+   แถบจึงกินเต็มความกว้างการ์ดไว้เหมือนเดิม แต่ตัวหนังสือเล็กกว่าข้อมูลในตาราง
+   เพราะชื่อวันเป็นแค่ตัวกำกับสีให้คนตาบอดสีอ่านได้ ไม่ใช่พระเอกของใบนี้
+   และทีมตั้งใจจะใส่คำคมยาว ๆ — ตัวเล็กทำให้คำคมสามสี่บรรทัดยังไม่ดันข้อมูลที่ใช้ค้นใบ
+   (ชื่อ/ทะเบียน/เลขอ้างอิง) ตกขอบภาพที่ผู้มาจอดแคปเก็บไว้
    ใช้สีจาก CSS variable ที่ template ใส่มา เพราะสีเปลี่ยนตามวัน เขียนตายตัวใน CSS ไม่ได้ */
-.day-stamp { margin:1.1rem 0 .3rem; padding:.85rem 1rem; border-radius:12px;
+.day-stamp { margin:1rem 0 .3rem; padding:.45rem .7rem; border-radius:10px;
              background:var(--stamp-wash); border:2px solid var(--stamp-ink);
              color:var(--stamp-ink); text-align:center; }
-.day-stamp-day { margin:0; font-size:1.35rem; font-weight:700; line-height:1.3; }
+.day-stamp-day { margin:0; font-size:.95rem; font-weight:700; line-height:1.3; }
 /* จุดสีทึบ — เผื่อคนตาบอดสีหรือจอที่สีเพี้ยน ยังมีชื่อวันเป็นตัวหนังสือกำกับเสมอ */
-.day-stamp-dot { display:inline-block; width:.85rem; height:.85rem; border-radius:50%;
-                 background:var(--stamp-ink); margin-inline-end:.45rem; }
-.day-stamp-quote { margin:.25rem 0 0; font-size:1rem; font-weight:600; opacity:.9; }
+.day-stamp-dot { display:inline-block; width:.6rem; height:.6rem; border-radius:50%;
+                 background:var(--stamp-ink); margin-inline-end:.4rem; }
+.day-stamp-quote { margin:.15rem 0 0; font-size:.85rem; font-weight:600; opacity:.9;
+                   line-height:1.55; }
 
 /* ที่ว่างแทนรูปใบ สำหรับใบที่กรอกเอง — ต้องสูงเท่ากรอบรูปเดิม ไม่งั้นแถวในผลค้นหาเตี้ยสลับกัน */
 .no-img { display:flex; align-items:center; justify-content:center; text-align:center;
