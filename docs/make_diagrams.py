@@ -106,13 +106,119 @@ def svg(w, h, body, p):
             f'<rect width="{w}" height="{h}" fill="{p["bg"]}"/>\n{body}\n</svg>\n')
 
 
+# Label tables. The Thai README is the fuller document and its readers should not have to
+# translate a diagram in their head, so every diagram is emitted in both languages. Technical
+# terms stay in English in the Thai table, matching how the Thai README already writes them.
+EN = {
+    "pipe_title": "How a car gets back to its owner",
+    "pipe_sub": "Two ways in. Only one of them needs the AI.",
+    "lane_a": "A · HAND-WRITTEN SLIP",
+    "lane_b": "B · DRIVER FILLS IT IN  ·  NO AI, NO QUEUE",
+    "n_photo": ("Photograph", ["slip on a phone", "HEIC, any angle"]),
+    "n_crop": ("Crop the paper", ["OpenCV, scored", "falls back to full frame"]),
+    "n_llm": ("LLM reads it", ["Gemini 3 Flash", "confidence per field"]),
+    "n_human": ("Human confirms", ["review queue", "claimed, never shared"]),
+    "n_typed": ("Driver types it", ["on their own phone", "dropdowns, not free text"]),
+    "n_pass": ("Staff passcode", ['"I saw this car"', "server-side only"]),
+    "on_spot": "approved on the spot",
+    "store": "Postgres",
+    "store_sub": "+ the photo as evidence",
+    "search": "Fuzzy search",
+    "search_1": "trigram + levenshtein,",
+    "search_2": "reranked in Python",
+    "pipe_foot": ("The review queue only ever sees lane A. Lane B was the last feature shipped, "
+                  "and it is what removed the bottleneck."),
+
+    "bench_title": "11 vision models on real Thai handwriting",
+    "bench_sub": ("Each model's best preprocessing variant. Accuracy is the mean across the core "
+                  "fields, scored after normalization."),
+    "h_acc": "MEAN CORE ACCURACY",
+    "h_cost": "COST / 1000 SLIPS",
+    "bench_foot": ("Winner on accuracy and among the cheapest. The most expensive model scored "
+                   "worst — 27x the cost for 20 points less."),
+    "bench_src": "Full table: bench/report.md",
+
+    "crop_title": "Does it matter how you find the paper first?",
+    "crop_sub": ("Same model throughout, 49 human-labelled slips. Only the image sent differs. "
+                 "Lower character error rate is better."),
+    "crop_foot": ("Cropping halves the error on photos taken from a distance (0.260 -> 0.132). "
+                  "Having the LLM find the corners is worse than not cropping at all."),
+    "crop_src": "Full table: bench/crop_report.md",
+    "s_cv": ("OpenCV crop", "best, cheapest, fastest"),
+    "s_deskew": ("OpenCV crop + deskew", "rotation blurs small text"),
+    "s_full": ("Full frame, no crop", "more tokens, worse reads"),
+    "s_llm": ("LLM finds the quad", "46% dearer, 2x slower"),
+
+    "imp_title": "In production",
+    "imp_sub": "Figures from the live dashboard.",
+    "k_slips": "slips in the system",
+    "k_peak": "busiest single day",
+    "k_back": "cars handed back",
+    "k_spend": "total AI spend",
+    "k_note": "about THB 335",
+    "imp_foot": ("The land saved the cars from the water. This saved the ability to give them "
+                 "back — and ran on $10 of inference."),
+}
+
+TH = {
+    "pipe_title": "รถกลับไปหาเจ้าของได้อย่างไร",
+    "pipe_sub": "ทางเข้ามีสองทาง มีทางเดียวที่ต้องใช้ AI",
+    "lane_a": "A · ใบที่เขียนด้วยลายมือ",
+    "lane_b": "B · ผู้มาจอดกรอกเอง  ·  ไม่ใช้ AI ไม่เข้าคิว",
+    "n_photo": ("ถ่ายรูปใบ", ["ถ่ายด้วยมือถือ", "HEIC มุมไหนก็ได้"]),
+    "n_crop": ("จับกรอบกระดาษ", ["OpenCV ให้คะแนนเลือก", "ถ้าไม่เจอใช้ภาพเต็ม"]),
+    "n_llm": ("LLM อ่านใบ", ["Gemini 3 Flash", "บอกความมั่นใจรายช่อง"]),
+    "n_human": ("คนตรวจยืนยัน", ["คิวตรวจสอบ", "จองใบ ไม่ซ้ำกัน"]),
+    "n_typed": ("ผู้มาจอดพิมพ์เอง", ["บนมือถือตัวเอง", "เลือกจากรายการ ไม่พิมพ์อิสระ"]),
+    "n_pass": ("รหัสเจ้าหน้าที่", ['"เห็นรถคันนี้จอดจริง"', "ตรวจฝั่ง server เท่านั้น"]),
+    "on_spot": "อนุมัติทันที",
+    "store": "Postgres",
+    "store_sub": "+ รูปหลักฐานของใบ",
+    "search": "ค้นแบบ fuzzy",
+    "search_1": "trigram + levenshtein",
+    "search_2": "แล้วจัดอันดับใน Python",
+    "pipe_foot": ("คิวตรวจเห็นเฉพาะแถว A เท่านั้น ส่วนแถว B คือฟีเจอร์สุดท้ายที่ทำ "
+                  "และเป็นตัวที่ทำให้คอขวดหายไป"),
+
+    "bench_title": "วัด 11 vision model บนลายมือไทยจริง",
+    "bench_sub": ("เอา preprocessing ที่ดีที่สุดของแต่ละ model มาเทียบ ความแม่นคือค่าเฉลี่ยของช่องหลัก "
+                  "วัดหลัง normalize แล้ว"),
+    "h_acc": "ความแม่นเฉลี่ยช่องหลัก",
+    "h_cost": "ราคาต่อ 1000 ใบ",
+    "bench_foot": ("แม่นที่สุดและถูกเกือบที่สุด ส่วนตัวที่แพงที่สุดกลับแม่นน้อยที่สุด "
+                   "— แพงกว่า 27 เท่าแต่ได้น้อยกว่า 20 จุด"),
+    "bench_src": "ตารางเต็ม: bench/report.md",
+
+    "crop_title": "จับกรอบกระดาษก่อนอ่าน มีผลไหม",
+    "crop_sub": ("ใช้ model เดียวกันหมด ใบที่คนยืนยันแล้ว 49 ใบ ต่างกันแค่ภาพที่ส่งเข้าไป "
+                 "ค่า CER ยิ่งต่ำยิ่งดี"),
+    "crop_foot": ("การ crop ลดความผิดพลาดของใบที่ถ่ายไกลลงครึ่งหนึ่ง (0.260 -> 0.132) "
+                  "ส่วนการให้ LLM หามุมกระดาษ แย่กว่าการไม่ crop เลย"),
+    "crop_src": "ตารางเต็ม: bench/crop_report.md",
+    "s_cv": ("OpenCV crop", "แม่นสุด ถูกสุด เร็วสุด"),
+    "s_deskew": ("OpenCV crop + แก้เอียง", "การหมุนทำให้ตัวเล็กเบลอ"),
+    "s_full": ("ภาพเต็ม ไม่ crop", "เปลือง token และอ่านแย่กว่า"),
+    "s_llm": ("ให้ LLM หามุมกระดาษ", "แพงกว่า 46% ช้ากว่าเท่าตัว"),
+
+    "imp_title": "ของจริงบน production",
+    "imp_sub": "ตัวเลขจาก dashboard ที่ใช้งานอยู่",
+    "k_slips": "ใบในระบบ",
+    "k_peak": "วันที่เข้ามากที่สุด",
+    "k_back": "คันที่รับรถกลับแล้ว",
+    "k_spend": "ค่า AI รวมทั้งหมด",
+    "k_note": "ประมาณ 335 บาท",
+    "imp_foot": ("ที่ดินของวัดช่วยรถให้พ้นน้ำ ส่วนระบบนี้ช่วยให้คืนรถถูกคันได้ "
+                 "— และใช้ค่า inference ไปทั้งหมด $10"),
+}
+
+
 # ---------------------------------------------------------------- 1. the pipeline
 
-def pipeline(p) -> tuple[int, int, str]:
+def pipeline(p, t) -> tuple[int, int, str]:
     W, H = 980, 430
     o: list[str] = []
-    o.append(text(28, 38, "How a car gets back to its owner", size=19, weight=700, p=p))
-    o.append(text(28, 60, "Two ways in. Only one of them needs the AI.", size=13, fill="muted", p=p))
+    o.append(text(28, 38, t["pipe_title"], size=19, weight=700, p=p))
+    o.append(text(28, 60, t["pipe_sub"], size=13, fill="muted", p=p))
 
     def node(x, y, w, h, title, sub, *, accent="teal", soft="teal_soft"):
         parts = [box(x, y, w, h, fill=soft, stroke=accent, p=p, r=12)]
@@ -124,55 +230,51 @@ def pipeline(p) -> tuple[int, int, str]:
 
     # Lane A — the paper path
     ay = 104
-    o.append(text(28, ay - 12, "A · HAND-WRITTEN SLIP", size=10.5, weight=700, fill="orange", p=p))
+    o.append(text(28, ay - 12, t["lane_a"], size=10.5, weight=700, fill="orange", p=p))
     xs = [28, 212, 396, 580]
     w, h = 160, 84
-    o.append(node(xs[0], ay, w, h, "Photograph", ["slip on a phone", "HEIC, any angle"],
+    o.append(node(xs[0], ay, w, h, *t["n_photo"],
                   accent="orange", soft="orange_soft"))
-    o.append(node(xs[1], ay, w, h, "Crop the paper", ["OpenCV, scored", "falls back to full frame"],
+    o.append(node(xs[1], ay, w, h, *t["n_crop"],
                   accent="orange", soft="orange_soft"))
-    o.append(node(xs[2], ay, w, h, "LLM reads it", ["Gemini 3 Flash", "confidence per field"],
+    o.append(node(xs[2], ay, w, h, *t["n_llm"],
                   accent="orange", soft="orange_soft"))
-    o.append(node(xs[3], ay, w, h, "Human confirms", ["review queue", "claimed, never shared"],
+    o.append(node(xs[3], ay, w, h, *t["n_human"],
                   accent="orange", soft="orange_soft"))
     for i in range(3):
         o.append(arrow(xs[i] + w, ay + h / 2, xs[i + 1], ay + h / 2, p=p, color="orange"))
 
     # Lane B — self-service
     by = 254
-    o.append(text(28, by - 12, "B · DRIVER FILLS IT IN  ·  NO AI, NO QUEUE",
-                  size=10.5, weight=700, fill="green", p=p))
-    o.append(node(xs[0], by, w, h, "Driver types it", ["on their own phone", "dropdowns, not free text"],
+    o.append(text(28, by - 12, t["lane_b"], size=10.5, weight=700, fill="green", p=p))
+    o.append(node(xs[0], by, w, h, *t["n_typed"],
                   accent="green", soft="green_soft"))
-    o.append(node(xs[1], by, w, h, "Staff passcode", ['"I saw this car"', "server-side only"],
+    o.append(node(xs[1], by, w, h, *t["n_pass"],
                   accent="green", soft="green_soft"))
     o.append(arrow(xs[0] + w, by + h / 2, xs[1], by + h / 2, p=p, color="green"))
     o.append(f'<line x1="{xs[1] + w}" y1="{by + h / 2}" x2="{xs[3] + w / 2}" y2="{by + h / 2}" '
              f'stroke="{p["green"]}" stroke-width="1.6"/>')
-    o.append(text((xs[1] + w + xs[3]) / 2 + 20, by + h / 2 - 9, "approved on the spot",
+    o.append(text((xs[1] + w + xs[3]) / 2 + 20, by + h / 2 - 9, t["on_spot"],
                   size=10.5, fill="green", anchor="middle", p=p))
 
     # Converge into the store
     sx, sy, sw_, sh_ = 764, 148, 188, 148
     o.append(box(sx, sy, sw_, sh_, fill="surface", stroke="teal", p=p, r=12, sw=1.6))
-    o.append(text(sx + sw_ / 2, sy + 32, "Postgres", size=14, weight=700, anchor="middle", p=p))
-    o.append(text(sx + sw_ / 2, sy + 52, "+ the photo as evidence", size=11, fill="muted",
+    o.append(text(sx + sw_ / 2, sy + 32, t["store"], size=14, weight=700, anchor="middle", p=p))
+    o.append(text(sx + sw_ / 2, sy + 52, t["store_sub"], size=11, fill="muted",
                   anchor="middle", p=p))
     o.append(f'<line x1="{sx + 22}" y1="{sy + 68}" x2="{sx + sw_ - 22}" y2="{sy + 68}" '
              f'stroke="{p["line"]}" stroke-width="1"/>')
-    o.append(text(sx + sw_ / 2, sy + 90, "Fuzzy search", size=13, weight=650,
+    o.append(text(sx + sw_ / 2, sy + 90, t["search"], size=13, weight=650,
                   anchor="middle", fill="teal", p=p))
-    o.append(text(sx + sw_ / 2, sy + 109, "trigram + levenshtein,", size=10.5, fill="muted",
+    o.append(text(sx + sw_ / 2, sy + 109, t["search_1"], size=10.5, fill="muted",
                   anchor="middle", p=p))
-    o.append(text(sx + sw_ / 2, sy + 124, "reranked in Python", size=10.5, fill="muted",
+    o.append(text(sx + sw_ / 2, sy + 124, t["search_2"], size=10.5, fill="muted",
                   anchor="middle", p=p))
     o.append(arrow(xs[3] + w, ay + h / 2, sx, sy + 46, p=p, color="orange"))
     o.append(arrow(xs[3] + w / 2, by + h / 2, sx, sy + 110, p=p, color="green"))
 
-    o.append(text(28, H - 22,
-                  "The review queue only ever sees lane A. Lane B was the last feature shipped, "
-                  "and it is what removed the bottleneck.",
-                  size=11.5, fill="muted", p=p))
+    o.append(text(28, H - 22, t["pipe_foot"], size=11.5, fill="muted", p=p))
     return W, H, "".join(o)
 
 
@@ -193,18 +295,17 @@ MODELS = [
 ]
 
 
-def benchmark(p) -> tuple[int, int, str]:
+def benchmark(p, t) -> tuple[int, int, str]:
     W = 980
     row, top = 30, 116
     H = top + row * len(MODELS) + 74
     o: list[str] = []
-    o.append(text(28, 38, "11 vision models on real Thai handwriting", size=19, weight=700, p=p))
-    o.append(text(28, 60, "Each model's best preprocessing variant. Accuracy is the mean across "
-                          "the core fields, scored after normalization.", size=12.5, fill="muted", p=p))
+    o.append(text(28, 38, t["bench_title"], size=19, weight=700, p=p))
+    o.append(text(28, 60, t["bench_sub"], size=12.5, fill="muted", p=p))
 
     x0, bar_max = 332, 384
-    o.append(text(x0, top - 18, "MEAN CORE ACCURACY", size=9.5, weight=700, fill="muted", p=p))
-    o.append(text(x0 + bar_max + 118, top - 18, "COST / 1000 SLIPS", size=9.5, weight=700,
+    o.append(text(x0, top - 18, t["h_acc"], size=9.5, weight=700, fill="muted", p=p))
+    o.append(text(x0 + bar_max + 118, top - 18, t["h_cost"], size=9.5, weight=700,
                   fill="muted", anchor="middle", p=p))
     o.append(text(W - 36, top - 18, "p50", size=9.5, weight=700, fill="muted", anchor="end", p=p))
 
@@ -235,38 +336,37 @@ def benchmark(p) -> tuple[int, int, str]:
                       fill="orange" if cost > 10 else "muted", weight=600 if cost > 10 else 400, p=p))
         o.append(text(W - 36, cy + 4, f"{p50:.1f}s", size=11, fill="grey", anchor="end", p=p))
 
-    o.append(text(28, H - 38, "Winner on accuracy and among the cheapest. The most expensive model "
-                              "scored worst — 27× the cost for 20 points less.",
-                  size=12, fill="muted", p=p))
-    o.append(text(28, H - 18, "Full table: bench/report.md", size=11, fill="grey", p=p))
+    o.append(text(28, H - 38, t["bench_foot"], size=12, fill="muted", p=p))
+    o.append(text(28, H - 18, t["bench_src"], size=11, fill="grey", p=p))
     return W, H, "".join(o)
 
 
 # ---------------------------------------------------------------- 3. crop strategy
 
+# Numbers live here; the label and the aside come from the language table, keyed by the first
+# element, so a translation can never drift from the figure it belongs to.
 STRATEGIES = [
-    ("OpenCV crop", 0.124, "$1.86", True, "best, cheapest, fastest"),
-    ("OpenCV crop + deskew", 0.131, "$1.84", False, "rotation blurs small text"),
-    ("Full frame, no crop", 0.161, "$2.16", False, "more tokens, worse reads"),
-    ("LLM finds the quad", 0.184, "$2.72", False, "46% dearer, 2× slower"),
+    ("s_cv", 0.124, "$1.86", True),
+    ("s_deskew", 0.131, "$1.84", False),
+    ("s_full", 0.161, "$2.16", False),
+    ("s_llm", 0.184, "$2.72", False),
 ]
 
 
-def crop(p) -> tuple[int, int, str]:
+def crop(p, t) -> tuple[int, int, str]:
     W = 980
     top, row = 98, 44
     # Height follows the content instead of being guessed: bars, then a fixed footer. Guessing it
     # is what put the caption on top of the last bar.
     H = top + len(STRATEGIES) * row + 76
     o: list[str] = []
-    o.append(text(28, 38, "Does it matter how you find the paper first?", size=19, weight=700, p=p))
-    o.append(text(28, 60, "Same model throughout, 49 human-labelled slips. Only the image sent "
-                          "differs. Lower character error rate is better.",
-                  size=12.5, fill="muted", p=p))
+    o.append(text(28, 38, t["crop_title"], size=19, weight=700, p=p))
+    o.append(text(28, 60, t["crop_sub"], size=12.5, fill="muted", p=p))
 
     # bar_max is sized so the notes column still clears the right margin by a comfortable gap
     x0, bar_max = 236, 400
-    for i, (name, cer, cost, win, note) in enumerate(STRATEGIES):
+    for i, (key, cer, cost, win) in enumerate(STRATEGIES):
+        name, note = t[key]
         cy = top + i * row + 16
         o.append(text(220, cy + 4, name, size=12.5, weight=700 if win else 400,
                       fill="ink" if win else "muted", anchor="end", p=p))
@@ -281,33 +381,32 @@ def crop(p) -> tuple[int, int, str]:
         o.append(text(x0 + bar_max + 140, cy + 4, note, size=11,
                       fill="teal" if win else "grey", p=p))
 
-    o.append(text(28, H - 44, "Cropping halves the error on photos taken from a distance "
-                              "(0.260 → 0.132). Having the LLM find the corners is worse than "
-                              "not cropping at all.", size=12, fill="muted", p=p))
-    o.append(text(28, H - 22, "Full table: bench/crop_report.md", size=11, fill="grey", p=p))
+    o.append(text(28, H - 44, t["crop_foot"], size=12, fill="muted", p=p))
+    o.append(text(28, H - 22, t["crop_src"], size=11, fill="grey", p=p))
     return W, H, "".join(o)
 
 
 # ---------------------------------------------------------------- 4. production impact
 
 STATS = [
-    ("8,401", "slips in the system", "teal", ""),
-    ("3,290", "busiest single day", "teal", ""),
-    ("1,110", "cars handed back", "teal", ""),
-    ("$10", "total AI spend", "orange", "about ฿335"),
+    ("8,401", "k_slips", "teal", None),
+    ("3,290", "k_peak", "teal", None),
+    ("1,110", "k_back", "teal", None),
+    ("$10", "k_spend", "orange", "k_note"),
 ]
 
 
-def impact(p) -> tuple[int, int, str]:
+def impact(p, t) -> tuple[int, int, str]:
     W, H = 980, 278
     o: list[str] = []
-    o.append(text(28, 38, "In production", size=19, weight=700, p=p))
-    o.append(text(28, 60, "Figures from the live dashboard.", size=12.5, fill="muted", p=p))
+    o.append(text(28, 38, t["imp_title"], size=19, weight=700, p=p))
+    o.append(text(28, 60, t["imp_sub"], size=12.5, fill="muted", p=p))
 
     # Derived, not hand-picked: four cards at 224 came to 984 on a 980 canvas.
     pad, gap, y = 28, 20, 86
     cw = (W - 2 * pad - gap * (len(STATS) - 1)) / len(STATS)
-    for i, (num, label, colour, note) in enumerate(STATS):
+    for i, (num, label_key, colour, note_key) in enumerate(STATS):
+        label, note = t[label_key], (t[note_key] if note_key else "")
         x = pad + i * (cw + gap)
         o.append(box(x, y, cw, 104, fill="surface", stroke="line", p=p, r=12))
         o.append(text(x + cw / 2, y + 50, num, size=34, weight=700, fill=colour,
@@ -317,10 +416,7 @@ def impact(p) -> tuple[int, int, str]:
             o.append(text(x + cw / 2, y + 90, note, size=10.5, fill="grey", anchor="middle", p=p))
 
     o.append(box(28, 214, W - 56, 44, fill="surface2", stroke="surface2", p=p, r=10))
-    o.append(text(48, 241,
-                  "The land saved the cars from the water. This saved the ability to give them "
-                  "back — and ran on $10 of inference.",
-                  size=12.5, fill="muted", p=p))
+    o.append(text(48, 241, t["imp_foot"], size=12.5, fill="muted", p=p))
     return W, H, "".join(o)
 
 
@@ -358,19 +454,24 @@ def check(name: str, w: int, h: int) -> list[str]:
     return problems
 
 
+LANGS = {"": EN, "-th": TH}
+
+
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     failures: list[str] = []
     for name, fn in DIAGRAMS.items():
-        for theme, palette in (("day", DAY), ("night", NIGHT)):
-            _reset_ink()
-            w, h, body = fn(palette)
-            problems = check(f"{name}-{theme}", w, h)
-            failures += problems
-            path = OUT / f"{name}-{theme}.svg"
-            path.write_text(svg(w, h, body, palette), encoding="utf-8")
-            flag = "  <-- " + str(len(problems)) + " issue(s)" if problems else ""
-            print(f"  {path.relative_to(OUT.parent.parent)}  {w}x{h}{flag}")
+        for suffix, strings in LANGS.items():
+            for theme, palette in (("day", DAY), ("night", NIGHT)):
+                _reset_ink()
+                w, h, body = fn(palette, strings)
+                stem = f"{name}{suffix}-{theme}"
+                problems = check(stem, w, h)
+                failures += problems
+                path = OUT / f"{stem}.svg"
+                path.write_text(svg(w, h, body, palette), encoding="utf-8")
+                flag = "  <-- " + str(len(problems)) + " issue(s)" if problems else ""
+                print(f"  {path.relative_to(OUT.parent.parent)}  {w}x{h}{flag}")
     if failures:
         print("\nLayout problems:")
         for f in failures:

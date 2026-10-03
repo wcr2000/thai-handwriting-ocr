@@ -57,33 +57,30 @@ PAGE = """<!doctype html>
   <h1>README diagrams</h1>
   <span class="hint">ดูก่อน push · บอกได้เลยว่าจะแก้ตรงไหน</span>
   <div class="toggle">
-    <button id="b-day" aria-pressed="true">สว่าง</button>
-    <button id="b-night" aria-pressed="false">มืด</button>
-    <button id="b-both" aria-pressed="false">เทียบคู่</button>
+    <button id="b-day" aria-pressed="true">EN สว่าง</button>
+    <button id="b-night" aria-pressed="false">EN มืด</button>
+    <button id="b-th-day" aria-pressed="false">ไทย สว่าง</button>
+    <button id="b-th-night" aria-pressed="false">ไทย มืด</button>
   </div>
 </header>
 <main id="main"></main>
 <script>
 const SVG = {svg_json};
 const DIAGRAMS = {list_json};
+const MODES = ["day", "night", "th-day", "th-night"];
 let mode = "day";
-function frame(name, t) {{
-  return `<div><p class="lbl">${{t === "day" ? "สว่าง" : "มืด"}}</p>
-          <div class="frame ${{t}}">${{SVG[name + "-" + t]}}</div></div>`;
-}}
 function render() {{
+  const dark = mode.endsWith("night");
   document.getElementById("main").innerHTML = DIAGRAMS.map(([name, title]) => {{
-    const body = mode === "both"
-      ? `<div class="both side">${{frame(name, "day")}}${{frame(name, "night")}}</div>`
-      : `<div class="frame ${{mode}}">${{SVG[name + "-" + mode]}}</div>`;
     return `<section><h2>${{title}}</h2>
-            <p class="file">docs/img/${{name}}-${{mode === "both" ? "{{day,night}}" : mode}}.svg</p>
-            ${{body}}</section>`;
+            <p class="file">docs/img/${{name}}-${{mode}}.svg</p>
+            <div class="frame ${{dark ? "night" : "day"}}">${{SVG[name + "-" + mode]}}</div>
+            </section>`;
   }}).join("");
-  for (const m of ["day","night","both"])
+  for (const m of MODES)
     document.getElementById("b-" + m).setAttribute("aria-pressed", String(m === mode));
 }}
-for (const m of ["day","night","both"])
+for (const m of MODES)
   document.getElementById("b-" + m).onclick = () => {{ mode = m; render(); }};
 render();
 </script>
@@ -95,7 +92,7 @@ render();
 def main() -> None:
     svgs = {}
     for name, _ in DIAGRAMS:
-        for theme in ("day", "night"):
+        for theme in ("day", "night", "th-day", "th-night"):
             path = IMG / f"{name}-{theme}.svg"
             if not path.exists():
                 raise SystemExit(f"missing {path} — run docs/make_diagrams.py first")

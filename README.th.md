@@ -11,6 +11,24 @@
 ถ่ายรูปใบจอดรถที่เขียนด้วยลายมือ → ให้ LLM อ่าน → คนตรวจยืนยัน → เก็บลง Postgres พร้อมรูปหลักฐาน
 → ตอนเจ้าของมารับรถกลับ ค้นแบบ fuzzy ได้แม้สะกดชื่อผิดหรือจำเบอร์ผิดไปบ้าง
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/wcr2000/thai-handwriting-ocr/main/docs/img/pipeline-th-night.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/wcr2000/thai-handwriting-ocr/main/docs/img/pipeline-th-day.svg">
+    <img src="https://raw.githubusercontent.com/wcr2000/thai-handwriting-ocr/main/docs/img/pipeline-th-day.svg" width="100%" alt="เส้นทางเข้าสองทาง: ใบเขียนมือผ่าน crop + LLM + คนตรวจ ส่วนผู้มาจอดกรอกเองข้ามทั้ง AI และคิวตรวจ ปลายทางลง Postgres เหมือนกัน">
+  </picture>
+</p>
+
+## ของจริงบน production
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/wcr2000/thai-handwriting-ocr/main/docs/img/impact-th-night.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/wcr2000/thai-handwriting-ocr/main/docs/img/impact-th-day.svg">
+    <img src="https://raw.githubusercontent.com/wcr2000/thai-handwriting-ocr/main/docs/img/impact-th-day.svg" width="100%" alt="8,401 ใบในระบบ วันที่เข้ามากที่สุด 3,290 ใบ รับรถกลับแล้ว 1,110 คัน ค่า AI รวมทั้งหมด $10">
+  </picture>
+</p>
+
 ## เริ่มใช้งาน
 
 ```bash
@@ -264,12 +282,28 @@ model ไม่มั่นใจ, ช่องบังคับว่าง, �
 
 ## ผลวัด accuracy
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/wcr2000/thai-handwriting-ocr/main/docs/img/benchmark-th-night.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/wcr2000/thai-handwriting-ocr/main/docs/img/benchmark-th-day.svg">
+    <img src="https://raw.githubusercontent.com/wcr2000/thai-handwriting-ocr/main/docs/img/benchmark-th-day.svg" width="100%" alt="11 model เรียงตามความแม่น Gemini 3 Flash นำที่ 78% ราคา $1.55 ต่อ 1000 ใบ ส่วน Claude Opus 5.5 อยู่ท้ายสุดที่ 58% ราคา $41.86">
+  </picture>
+</p>
+
 ดู [bench/report.md](bench/report.md) — เทียบ 11 models × 3 แบบ preprocessing × 10 ใบ (330 calls)
 
 - **ที่เลือกใช้**: `google/gemini-3-flash-preview` + crop → เฉลี่ย 78%, $1.55/1000 ใบ, ~3 วินาทีต่อใบ
 - crop กระดาษช่วยจริง (71% vs 69%) แต่ **การเพิ่ม contrast/ลบเงากลับทำให้แย่ลง** (68%)
 - ช่องที่พลาดคือ "ชื่อ" เป็นหลัก แต่ผิดแค่ 1-2 ตัวอักษร (`ชื่อ≈` 90%) ซึ่ง fuzzy search ยังหาเจอ
   และคนตรวจแก้ได้เร็ว ส่วนเบอร์โทรอ่านถูก 100%
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/wcr2000/thai-handwriting-ocr/main/docs/img/crop-strategy-th-night.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/wcr2000/thai-handwriting-ocr/main/docs/img/crop-strategy-th-day.svg">
+    <img src="https://raw.githubusercontent.com/wcr2000/thai-handwriting-ocr/main/docs/img/crop-strategy-th-day.svg" width="100%" alt="ค่า CER แยกตามวิธีจับกรอบ: OpenCV crop 0.124, OpenCV + แก้เอียง 0.131, ภาพเต็ม 0.161, ให้ LLM หามุม 0.184">
+  </picture>
+</p>
 
 ### ต้นทุนจริง
 
