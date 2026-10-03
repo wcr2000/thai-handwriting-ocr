@@ -1,9 +1,10 @@
 {% extends "public_base.html" %}
 {% block title %}ลงทะเบียนแล้ว — {{ slip.plate_raw }}{% endblock %}
 {% block content %}
-{# หน้าเทา = สัญญาณว่าจบแล้ว แก้อะไรไม่ได้อีก และเป็นภาพที่ผู้มาจอดแคปเก็บไว้
-   ทุกอย่างที่เจ้าหน้าที่ต้องใช้ค้นตอนขาออกต้องอยู่ในภาพนี้ (ชื่อ เบอร์ ทะเบียน เลขอ้างอิง เวลา)
-   และห้ามมีรหัสเจ้าหน้าที่อยู่ในภาพเด็ดขาด #}
+{# The grey page signals "finished, nothing more to edit", and it is the image the driver saves
+   as a screenshot. Everything staff will need to look the slip up on the way out has to be in
+   this image (name, phone, plate, reference number, time) — and the staff passcode must never
+   appear in it under any circumstances. #}
 <div class="card done-card">
   <p class="done-stamp">✓ เจ้าหน้าที่ยืนยันแล้ว</p>
   {% if again %}
@@ -15,15 +16,17 @@
     <tr><th>ทะเบียน</th><td><b>{{ slip.plate_raw or '—' }}</b> {{ slip.province or '' }}</td></tr>
     <tr><th>รถ</th><td>{{ slip.brand or '—' }} ({{ slip.car_type or '—' }})</td></tr>
     <tr><th>ที่จอด</th><td>{{ slip.location or '—' }}</td></tr>
-    {# ต้องเป็นรูปแบบเดียวกับ "บันทึกเมื่อ" ข้างล่าง ไม่งั้นในภาพที่แคปไว้จะมีวันที่สองแบบ
-       ปนกัน (2026-09-28 กับ 28/09/2026) ซึ่งอ่านแล้วสะดุดและชวนให้เข้าใจผิดว่าคนละวัน #}
+    {# Must use the same format as "saved at" below, or the screenshot carries two different date
+       formats side by side (2026-09-28 against 28/09/2026), which trips the reader up and
+       invites them to read the two as different days. #}
     <tr><th>วันที่ฝาก</th><td>{{ slip.deposit_date.strftime('%d/%m/%Y') if slip.deposit_date else '—' }}</td></tr>
     <tr><th>เลขอ้างอิง</th><td><code>{{ slip.id|string|upper|truncate(8, true, '') }}</code></td></tr>
     <tr><th>บันทึกเมื่อ</th><td>{{ slip.created_at.strftime('%d/%m/%Y %H:%M') if slip.created_at else '—' }}</td></tr>
   </table>
-  {# แถบสีประจำวันของ "วันที่ฝาก" — ไว้ให้เจ้าหน้าที่กวาดตาเทียบกับสติกเกอร์ของวันนั้น
-     ตอนผู้มาจอดยื่นภาพที่แคปไว้ให้ดู ต้องอยู่เหนือคำสั่งให้แคปและอยู่ในกรอบเดียวกับตาราง
-     ไม่งั้นมันจะหลุดออกนอกภาพที่แคปแล้วไม่มีประโยชน์อะไรเลย #}
+  {# The day colour band for the *deposit* date, for staff to check at a glance against that
+     day's sticker when a driver holds out their screenshot. It has to sit above the instruction
+     to take the screenshot, and inside the same frame as the table — otherwise it falls outside
+     the captured image and serves no purpose whatsoever. #}
   {% if stamp %}
   <div class="day-stamp" style="--stamp-ink:{{ stamp.ink }}; --stamp-wash:{{ stamp.wash }}">
     <p class="day-stamp-quote">{{ stamp.quote }}</p>

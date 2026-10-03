@@ -1,7 +1,7 @@
-"""อ่านไฟล์ภาพจากทุกนามสกุล โดยดูจาก magic bytes ไม่เชื่อนามสกุลไฟล์
+"""Load images of any format by sniffing magic bytes rather than trusting the extension.
 
-รูปตัวอย่างในโปรเจกต์นี้เป็น HEIC ทั้งหมด แม้บางไฟล์จะตั้งชื่อเป็น .png / .jpg
-(ดูเหมือนถูก rename มาตอนส่งไฟล์) การเชื่อนามสกุลจะทำให้ decode พัง
+Every sample image in this project is actually HEIC, even the ones named .png / .jpg
+(they appear to have been renamed in transit). Trusting the extension breaks decoding.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ MAX_LONG_SIDE = 2000
 
 
 def sniff_format(data: bytes) -> str:
-    """เดาชนิดไฟล์จาก magic bytes -> 'heic' | 'jpeg' | 'png' | 'webp' | 'unknown'"""
+    """Infer the file type from magic bytes -> 'heic' | 'jpeg' | 'png' | 'webp' | 'unknown'"""
     if data[:3] == b"\xff\xd8\xff":
         return "jpeg"
     if data[:8] == b"\x89PNG\r\n\x1a\n":
@@ -36,11 +36,11 @@ def sniff_format(data: bytes) -> str:
 
 
 def load_image(source: str | Path | bytes) -> Image.Image:
-    """อ่านเป็น PIL RGB พร้อม apply EXIF orientation และย่อด้านยาวไม่เกิน MAX_LONG_SIDE"""
+    """Decode to PIL RGB, apply EXIF orientation, and cap the long edge at MAX_LONG_SIDE"""
     data = Path(source).read_bytes() if isinstance(source, (str, Path)) else source
     fmt = sniff_format(data)
     if fmt == "unknown":
-        # ปล่อยให้ Pillow ลองเอง เผื่อเป็นฟอร์แมตที่เรายังไม่รู้จัก
+        # Let Pillow try anyway, in case it is a format we do not recognise yet
         pass
     img = Image.open(io.BytesIO(data))
     img = ImageOps.exif_transpose(img)

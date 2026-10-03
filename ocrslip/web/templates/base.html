@@ -4,8 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}ระบบเอื้อเฟื้อที่จอดรถ{% endblock %}</title>
-{# เก็บ htmx ไว้ในเครื่องแทนการดึงจาก CDN — ถ้า unpkg ใช้ไม่ได้ (เน็ตมือถือในพื้นที่น้ำท่วม
-   captive portal, DNS พัง) ฟอร์มจะ submit แบบ native โดยไม่มี enctype ไฟล์หายเงียบ ๆ #}
+{# htmx is vendored locally rather than pulled from a CDN: if unpkg is unreachable (mobile data
+   in a flooded area, a captive portal, broken DNS), the form submits natively without the
+   enctype and the files vanish silently. #}
 <script src="/static/htmx.min.js"></script>
 <link rel="stylesheet" href="/static/app.css">
 {% block head %}{% endblock %}

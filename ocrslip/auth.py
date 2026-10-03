@@ -1,13 +1,13 @@
-"""ระบบล็อกอินแบบง่าย: บัญชีคงที่ 3 บัญชี (admin / staff / approver) จาก .env + cookie ที่เซ็นด้วย HMAC
+"""Minimal login: three fixed accounts (admin / staff / approver) from .env + an HMAC-signed cookie.
 
-ตั้งใจให้ไม่มี dependency เพิ่มและไม่มีตาราง user ในฐานข้อมูล เพราะงานนี้มีผู้ใช้ไม่กี่คน
-แต่ยังต้องทนต่อการเดารหัสผ่าน:
+Deliberately adds no dependency and no user table, because this job has only a handful
+of users — but it still has to withstand password guessing:
 
-* รหัสผ่านเก็บเป็น scrypt hash เท่านั้น (ไม่เคยเก็บ plaintext แม้ใน .env)
-* scrypt ถูกตั้งค่าให้ช้าโดยตั้งใจ (~100ms/ครั้ง) การเดาแบบ brute force จึงแพงมาก
-* ล็อกทั้งราย IP และรายชื่อผู้ใช้ เมื่อพลาดหลายครั้ง และหน่วงเวลาเพิ่มแบบทวีคูณ
-* ผู้ใช้ที่ไม่มีอยู่จริงก็ยัง verify กับ hash หลอกเสมอ เพื่อไม่ให้เดาได้จากเวลาตอบกลับ
-* เทียบค่าทุกอย่างด้วย compare_digest เพื่อไม่ให้รั่วผ่าน timing
+* Passwords are stored only as scrypt hashes (plaintext is never stored, not even in .env)
+* scrypt is tuned to be deliberately slow (~100ms per attempt), making brute force expensive
+* Lockout applies per IP and per username after repeated failures, with exponential backoff
+* Non-existent users are still verified against a decoy hash, so response time reveals nothing
+* Every comparison goes through compare_digest, so nothing leaks through timing
 """
 
 from __future__ import annotations
@@ -22,26 +22,27 @@ import time
 from dataclasses import dataclass, field
 
 SCRYPT_N, SCRYPT_R, SCRYPT_P = 2**14, 8, 1
-SESSION_TTL = 12 * 3600  # 12 ชั่วโมง พอดีกับหนึ่งกะทำงาน
+SESSION_TTL = 12 * 3600  # 12 hours, about one work shift
 COOKIE_NAME = "ocrslip_session"
 
-# ค่าเริ่มต้นของการล็อก: พลาดเกิน MAX_FAILS ครั้งใน WINDOW วินาที แล้วโดนล็อก
+# Lockout settings: more than MAX_FAILS failures within WINDOW seconds triggers a lock
 MAX_FAILS = 5
 WINDOW = 15 * 60
-BASE_LOCK = 30           # ล็อกครั้งแรก 30 วินาที แล้วเพิ่มเป็นเท่าตัว
-MAX_LOCK_IP = 30 * 60    # เพดานของการล็อกราย IP
-# เพดานของการล็อกรายชื่อผู้ใช้ตั้งไว้ต่ำกว่ามาก เพราะคนร้ายยิงชื่อ admin จาก IP ไหนก็ได้
-# ถ้าล็อกยาวเท่ากัน เท่ากับเปิดช่องให้กันเจ้าหน้าที่ตัวจริงเข้าระบบตอนฉุกเฉิน
+BASE_LOCK = 30           # first lock lasts 30 seconds, then doubles
+MAX_LOCK_IP = 30 * 60    # ceiling for the per-IP lock
+# The per-username ceiling is set much lower, because an attacker can hammer the admin
+# name from any IP. An equally long lock would hand them a way to keep real staff out
+# of the system during an emergency.
 MAX_LOCK_USER = 3 * 60
 
-# hash หลอกสำหรับ username ที่ไม่มีอยู่ — ให้เสียเวลาเท่ากับกรณีมีจริง
+# Decoy hash for non-existent usernames — costs the same time as a real one
 _DUMMY_HASH = None
 
 
 # ---------- hashing ----------
 
 def hash_password(password: str) -> str:
-    """คืน string ที่เอาไปใส่ .env ได้เลย (ไม่มีรหัสผ่านจริงอยู่ข้างใน)"""
+    """Return a string ready to paste into .env (it contains no actual password)"""
     salt = secrets.token_bytes(16)
     dk = hashlib.scrypt(password.encode(), salt=salt, n=SCRYPT_N, r=SCRYPT_R, p=SCRYPT_P)
     b64 = lambda b: base64.b64encode(b).decode()
@@ -69,7 +70,7 @@ def _dummy_hash() -> str:
     return _DUMMY_HASH
 
 
-# ---------- บัญชีผู้ใช้ ----------
+# ---------- user accounts ----------
 
 @dataclass(frozen=True)
 class User:
@@ -82,12 +83,12 @@ class User:
 
     @property
     def is_approver(self) -> bool:
-        """คนทำ label: เห็นแค่หน้าอัปโหลดกับคิวตรวจ ไม่เห็นข้อมูลรวมของทั้งระบบ"""
+        """Labelling volunteer: sees only upload and the review queue, never system-wide data"""
         return self.role == "approver"
 
 
 def load_accounts() -> dict[str, tuple[str, str]]:
-    """อ่านบัญชีจาก env -> {username: (password_hash, role)}"""
+    """Read accounts from the environment -> {username: (password_hash, role)}"""
     accounts: dict[str, tuple[str, str]] = {}
     for prefix, role in (("ADMIN", "admin"), ("USER", "user"), ("APPROVE", "approver")):
         name = os.getenv(f"{prefix}_USERNAME", "").strip()
@@ -97,7 +98,7 @@ def load_accounts() -> dict[str, tuple[str, str]]:
     return accounts
 
 
-# ---------- cookie ที่เซ็นแล้ว ----------
+# ---------- signed cookie ----------
 
 def _sign(payload: bytes, secret: str) -> str:
     sig = hmac.new(secret.encode(), payload, hashlib.sha256).digest()
@@ -114,7 +115,7 @@ def make_token(user: User, secret: str) -> str:
 
 
 def read_token(token: str, secret: str) -> User | None:
-    """คืน User ถ้าลายเซ็นถูกและยังไม่หมดอายุ — ไม่งั้นคืน None"""
+    """Return the User when the signature is valid and unexpired, otherwise None"""
     try:
         payload_b64, sig_b64 = token.split(".")
         pad = lambda s: s + "=" * (-len(s) % 4)
@@ -132,25 +133,25 @@ def read_token(token: str, secret: str) -> User | None:
         return None
     if int(data.get("exp", 0)) < time.time():
         return None
-    # ไม่มี role ใน payload = token เก่า/แปลกปลอม ให้ตกไปที่สิทธิ์น้อยที่สุดไว้ก่อน
+    # A payload with no role is an old or forged token: fall back to the least privilege
     return User(username=data.get("u", ""), role=data.get("r", "approver"))
 
 
-# ---------- กันเดารหัสผ่าน ----------
+# ---------- password-guessing defence ----------
 
 @dataclass
 class Throttle:
-    """นับความพยายามที่ล้มเหลว แยกตาม key (ใช้ทั้ง IP และ username)
+    """Count failed attempts per key (keyed by both IP and username).
 
-    เก็บในหน่วยความจำของ process เดียว — พอสำหรับงานนี้ที่รันอินสแตนซ์เดียว
-    ถ้าขยายเป็นหลายอินสแตนซ์ต้องย้ายไป Redis หรือตารางใน Postgres
+    Held in a single process's memory, which is enough for this job's single instance.
+    Scaling to several instances would mean moving this to Redis or a Postgres table.
     """
 
     fails: dict[str, list[float]] = field(default_factory=dict)
     locked_until: dict[str, float] = field(default_factory=dict)
 
     def locked_for(self, key: str) -> int:
-        """เหลือเวลาโดนล็อกกี่วินาที (0 = ไม่โดนล็อก)"""
+        """Seconds of lockout remaining (0 = not locked)"""
         return max(0, int(self.locked_until.get(key, 0) - time.time()))
 
     def record_failure(self, key: str, max_lock: int = MAX_LOCK_IP) -> int:
@@ -170,7 +171,7 @@ class Throttle:
         self.locked_until.pop(key, None)
 
     def cleanup(self) -> None:
-        """ตัดรายการเก่าทิ้ง ไม่ให้ dict โตไม่จำกัดเมื่อโดนยิงนาน ๆ"""
+        """Drop stale entries so the dicts cannot grow without bound under a long attack"""
         now = time.time()
         self.fails = {
             k: [t for t in v if now - t < WINDOW]
@@ -184,7 +185,7 @@ throttle = Throttle()
 
 
 def authenticate(username: str, password: str, client_ip: str) -> tuple[User | None, str]:
-    """คืน (User|None, ข้อความ error ภาษาไทย)"""
+    """Return (User|None, error message). The message is Thai: it is shown to staff."""
     username = (username or "").strip()
     ip_key, user_key = f"ip:{client_ip}", f"user:{username.lower()}"
 
@@ -205,7 +206,7 @@ def authenticate(username: str, password: str, client_ip: str) -> tuple[User | N
             throttle.record_failure(user_key, MAX_LOCK_USER),
         )
         throttle.cleanup()
-        time.sleep(0.25)  # หน่วงคงที่ กันการยิงรัว ๆ
+        time.sleep(0.25)  # fixed delay, to blunt rapid-fire attempts
         if lock:
             return None, f"ผิดหลายครั้งเกินไป ระบบล็อกชั่วคราว {lock} วินาที"
         return None, "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง"
@@ -221,5 +222,5 @@ if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "hash":
         print(hash_password(sys.argv[2]))
     else:
-        print("วิธีใช้: python -m ocrslip.auth hash '<รหัสผ่าน>'")
-        print("แล้วเอาค่าที่ได้ไปใส่ ADMIN_PASSWORD_HASH / USER_PASSWORD_HASH / APPROVE_PASSWORD_HASH ใน .env")
+        print("usage: python -m ocrslip.auth hash '<password>'")
+        print("then put the result in ADMIN_PASSWORD_HASH / USER_PASSWORD_HASH / APPROVE_PASSWORD_HASH in .env")

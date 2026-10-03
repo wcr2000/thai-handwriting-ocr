@@ -1,7 +1,8 @@
-"""ตัดสินว่าใบไหนต้องให้คนตรวจ (human-in-the-loop)
+"""Decide which slips need a human reviewer (human-in-the-loop).
 
-OCR ไม่เขียนข้อมูลจริงทันที — ทุกใบเข้าคิว pending ก่อน
-ใบที่เข้าเกณฑ์ด้านล่างจะถูกชู flag ให้คนตรวจก่อน ที่เหลือแค่กดยืนยันผ่านเร็ว
+OCR never writes straight into the real data — every slip lands in the pending queue
+first. Slips meeting the criteria below are flagged for a reviewer's attention; the rest
+only need a quick confirm-and-pass.
 """
 
 from __future__ import annotations
@@ -20,12 +21,14 @@ REASON_LABELS = {
     "format_invalid": "รูปแบบข้อมูลไม่ถูกต้อง",
     "duplicate_suspect": "อาจซ้ำกับใบที่ยังจอดอยู่",
     "duplicate_image": "รูปนี้เคยอัปโหลดแล้ว",
-    # ตั้งด้วยมือ ไม่ได้มาจาก evaluate() — ใช้ดึงใบที่เคยยืนยันไว้ตอนระบบยัง crop พัง
-    # กลับเข้าคิว เพราะคนตรวจตอนนั้นเห็นรูปที่บิด/ตัดขอบ จึงอาจกรอกจากใบผิด
+    # Set by hand, never by evaluate(). Used to pull slips confirmed back when cropping
+    # was still broken into the queue again: the reviewer at the time was looking at a
+    # skewed or clipped image, so they may have typed from the wrong slip.
     "recheck_bad_crop": "ตรวจซ้ำ — ยืนยันไว้ตอนที่ระบบยัง crop รูปพลาด",
 }
 
-# ทะเบียนไทย: หมวดอักษร 1-3 ตัว (อาจมีเลขนำหน้าแบบใหม่ เช่น 5ขภ) + เลข 1-4 ตัว
+# Thai plates: a 1-3 character letter group (optionally with the newer leading digit, as
+# in 5ขภ) followed by 1-4 digits
 PLATE_RE = re.compile(r"^\d?[ก-ฮ]{1,3}\d{1,4}$")
 
 
@@ -34,7 +37,7 @@ def low_confidence_fields(confidence: dict[str, float]) -> list[str]:
 
 
 def field_problems(fields: dict[str, Any]) -> dict[str, str]:
-    """คืน {field: เหตุผลภาษาไทย} ของช่องที่ผิดรูปแบบหรือหายไป"""
+    """Return {field: reason} for fields that are malformed or missing. Reasons are Thai: staff read them."""
     problems: dict[str, str] = {}
 
     for f in REQUIRED:
@@ -58,7 +61,7 @@ def field_problems(fields: dict[str, Any]) -> dict[str, str]:
 def evaluate(
     fields: dict[str, Any], confidence: dict[str, float], duplicates: int = 0
 ) -> tuple[list[str], dict[str, str]]:
-    """คืน (review_reason, field_problems) — ถ้า review_reason ว่าง แปลว่าผ่านเร็วได้"""
+    """Return (review_reason, field_problems). An empty review_reason means it can fast-pass."""
     problems = field_problems(fields)
     low = low_confidence_fields(confidence)
 

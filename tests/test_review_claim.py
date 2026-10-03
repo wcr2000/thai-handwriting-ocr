@@ -1,10 +1,11 @@
-"""การจองใบในคิว — สามคนที่นั่งตรวจพร้อมกันต้องไม่ได้ใบเดียวกัน
+"""Claiming slips in the queue — three people reviewing at once must never get the same slip.
 
-เดิม next_in_queue() ยื่นใบหัวแถวใบเดียวกันให้ทุกคน และปุ่ม "ใบถัดไป" เดินตาม id
-ที่คำนวณไว้ตั้งแต่ตอน render ทุกคนจึงไล่คิวเส้นทางเดียวกันเป๊ะ
+Previously next_in_queue() handed the same head-of-line slip to everyone, and the "next slip"
+button followed an id computed at render time, so everybody walked the queue along exactly the
+same path.
 
-ต้องใช้ Postgres จริง — ของที่ทดสอบคือ FOR UPDATE SKIP LOCKED กับเงื่อนไขอายุการจอง
-ซึ่ง mock ไม่ได้ ดูวิธีรันที่ tests/conftest.py
+Needs a real Postgres: what is under test is FOR UPDATE SKIP LOCKED and the claim-lease
+condition, neither of which can be mocked. See tests/conftest.py for how to run it.
 """
 
 import threading
@@ -17,7 +18,7 @@ pytestmark = needs_db
 
 
 def claimed_id(client) -> str | None:
-    """กด "ใบถัดไป" แล้วคืน id ที่จองได้ (None = คิวหมด)"""
+    """Press "next slip" and return the id that was claimed (None = the queue is empty)"""
     r = client.get("/review/next", follow_redirects=False)
     assert r.status_code == 303, r.status_code
     loc = r.headers["location"]
@@ -35,7 +36,7 @@ def claim_row(slip_id: str) -> dict:
 
 
 def test_two_reviewers_get_different_slips(make_slips, worker):
-    """หัวใจของ PR นี้ — สองคนกดขอใบ ต้องได้คนละใบ"""
+    """The core property: two people asking for a slip must get different slips"""
     make_slips(3)
     a, b = worker("admin"), worker("staff")
     assert claimed_id(a) != claimed_id(b)
@@ -52,56 +53,57 @@ def approve(client, slip_id: str):
 
 
 def test_two_reviewers_drain_the_queue_without_doing_the_same_slip_twice(make_slips, worker):
-    """จำลองการทำงานจริง: จอง → อนุมัติ → ขอใบถัดไป สลับกันสองคนจนคิวหมด
+    """Model the real workflow: claim -> approve -> ask for the next, two people alternating until the queue empties.
 
-    ถ้าไม่อนุมัติแล้ววนขอใบถัดไปเฉย ๆ คิวจะไม่มีวันหมด เพราะการขอใบใหม่คืนใบเดิม
-    เข้าคิวเสมอ (คนหนึ่งถือได้ทีละใบ) — ตัวที่ทำให้ใบออกจากกองคือการอนุมัติเท่านั้น
+    Merely looping on "ask for the next" without approving would never empty the queue, because
+    each new request releases the previous slip back into it (one person holds one slip at a time).
+    Approval is the only thing that removes a slip from the pile.
     """
     ids = make_slips(6)
     a, b = worker("admin"), worker("staff")
     done: list[str] = []
-    for _ in range(20):  # กันลูปไม่รู้จบถ้าตรรกะพัง
+    for _ in range(20):  # a guard against an infinite loop if the logic breaks
         progressed = False
         for client in (a, b):
             got = claimed_id(client)
             if got is None:
                 continue
-            assert got not in done, f"ใบ {got} ถูกจ่ายซ้ำหลังตรวจไปแล้ว"
+            assert got not in done, f"slip {got} was served again after being reviewed"
             approve(client, got)
             done.append(got)
             progressed = True
         if not progressed:
             break
-    assert sorted(done) == sorted(ids), "ต้องตรวจครบทุกใบ ไม่ซ้ำ ไม่ขาด"
+    assert sorted(done) == sorted(ids), "every slip must be reviewed, none twice and none missed"
 
 
 def test_a_reviewer_never_holds_two_slips_at_once(make_slips, worker):
-    """คนหนึ่งถือได้ทีละใบ ไม่งั้นคนที่คลิกไปมาจะจองค้างไว้เต็มคิว แล้วคนอื่นต้องรอ
-    จนหมดอายุทั้งที่ไม่มีใครนั่งตรวจใบพวกนั้นอยู่จริง
+    """One person holds one slip at a time. Otherwise somebody clicking around leaves the queue full of
+    claimed slips, and everybody else waits out the leases on slips nobody is actually reviewing.
     """
     from ocrslip.db import connect
 
     ids = make_slips(3)
     a = worker("admin")
-    a.get(f"/review/{ids[2]}")           # เปิดใบท้ายคิวตรง ๆ = จองใบนั้น
+    a.get(f"/review/{ids[2]}")           # opening the last slip directly claims it
     assert claim_row(ids[2])["claimed_by"] is not None
 
-    nxt = claimed_id(a)                  # แล้วขอใบถัดไปตามคิวปกติ
-    assert nxt == ids[0], "ต้องได้ใบหัวคิว"
-    assert claim_row(ids[2])["claimed_by"] is None, "ใบเดิมต้องถูกปล่อยคืนคิว"
+    nxt = claimed_id(a)                  # then ask for the next slip in the normal queue order
+    assert nxt == ids[0], "must get the head of the queue"
+    assert claim_row(ids[2])["claimed_by"] is None, "the previous slip must be released back into the queue"
 
     with connect() as conn:
         held = conn.execute(
             f"SELECT count(*) c FROM {TEST_SCHEMA}.slips WHERE claimed_by IS NOT NULL"
         ).fetchone()["c"]
-    assert held == 1, f"คนเดียวต้องถือใบเดียว แต่มีใบถูกถืออยู่ {held} ใบ"
+    assert held == 1, f"one person must hold one slip, but {held} slips are held"
 
 
 def test_asking_again_without_approving_returns_the_same_slip(make_slips, worker):
-    """ขอใบถัดไปโดยยังไม่อนุมัติ ต้องได้ใบเดิม ไม่ใช่ข้ามไปเรื่อย ๆ
+    """Asking for the next slip without approving must return the same slip, not skip onward forever.
 
-    เพราะปล่อยใบเดิมคืนคิวแล้วหยิบหัวคิวใหม่ ซึ่งก็คือใบเดิม — ที่สำคัญคือมันต้อง
-    ไม่ทำให้ใบถูกข้ามหายไปจากคิวโดยไม่มีใครตรวจ
+    Because releasing the current slip back into the queue and taking the new head of line yields
+    the same slip. What matters is that no slip is skipped out of the queue unreviewed.
     """
     ids = make_slips(3)
     a = worker("admin")
@@ -110,15 +112,15 @@ def test_asking_again_without_approving_returns_the_same_slip(make_slips, worker
 
 
 def test_expired_claim_goes_back_into_the_queue(make_slips, worker):
-    """คนถือใบแล้วปิดแท็บ ใบต้องกลับเข้าคิวเอง ไม่ใช่ค้างถาวรรอ admin มาปลด"""
+    """Somebody claims a slip and closes the tab: it has to return to the queue by itself, not wait forever for an admin"""
     from ocrslip.db import connect
 
     ids = make_slips(1)
     a, b = worker("admin"), worker("staff")
     assert claimed_id(a) == ids[0]
-    assert claimed_id(b) is None, "ระหว่างที่ยังไม่หมดอายุ คนอื่นต้องไม่ได้ใบนี้"
+    assert claimed_id(b) is None, "while the lease stands, nobody else may get this slip"
 
-    with connect() as conn:  # ย้อนเวลาการจองให้เลยอายุไป
+    with connect() as conn:  # backdate the claim past its lease
         conn.execute(f"UPDATE {TEST_SCHEMA}.slips"
                      f" SET claimed_at = now() - interval '999 min' WHERE id = %s", (ids[0],))
         conn.commit()
@@ -126,16 +128,16 @@ def test_expired_claim_goes_back_into_the_queue(make_slips, worker):
 
 
 def test_opening_a_slip_claims_it(make_slips, worker):
-    """คลิกจากรายการคิวก็ต้องจอง ไม่งั้นสองคนที่คลิกแถวเดียวกันยังชนกันอยู่"""
+    """Clicking through from the queue list must also claim, or two people clicking the same row still collide"""
     ids = make_slips(2)
     a, b = worker("admin"), worker("staff")
     a.get(f"/review/{ids[1]}")
     assert claim_row(ids[1])["claimed_by"] is not None
-    assert claimed_id(b) == ids[0], "คนอื่นต้องได้ใบที่เหลือ ไม่ใช่ใบที่ถูกเปิดอยู่"
+    assert claimed_id(b) == ids[0], "the other person must get a remaining slip, not the one already open"
 
 
 def test_opening_someone_elses_slip_warns_but_does_not_block(make_slips, worker):
-    """การจองเป็นคำแนะนำ ไม่ใช่การล็อก — ยังเข้าดูได้ แต่ต้องรู้ว่ามีคนถืออยู่"""
+    """A claim is advisory, not a lock: the slip can still be opened, but the holder must be made visible"""
     ids = make_slips(2)
     a, b = worker("admin"), worker("staff")
     held = claimed_id(a)
@@ -143,12 +145,12 @@ def test_opening_someone_elses_slip_warns_but_does_not_block(make_slips, worker)
     page = b.get(f"/review/{held}")
     assert page.status_code == 200
     assert "กำลังตรวจใบนี้อยู่" in page.text
-    assert "/review/next" in page.text, "ต้องมีทางขอใบอื่นที่ยังว่าง"
+    assert "/review/next" in page.text, "there must be a route to request another free slip"
     assert claim_row(held)["claimed_by"] is not None
 
 
 def test_approve_hands_out_a_freshly_claimed_slip(make_slips, worker):
-    """อนุมัติแล้วต้องได้ใบใหม่ที่จองสด ๆ ไม่ใช่ id ที่ฝังไว้ตอนเปิดหน้า"""
+    """After approving, the next slip must be freshly claimed, not the id embedded when the page loaded"""
     ids = make_slips(3)
     a, b = worker("admin"), worker("staff")
     mine = claimed_id(a)
@@ -161,17 +163,18 @@ def test_approve_hands_out_a_freshly_claimed_slip(make_slips, worker):
     assert r.headers["location"] == "/review/next"
 
     nxt = claimed_id(a)
-    assert nxt not in (mine, theirs), "ต้องไม่ได้ใบที่ตรวจไปแล้ว และไม่ใช่ใบที่เพื่อนถืออยู่"
+    assert nxt not in (mine, theirs), "must be neither an already-reviewed slip nor one a colleague holds"
     assert claim_row(mine)["review_status"] == "approved"
-    assert claim_row(mine)["claimed_by"] is None, "ใบที่ออกจากคิวแล้วต้องไม่มีใครถือ"
+    assert claim_row(mine)["claimed_by"] is None, "a slip that has left the queue must be held by nobody"
 
 
 @pytest.mark.parametrize("n_workers", [6])
 def test_parallel_claims_never_hand_out_the_same_slip(make_slips, worker, n_workers):
-    """ยิงพร้อมกันจริง ๆ — นี่คือเคสที่ FOR UPDATE SKIP LOCKED มีไว้กัน
+    """Genuinely simultaneous requests — the case FOR UPDATE SKIP LOCKED exists to guard.
 
-    เงื่อนไข claimed_at กันใบที่จอง+commit ไปแล้ว แต่ไม่เห็น transaction ที่ยังค้างอยู่
-    ถ้าขาด SKIP LOCKED สองคนที่ยิงห่างกันเป็นมิลลิวินาทีจะได้ใบเดียวกัน
+    The claimed_at condition excludes slips already claimed and committed, but cannot see a
+    transaction still in flight. Without SKIP LOCKED, two requests milliseconds apart get the
+    same slip.
     """
     make_slips(n_workers)
     clients = [worker("admin" if i % 2 else "staff") for i in range(n_workers)]
@@ -187,12 +190,12 @@ def test_parallel_claims_never_hand_out_the_same_slip(make_slips, worker, n_work
         t.join()
 
     handed = [g for g in got if g]
-    assert len(handed) == len(set(handed)), f"มีใบถูกจ่ายซ้ำ: {got}"
-    assert len(handed) == n_workers, f"ควรจ่ายได้ครบทุกคน ได้ {got}"
+    assert len(handed) == len(set(handed)), f"a slip was served more than once: {got}"
+    assert len(handed) == n_workers, f"everybody should have been served; got {got}"
 
 
 def test_recheck_clears_stale_claims(make_slips, worker):
-    """ใบที่ถูกดึงกลับเข้าคิวต้องไม่พกการจองเก่ามาด้วย ไม่งั้นไม่มีใครได้ใบนั้นไปสิบนาที"""
+    """A slip pulled back into the queue must not carry its old claim, or nobody can have it for ten minutes"""
     from ocrslip.db import connect
     from ocrslip.recheck import send_back
 
@@ -200,7 +203,7 @@ def test_recheck_clears_stale_claims(make_slips, worker):
     a = worker("admin")
     assert claimed_id(a) == ids[0]
 
-    with connect() as conn:  # จำลองใบที่ถูกอนุมัติไปแล้วทั้งที่ยังมีการจองค้าง
+    with connect() as conn:  # model a slip that got approved while a claim was still outstanding
         conn.execute(f"UPDATE {TEST_SCHEMA}.slips SET review_status='approved',"
                      f" needs_review=false WHERE id=%s", (ids[0],))
         send_back(conn, ids[0])

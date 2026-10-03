@@ -1,8 +1,8 @@
-# ผลวัด accuracy: model × preprocessing
+# Accuracy benchmark: model x preprocessing
 
-ชุดทดสอบ: 10 ใบ จาก `example/` เทียบกับ `example/label.json` (normalize ก่อนเทียบทุก field)
+Test set: 10 slips from `example/`, scored against `example/label.json` (every field normalized before comparison)
 
-| อันดับ | model | variant | เฉลี่ย core | ถูกทั้งใบ | ชื่อ | ชื่อ≈ | เบอร์ | วันที่ | ทะเบียน | ทะเบียน≈ | ยี่ห้อ | ประเภท | ที่จอด | CER ชื่อ | $/1000 ใบ | p50 | error |
+| # | model | variant | mean core | whole slip | name | name≈ | phone | date | plate | plate≈ | brand | type | spot | name CER | $/1000 slips | p50 | errors |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 1 | `google/gemini-3-flash-preview` | v1_crop | **78%** | 0% | 20% | 90% | 100% | 90% | 60% | 100% | 100% | 100% | 90% | 0.15 | $1.55 | 2.7s | 0 |
 | 2 | `google/gemini-3.1-pro-preview` | v1_crop | **77%** | 10% | 20% | 70% | 100% | 80% | 60% | 100% | 100% | 100% | 90% | 0.16 | $7.05 | 4.7s | 0 |
@@ -38,18 +38,18 @@
 | 32 | `anthropic/claude-opus-5.5` | v1_crop | **55%** | 10% | 10% | 70% | 50% | 60% | 40% | 70% | 100% | 70% | 70% | 0.39 | $31.13 | 18.1s | 0 |
 | 33 | `anthropic/claude-opus-5.5` | v2_enhanced | **50%** | 0% | 0% | 50% | 50% | 50% | 30% | 70% | 100% | 70% | 60% | 0.44 | $30.22 | 20.9s | 0 |
 
-## preprocessing ช่วยไหม (เฉลี่ยทุก model)
+## Does preprocessing help? (averaged over all models)
 
-| variant | เฉลี่ย core | ถูกทั้งใบ |
+| variant | mean core | whole slip |
 |---|---|---|
 | v0_raw | 69% | 2% |
 | v1_crop | 71% | 2% |
 | v2_enhanced | 68% | 2% |
 
-## สรุปที่ควรใช้
+## What to use
 
-- **ตัวที่แม่นที่สุด**: `google/gemini-3-flash-preview` + `v1_crop` — เฉลี่ย 78%, $1.55/1000 ใบ, 2.7s ต่อใบ
-- **คุ้มที่สุด (acc ต่อราคา)**: `qwen/qwen3-vl-235b-a22b-instruct` + `v2_enhanced` — เฉลี่ย 67%, $0.61/1000 ใบ
-- **preprocessing ที่ดีที่สุด**: `v1_crop`
+- **Most accurate**: `google/gemini-3-flash-preview` + `v1_crop` — 78% mean, $1.55 per 1000 slips, 2.7s per slip
+- **Best value (accuracy per cost)**: `qwen/qwen3-vl-235b-a22b-instruct` + `v2_enhanced` — 67% mean, $0.61 per 1000 slips
+- **Best preprocessing**: `v1_crop`
 
-หมายเหตุ: คอลัมน์ `ชื่อ≈` / `ทะเบียน≈` คือกรณีที่อ่านผิดไม่เกิน ~1-2 ตัวอักษร ซึ่งยังค้นเจอได้ด้วย fuzzy search และคนตรวจแก้ได้ง่าย — เป็นตัวเลขที่สะท้อนการใช้งานจริงมากกว่า exact match
+Note: the `name≈` and `plate≈` columns count reads that are wrong by no more than ~1-2 characters, which fuzzy search still finds and a reviewer corrects easily. They reflect real-world usability better than exact match does.

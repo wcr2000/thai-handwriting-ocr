@@ -1,11 +1,13 @@
-"""ใบซ้ำ: อัปรูปเดิมซ้ำต้องไม่ได้ใบใหม่ และคิวต้องไม่จ่ายใบที่ตรวจไปแล้วให้ใครทำอีก
+"""Duplicates: re-uploading the same photo must not create a new slip, and the queue must not re-serve a reviewed slip.
 
-ที่มา: หน้าอัปโหลดไม่ล้างช่องไฟล์หลังอัปสำเร็จ คนที่คิดว่าเมื่อกี้ไม่ติดจึงกดอีกที
-ของจริงได้ใบเกินมา 650 ใบ คนตรวจเลยเจอใบที่เพื่อนตรวจไปแล้ววนกลับมาให้ทำซ้ำ
-เหมือนงานที่ทำไปไม่ได้บันทึก
+Origin: the upload page did not clear the file field after a successful upload, so anyone who
+thought it had not gone through pressed again. In production this produced 650 surplus slips,
+and reviewers kept being handed slips a colleague had already done — as though the work had not
+been saved.
 
-ต้องใช้ Postgres จริง — ของที่ทดสอบคือเงื่อนไขใน UPDATE/SELECT ของคิวกับ FK
-ON DELETE SET NULL ซึ่ง mock ไม่ได้ ดูวิธีรันที่ tests/conftest.py
+Needs a real Postgres: what is under test is the conditions inside the queue's UPDATE/SELECT and
+the FK ON DELETE SET NULL, neither of which can be mocked. See tests/conftest.py for how to run
+it.
 """
 
 import pytest
@@ -18,7 +20,7 @@ pytestmark = needs_db
 
 @pytest.fixture
 def photo():
-    """รูปถ่ายจำลอง 1 ใบ (ไบต์เดิมทุกครั้ง จึงได้ hash เดิม = จำลองการอัปไฟล์เดิมซ้ำ)"""
+    """A synthetic photo of one slip (identical bytes every time, hence an identical hash, modelling a repeat upload)"""
     from ocrslip.imageio import encode_jpeg, to_pil
 
     return encode_jpeg(to_pil(fake_photo(WOOD)), quality=90)
@@ -26,7 +28,7 @@ def photo():
 
 @pytest.fixture
 def fake_ocr(monkeypatch):
-    """แทน read_slip ไม่ให้เทสต์ยิง model จริง (เสียเงินและช้า) พร้อมนับจำนวนครั้งที่ถูกเรียก"""
+    """Stand in for read_slip so the tests never call a real model (costly and slow), counting the calls made"""
     from ocrslip.ocr import OcrResult
     from ocrslip.web import pipeline
 
@@ -61,10 +63,10 @@ def clear():
         conn.commit()
 
 
-# ---------- ด่านกันอัปซ้ำ (ก่อนยิง model) ----------
+# ---------- the duplicate-upload gate (before any model call) ----------
 
 def test_uploading_the_same_photo_twice_keeps_one_slip(pgenv, photo, fake_ocr):
-    """หัวใจของการแก้: รูปเดิมยิงซ้ำต้องไม่ได้ใบใหม่ และต้องไม่เสียค่า OCR รอบสอง"""
+    """The heart of the fix: the same photo resubmitted must yield no new slip and no second OCR charge"""
     from ocrslip.db import connect
     from ocrslip.web.pipeline import ingest
 
@@ -77,14 +79,14 @@ def test_uploading_the_same_photo_twice_keeps_one_slip(pgenv, photo, fake_ocr):
         second = ingest(conn, photo, uploaded_by="ข")
 
     assert second["ok"]
-    assert second["duplicate_of"], "รูปเดิมยิงซ้ำต้องถูกจับได้"
-    assert second["id"] == first["id"], "ต้องชี้กลับไปใบเดิม ไม่ใช่สร้างใบใหม่"
+    assert second["duplicate_of"], "a resubmitted photo must be detected"
+    assert second["id"] == first["id"], "it must point back at the existing slip, not create a new one"
     assert len(rows("SELECT id FROM {s}.slips")) == 1
-    assert len(fake_ocr) == 1, "ครั้งที่สองต้องไม่ยิง model เลย"
+    assert len(fake_ocr) == 1, "the second attempt must not call the model at all"
 
 
 def test_duplicate_upload_says_which_slip_it_matched(pgenv, photo, fake_ocr):
-    """คนที่อัปซ้ำต้องได้รู้ว่าใบเดิมอยู่สถานะไหน ไม่ใช่แค่บอกว่า 'ซ้ำ'"""
+    """Whoever re-uploaded has to be told what state the existing slip is in, not merely that it is a duplicate"""
     from ocrslip.db import connect
     from ocrslip.web.pipeline import ingest
 
@@ -94,10 +96,10 @@ def test_duplicate_upload_says_which_slip_it_matched(pgenv, photo, fake_ocr):
         twin = ingest(conn, photo, uploaded_by="ข")["duplicate_of"]
 
     assert twin["review_status"] == "pending"
-    assert twin["uploaded_by"] == "ก", "ต้องบอกชื่อคนที่อัปใบเดิม ไม่ใช่คนที่กำลังอัปซ้ำ"
+    assert twin["uploaded_by"] == "ก", "it must name whoever uploaded the original, not whoever is re-uploading"
 
 
-# ---------- ถอนใบซ้ำออกจากคิวตอนอนุมัติ ----------
+# ---------- pulling duplicates out of the queue at approval time ----------
 
 TWIN = {"name": "สมหมาย ทดสอบ", "tel": "0810000044", "noplate": "กก1234",
         "province": "กรุงเทพมหานคร", "brand": "รีโว่", "typecar": "เก๋ง",
@@ -106,7 +108,7 @@ TWIN = {"name": "สมหมาย ทดสอบ", "tel": "0810000044", "nopl
 
 @pytest.fixture
 def twins(pgenv):
-    """สร้างใบ pending ที่เป็นใบเดียวกัน N ใบ (ทะเบียน+เบอร์+วันที่ฝากตรงกัน) เก่าไปใหม่"""
+    """Create N pending slips that are the same slip (matching plate, phone and deposit date), oldest first"""
     from ocrslip.db import connect
     from ocrslip.normalize import norm_phone, norm_plate
 
@@ -144,20 +146,20 @@ def superseded_by(slip_id: str):
 
 
 def test_approving_one_slip_pulls_its_twin_out_of_the_queue(twins, worker):
-    """สิ่งที่ krit เจอ: ตรวจใบแรกเสร็จ ใบที่สองซึ่งเป็นใบเดียวกันต้องไม่ถูกจ่ายให้ใครอีก"""
+    """What reviewers hit in practice: once the first slip is reviewed, its twin must not be served to anybody"""
     first, second = twins(2)
     client = worker("staff")
 
     assert approve(client, first).status_code == 303
     assert superseded_by(second) == first
 
-    # คิวว่างแล้ว: /review/next ต้องไม่มีใบให้จอง
+    # The queue is now empty: /review/next must have nothing left to claim
     r = client.get("/review/next", follow_redirects=False)
-    assert r.headers["location"] == "/review", "คิวต้องไม่จ่ายใบซ้ำให้ตรวจอีก"
+    assert r.headers["location"] == "/review", "the queue must not serve a duplicate for review again"
 
 
 def test_superseded_slip_is_visible_in_its_own_pile(twins, worker):
-    """ใบซ้ำต้องไม่หายไปเงียบ ๆ — ถ้าตีว่าซ้ำผิด ต้องมีที่ให้เจอ"""
+    """A duplicate must not vanish silently — when something is wrongly flagged, there has to be somewhere to find it"""
     first, second = twins(2)
     client = worker("staff")
     approve(client, first)
@@ -172,7 +174,7 @@ def test_superseded_slip_is_visible_in_its_own_pile(twins, worker):
 
 
 def test_a_whole_pile_of_twins_collapses_in_one_approval(twins, worker):
-    """ของจริงมีถึง 9 ใบต่อกลุ่ม — อนุมัติครั้งเดียวต้องเคลียร์ที่เหลือทั้งกอง"""
+    """Production saw up to 9 slips per group — one approval has to clear the entire rest of the pile"""
     ids = twins(5)
     client = worker("staff")
     approve(client, ids[0])
@@ -181,11 +183,11 @@ def test_a_whole_pile_of_twins_collapses_in_one_approval(twins, worker):
 
 
 def test_same_car_deposited_on_another_day_stays_in_the_queue(twins, worker):
-    """รถคันเดิมเอามาฝากอีกรอบ = การฝากครั้งใหม่ ห้ามถอนออกจากคิว"""
+    """The same car parked again is a fresh deposit and must not be pulled from the queue"""
     from ocrslip.db import connect
 
     first, second = twins(2)
-    with connect() as conn:  # ใบที่สองเป็นการฝากของเดือนหน้า
+    with connect() as conn:  # the second slip is next month's deposit
         conn.execute(f"UPDATE {TEST_SCHEMA}.slips SET deposit_date='2026-10-28' WHERE id=%s",
                      (second,))
         conn.commit()
@@ -196,15 +198,16 @@ def test_same_car_deposited_on_another_day_stays_in_the_queue(twins, worker):
 
 
 def test_second_round_on_the_same_day_stays_in_the_queue(twins, worker):
-    """เช้าฝาก บ่ายรับ เย็นฝากอีก — ใบรอบเย็นห้ามถูกถอนออกจากคิวตอนอนุมัติใบรอบเช้า
+    """Parked in the morning, collected at midday, parked again that evening — the evening slip must survive approving the morning one.
 
-    เคสนี้วันที่ฝากกันไม่ได้ (ตรงกันทั้งคู่) ตัวที่แยกออกคือที่จอด เพราะรอบใหม่ได้ช่องจอดใหม่
-    ถ้าปล่อยให้ตีว่าซ้ำ รถรอบเย็นจะจอดอยู่จริงแต่ไม่มีใบ active
+    Here the deposit date cannot help (both agree); what separates them is the parking spot, since
+    a new round gets a new bay. Allowed to be flagged as a duplicate, the evening car is genuinely
+    parked with no active slip.
     """
     from ocrslip.db import connect
 
     first, second = twins(2)
-    with connect() as conn:  # ใบที่สองคือรอบเย็น จอดคนละช่อง
+    with connect() as conn:  # the second slip is the evening round, in a different bay
         conn.execute(f"UPDATE {TEST_SCHEMA}.slips SET location='อาคาร 3 ชั้น 5 c2' WHERE id=%s",
                      (second,))
         conn.commit()
@@ -214,11 +217,11 @@ def test_second_round_on_the_same_day_stays_in_the_queue(twins, worker):
 
 
 def test_twin_of_a_car_already_returned_stays_in_the_queue(twins, worker):
-    """ใบที่คืนรถไปแล้วปิดรอบของตัวเองแล้ว ใบถัดมาคือรอบใหม่ ต่อให้จอดช่องเดิม"""
+    """A returned slip has closed its own round, so the next one is a new round, even in the same bay"""
     from ocrslip.db import connect
 
     first, second = twins(2)
-    with connect() as conn:  # รอบแรกรับรถกลับไปแล้ว
+    with connect() as conn:  # the first round's car has already been collected
         conn.execute(f"UPDATE {TEST_SCHEMA}.slips SET car_status='returned',"
                      f" returned_at=now() WHERE id=%s", (first,))
         conn.commit()
@@ -228,7 +231,7 @@ def test_twin_of_a_car_already_returned_stays_in_the_queue(twins, worker):
 
 
 def test_same_photo_still_collapses_even_after_the_car_went_home(pgenv, photo, fake_ocr):
-    """ไฟล์เดียวกันเป๊ะคือของซ้ำแน่นอน เงื่อนไขกันรอบใหม่ต้องไม่ไปกันสาขา hash รูป"""
+    """A byte-identical file is unambiguously a duplicate; the new-round conditions must not interfere with the image-hash branch"""
     from ocrslip.db import connect
     from ocrslip.web.pipeline import ingest
 
@@ -237,7 +240,7 @@ def test_same_photo_still_collapses_even_after_the_car_went_home(pgenv, photo, f
         first = ingest(conn, photo, uploaded_by="ก")["id"]
         conn.execute(f"UPDATE {TEST_SCHEMA}.slips SET car_status='returned' WHERE id=%s",
                      (first,))
-        # ใบที่สองถือรูปเดิม (จำลองของที่ค้างอยู่ก่อนปิดต้นเหตุที่ ingest)
+        # The second slip holds the same image (modelling what was in flight before the gate was added to ingest)
         second = conn.execute(
             f"""INSERT INTO {TEST_SCHEMA}.slips (plate_raw, review_status, needs_review)
                 VALUES ('กก1234', 'pending', true) RETURNING id::text""").fetchone()["id"]
@@ -253,7 +256,7 @@ def test_same_photo_still_collapses_even_after_the_car_went_home(pgenv, photo, f
 
 
 def test_rejected_twin_is_left_alone(twins, worker):
-    """ใบที่คนตีกลับไปแล้วเป็นงานที่คนทำแล้ว ห้ามสคริปต์ไปทับด้วยการเดา"""
+    """A slip somebody rejected is work a human did; no script may bury it with an inference"""
     first, second = twins(2)
     client = worker("staff")
     client.post(f"/review/{second}/reject", data={"reason": "รูปเบลอ", "reviewed_by": "krit"},
@@ -265,7 +268,7 @@ def test_rejected_twin_is_left_alone(twins, worker):
 
 
 def test_deleting_the_real_slip_puts_its_twin_back_in_the_queue(twins, worker):
-    """ถ้าใบตัวจริงถูกลบ ใบซ้ำต้องกลับเข้าคิว ไม่ใช่หายไปทั้งคู่ (FK ON DELETE SET NULL)"""
+    """If the canonical slip is deleted, its duplicate must return to the queue rather than both vanishing (FK ON DELETE SET NULL)"""
     from ocrslip.db import connect, delete_slip
 
     first, second = twins(2)
@@ -278,16 +281,17 @@ def test_deleting_the_real_slip_puts_its_twin_back_in_the_queue(twins, worker):
     assert superseded_by(second) is None
 
 
-# ---------- สคริปต์เก็บกวาดของเก่า ----------
+# ---------- the cleanup script for pre-existing data ----------
 
 def test_dedup_apply_clears_twins_of_already_approved_slips(twins, worker):
-    """ของที่ค้างอยู่ก่อนแก้: ใบซ้ำที่มีพี่น้องอนุมัติไปแล้ว ต้องถูกถอนออกจากคิวได้ทีเดียว"""
+    """What was already in flight before the fix: duplicates with an approved sibling must be clearable in one pass"""
     from ocrslip.db import connect
     from ocrslip.dedup import group_duplicates, keeper_of, load_slips
     from ocrslip.dedup import mark_superseded
 
     first, second, third = twins(3)
-    # จำลองสภาพก่อนแก้: ใบแรกอนุมัติแล้ว แต่ที่เหลือยังค้างคิว (ไม่ผ่าน hook ตอนอนุมัติ)
+    # Model the pre-fix state: the first slip approved, the rest still queued (never went through
+    # the approval hook)
     with connect() as conn:
         conn.execute(f"UPDATE {TEST_SCHEMA}.slips SET review_status='approved',"
                      f" needs_review=false, reviewed_by='krit', reviewed_at=now()"

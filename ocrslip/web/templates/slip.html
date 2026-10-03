@@ -34,20 +34,24 @@
         {% if slip.released_to %}<tr><th>ผู้มารับรถ</th><td>{{ slip.released_to }}
             <span class="badge warn">ไม่ใช่เจ้าของ</span></td></tr>{% endif %}
       </table>
-      {# ใบที่ข้อมูลผิดมาตั้งแต่ขาเข้า (พิมพ์เบอร์สลับตัว) ต้องมีทางแก้ที่กดถึงได้จากหน้านี้
-         /review/{id}?edit=1 ทำงานได้อยู่ก่อนแล้ว แต่ไม่มีลิงก์ไหนในระบบชี้ไปเลย —
-         ใบจากฟอร์มขาเข้าเข้าสถานะ approved ตั้งแต่แรก จึงไม่เคยโผล่ลิงก์ "ตรวจ" ที่ไหน
-         เจ้าหน้าที่หน้างานไม่มีทางเดาได้ว่าต้องเติม ?edit=1 ต่อท้าย UUID เอง = เท่ากับไม่มี #}
+      {# A slip whose data was wrong from the moment it was entered (transposed digits in a phone
+         number) needs a fix reachable from this page.
+         /review/{id}?edit=1 already worked, but nothing in the system linked to it — slips from
+         the entry form enter the approved state straight away, so a "review" link never appeared
+         for them anywhere. Nobody on the ground could possibly guess they had to append ?edit=1
+         to a UUID themselves, which amounts to the feature not existing. #}
       {% if user %}
       <p style="margin:.9rem 0 .35rem">
         <a class="btn ghost edit-slip" href="/review/{{ slip.id }}?edit=1">✎ แก้ไขข้อมูลใบนี้</a></p>
       <p class="muted" style="margin:0">ชื่อ / เบอร์ / ทะเบียน / ที่จอด — ระบบบันทึกว่าใครแก้อะไร</p>
       {% endif %}
     </div>
-    {# ทะเบียนที่เอามาฝากหลายรอบ ต้องเห็นทุกรอบก่อนกดปล่อยรถ ไม่ใช่ย้อนกลับไปเดาที่หน้าค้นหา #}
+    {# For a plate parked over several rounds, every round has to be visible before releasing the
+         car — not something to go back and guess at on the search page. #}
     {% if history %}
     <div class="card">
-      {# history|length คือจำนวน "ใบ" ซึ่งไม่เท่ากับจำนวนรอบเมื่อมีใบซ้ำอยู่ด้วย #}
+      {# history|length counts *slips*, which is not the number of rounds once duplicates are in
+             the mix #}
       <h3>ทะเบียนนี้ฝากมาแล้ว {{ history|map(attribute='round')|max }} รอบ
           ({{ history|length }} ใบ)</h3>
       <p class="muted">ใบที่เปิดอยู่คือแถวที่ไฮไลต์ไว้ — ก่อนกดปล่อยรถ ดูให้แน่ว่าเป็นรอบที่รถยังจอดอยู่
@@ -77,7 +81,8 @@
       <p class="muted">ขอดูบัตรประชาชนเทียบชื่อในใบก่อนกดยืนยัน — ดูด้วยตา ไม่ต้องถ่ายเก็บ</p>
       <label for="returned_by">เจ้าหน้าที่ผู้ส่งมอบ</label>
       <input type="text" id="returned_by" name="returned_by" required>
-      {# เคสให้ญาติมารับ เป็นเคสที่ต้องมีร่องรอยมากที่สุด แต่เดิมจดได้แค่ในหมายเหตุรวม #}
+      {# A relative collecting on the owner's behalf is the case most in need of a record, yet it
+         used to be capturable only in the free-text note. #}
       <label for="released_to">ผู้มารับรถ <span class="muted">(กรอกเฉพาะเมื่อไม่ใช่เจ้าของ)</span></label>
       <input type="text" id="released_to" name="released_to" placeholder="ชื่อ-นามสกุล ตามบัตรประชาชน">
       <label for="note">หมายเหตุ</label>
@@ -86,9 +91,9 @@
     </form>
     {% endif %}
     {% if user and user.is_admin %}
-    {# ใช้ <details> ไม่ใช่ confirm() ของ JavaScript — ปุ่มที่ย้อนกลับไม่ได้ต้องกันพลาด
-       ได้แม้ JS ไม่ทำงาน และการต้องกดเปิดกล่องก่อนคือด่านที่เห็นด้วยตา ไม่ใช่ popup
-       ที่คนกด OK ทิ้งโดยไม่อ่าน #}
+    {# A <details> rather than JavaScript's confirm(): an irreversible button has to be guarded
+       even with JS disabled, and having to open the box first is a barrier you can see — unlike
+       a popup people dismiss with OK without reading. #}
     <details class="card danger-zone">
       <summary>ลบใบนี้ถาวร</summary>
       <p class="muted">สำหรับใบทดสอบหรือใบที่กรอกมั่วเท่านั้น — รูปหลักฐานกับประวัติ

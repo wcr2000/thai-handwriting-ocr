@@ -1,7 +1,7 @@
-"""สิทธิ์ของแต่ละ role — พังแล้วคนนอกเห็นข้อมูลส่วนตัวของเจ้าของรถทั้งก้อน
+"""Per-role permissions — break these and outsiders see every car owner's personal data.
 
-จุดที่ต้องกันให้แน่นที่สุดคือ role "approver" (อาสาสมัครที่มาช่วยทำ label):
-เขาต้องทำได้แค่ "อัปโหลด" กับ "อนุมัติใบในคิว" เท่านั้น
+The role needing the tightest guard is "approver" (the volunteers who came to help label):
+they must be able to do exactly two things, upload and approve slips in the queue.
 """
 
 import pytest
@@ -26,7 +26,7 @@ def login(monkeypatch):
         c = TestClient(app)
         r = c.post("/login", data={"username": username, "password": TEST_PW, "next": "/"},
                    follow_redirects=False)
-        assert r.status_code == 303, f"ล็อกอิน {username} ไม่ผ่าน"
+        assert r.status_code == 303, f"login as {username} failed"
         return c
 
     return _login
@@ -39,7 +39,7 @@ def test_approve_account_gets_approver_role(login):
 
 
 def test_unknown_role_in_token_is_not_treated_as_staff():
-    """token ที่ไม่มี role (ของเก่า) ต้องตกไปที่สิทธิ์น้อยที่สุด ไม่ใช่สิทธิ์เจ้าหน้าที่"""
+    """A token carrying no role (an old one) must fall back to the least privilege, not to staff"""
     import json
     payload = json.dumps({"u": "x", "exp": 2**31}).encode()
     tok = auth._sign(payload, "k")
@@ -60,11 +60,11 @@ def test_approver_can_open_its_own_pages(login, path):
 
 
 def test_approver_can_reject_but_not_return(login):
-    """ตีกลับคือส่วนหนึ่งของการตรวจ (คนตรวจเห็นรูปเบลอเอง) แต่ 'รับรถกลับ' ยังปิดไว้
+    """Rejecting is part of reviewing (the reviewer sees the blurred photo themselves), but releasing a car stays closed.
 
-    ตอนนี้ staff ปล่อยรถได้แล้ว (คนที่ยืนจุด checkout คือ staff ไม่ใช่ admin)
-    แต่ approver ต้องยังทำไม่ได้ — เขาไม่เคยเห็นรถและไม่เคยเจอเจ้าของ
-    ที่กันไว้คือ allowlist ของ approver ไม่ใช่ ADMIN_ONLY_SUFFIX ซึ่งว่างไปแล้ว
+    Staff can now release cars (the person at checkout is staff, not an admin), but an approver
+    still must not — they never see the car and never meet the owner.
+    What enforces this is the approver allowlist, not ADMIN_ONLY_SUFFIX, which is now empty.
     """
     c = login("approve")
     slip_id = "00000000-0000-0000-0000-000000000000"
@@ -73,7 +73,7 @@ def test_approver_can_reject_but_not_return(login):
 
 
 def test_approver_queue_falls_back_to_pending_pile(login):
-    """ขอดูกอง 'ทั้งหมด' ตรง ๆ ต้องถูกพากลับมาที่กอง 'ต้องตรวจ' ไม่ใช่เห็นคลังใบทั้งระบบ"""
+    """Requesting the "all" pile directly must redirect back to "needs review", not expose the whole archive"""
     html = login("approve").get("/review?filter=all").text
     assert "filter=all" not in html
     assert "ต้องตรวจ" in html
@@ -93,16 +93,17 @@ def test_staff_still_sees_search_but_not_admin_pages(login):
 
 
 def test_approve_without_reviewer_name_is_blocked(login):
-    """บัญชีใช้ร่วมกันหลายคน ถ้าไม่บังคับเลือกชื่อจริงจะไม่รู้ว่าใครอนุมัติใบไหน
+    """The account is shared by several people; without requiring a real name, there is no way to know who approved what.
 
-    เทสนี้ยืนยันว่าถูก "บล็อก" จึงไม่เขียนอะไรลง DB — ใบยังค้างอยู่ในคิวเหมือนเดิม
+    This test confirms the request is *blocked*, so nothing is written to the DB — the slip stays
+    in the queue as it was.
     """
     from ocrslip.db import connect, get_slip, list_slips
 
     with connect() as conn:
         pending = list_slips(conn, review_status="pending", limit=1)
     if not pending:
-        pytest.skip("ยังไม่มีใบค้างคิวใน DB")
+        pytest.skip("no pending slips in the DB yet")
     slip_id = str(pending[0]["id"])
 
     r = login("approve").post(
@@ -110,20 +111,20 @@ def test_approve_without_reviewer_name_is_blocked(login):
         data={"name": "ทดสอบ ระบบ", "tel": "0812345678", "noplate": "กก1234", "reviewed_by": ""},
         follow_redirects=False,
     )
-    assert r.status_code == 200, "ต้องกลับมาหน้าเดิมพร้อม error ไม่ใช่ redirect ว่าอนุมัติแล้ว"
+    assert r.status_code == 200, "must re-render the page with an error, not redirect as though approved"
     assert "ต้องระบุชื่อผู้ตรวจ" in r.text
     with connect() as conn:
         assert get_slip(conn, slip_id)["review_status"] == "pending"
 
 
 def test_reviewer_sentinel_never_becomes_a_person_name(login):
-    """เลือก "+ ชื่อใหม่" แล้วไม่พิมพ์อะไร ต้องไม่ถูกบันทึกเป็นคนชื่อ __new__"""
+    """Choosing "+ new name" and typing nothing must not be recorded as a person called __new__"""
     from ocrslip.db import connect, get_slip, list_slips
 
     with connect() as conn:
         pending = list_slips(conn, review_status="pending", limit=1)
     if not pending:
-        pytest.skip("ยังไม่มีใบค้างคิวใน DB")
+        pytest.skip("no pending slips in the DB yet")
     slip_id = str(pending[0]["id"])
 
     r = login("approve").post(

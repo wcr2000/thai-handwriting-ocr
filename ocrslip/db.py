@@ -1,6 +1,6 @@
-"""เชื่อมต่อ Postgres + คำสั่งที่เว็บใช้จริง
+"""Postgres connection plus the queries the web app actually runs.
 
-รันสร้าง schema:  python -m ocrslip.db init
+Create the schema with:  python -m ocrslip.db init
 """
 
 from __future__ import annotations
@@ -26,28 +26,30 @@ SCHEMA_SQL = ROOT / "db" / "schema.sql"
 def connect() -> psycopg.Connection:
     if not DATABASE_URL:
         raise RuntimeError("ยังไม่ได้ตั้ง DATABASE_URL ใน .env")
-    # -c TimeZone ต้องอยู่ตรงนี้ ไม่ใช่ไปแปลงตอน render — now() ที่เขียนลง returned_at/
-    # reviewed_at และ interval ของการจองใบ ล้วนอ้างเขตเวลาของ session นี้ ถ้าแปลงทีหลัง
-    # เฉพาะที่หน้าจอ จะมีที่ตกหล่นเสมอ (เคสที่เจอ: ใบปิดเวลา 16:15 แต่หน้าใบโชว์ 09:15)
+    # -c TimeZone has to be set here, not converted at render time. The now() written
+    # into returned_at and reviewed_at, and the interval behind a queue claim, all resolve
+    # against this session's timezone. Convert only at display time and something always
+    # slips through — the case that caught us: a slip closed at 16:15 shown as 09:15.
     return psycopg.connect(
         DATABASE_URL, row_factory=dict_row, options=f"-c TimeZone={APP_TIMEZONE}")
 
 
 def split_sql(sql: str) -> list[str]:
-    """ตัด schema.sql เป็นคำสั่งย่อย โดยไม่ตัดกลาง string / comment / บล็อก $$...$$
+    """Split schema.sql into statements without cutting through a string, comment or $$...$$ block.
 
-    ต้องรู้จัก dollar-quote เพราะ body ของ touch_updated_at() มี ";" อยู่ข้างใน
-    ถ้า split ด้วย ";" เฉย ๆ function จะขาดกลางแล้ว syntax error
+    It has to understand dollar-quoting, because the body of touch_updated_at() contains
+    a ";" — splitting naively on ";" would cut the function in half and produce a syntax
+    error.
     """
     stmts, buf = [], []
     i, n = 0, len(sql)
     while i < n:
         ch = sql[i]
-        if ch == "-" and sql.startswith("--", i):           # comment ท้ายบรรทัด
+        if ch == "-" and sql.startswith("--", i):           # end-of-line comment
             j = sql.find("\n", i)
             i = n if j == -1 else j + 1
             continue
-        if ch == "'":                                        # string ธรรมดา
+        if ch == "'":                                        # ordinary string
             j = i + 1
             while j < n:
                 if sql[j] == "'":
@@ -59,7 +61,7 @@ def split_sql(sql: str) -> list[str]:
             buf.append(sql[i : j + 1])
             i = j + 1
             continue
-        if ch == "$":                                        # dollar-quote: $$ หรือ $tag$
+        if ch == "$":                                        # dollar-quote: $$ or $tag$
             end_tag = sql.find("$", i + 1)
             inner = sql[i + 1 : end_tag] if end_tag != -1 else None
             if inner is not None and (inner == "" or inner.replace("_", "").isalnum()):
@@ -83,12 +85,13 @@ def split_sql(sql: str) -> list[str]:
 
 
 def init_schema(*, verbose: bool = False) -> None:
-    """สร้าง/อัปเดต schema ทีละคำสั่ง commit ทีละคำสั่ง
+    """Create or update the schema one statement at a time, committing each one.
 
-    เดิมยิงไฟล์ทั้งก้อนใน transaction เดียว ซึ่งพังทั้งหมดถ้า connection หลุดกลางทาง
-    (Postgres ฝั่ง Render ตัดสายเป็นระยะ) แล้ว rollback ทุกอย่างที่ทำไปแล้วด้วย
-    ทุกคำสั่งในไฟล์เขียนแบบรันซ้ำได้ (IF NOT EXISTS / CREATE OR REPLACE) จึงต่อสายใหม่
-    แล้วรันคำสั่งเดิมซ้ำได้อย่างปลอดภัย
+    This used to run the whole file in a single transaction, which failed completely if
+    the connection dropped partway through (Postgres on Render cuts the line periodically)
+    and rolled back everything already done. Every statement in the file is written to be
+    re-runnable (IF NOT EXISTS / CREATE OR REPLACE), so reconnecting and retrying the same
+    statement is safe.
     """
     sql = SCHEMA_SQL.read_text(encoding="utf-8")
     if DB_SCHEMA != "ocr_dhammakaya":
@@ -105,7 +108,7 @@ def init_schema(*, verbose: bool = False) -> None:
                 except psycopg.OperationalError as exc:
                     if attempt == 3:
                         raise
-                    print(f"[{idx}/{len(stmts)}] connection หลุด ({exc}) — ต่อใหม่แล้วลองอีกครั้ง")
+                    print(f"[{idx}/{len(stmts)}] connection dropped ({exc}) — reconnecting and retrying")
                     try:
                         conn.close()
                     except Exception:
@@ -117,10 +120,10 @@ def init_schema(*, verbose: bool = False) -> None:
         conn.close()
 
 
-# ---------- เขียนข้อมูล ----------
+# ---------- writes ----------
 
 def build_row(fields: dict[str, Any]) -> dict[str, Any]:
-    """แปลงค่าที่คนยืนยันแล้ว เป็นคอลัมน์ในตาราง พร้อมคำนวณคอลัมน์ *_norm สำหรับค้นหา"""
+    """Turn human-confirmed values into table columns, computing the *_norm columns used for search"""
     plate = fields.get("noplate")
     province = fields.get("province")
     date = parse_date(fields.get("date"))
@@ -173,7 +176,7 @@ def insert_slip(
         created_by=created_by,
         uploaded_by=uploaded_by,
         entry_source=entry_source,
-        # ถ้าไม่ได้ระบุคนถ่าย ให้ถือว่าเป็นคนเดียวกับคนอัปโหลด
+        # With no photographer given, assume it was the same person who uploaded
         photographer=photographer or uploaded_by,
     )
     cols = ", ".join(row)
@@ -187,9 +190,10 @@ def insert_slip(
 def add_image(
     conn: psycopg.Connection, slip_id: str, kind: str, jpeg: bytes, size: tuple[int, int]
 ) -> None:
-    """เก็บรูปหลักฐานของใบนี้ — กันซ้ำเฉพาะภายในใบเดียวกันเท่านั้น
+    """Store this slip's evidence image — deduplicated within a single slip only.
 
-    ห้ามกันซ้ำข้ามใบ ไม่งั้นการอัปโหลดรูปเดิมซ้ำจะได้เรคอร์ดที่ไม่มีรูปหลักฐานติดอยู่
+    It must not deduplicate across slips: otherwise re-uploading the same photo produces
+    a record with no evidence image attached to it.
     """
     conn.execute(
         f"""INSERT INTO {DB_SCHEMA}.slip_images (slip_id, kind, sha256, width, height, bytes)
@@ -202,9 +206,10 @@ def add_image(
 def replace_image(
     conn: psycopg.Connection, slip_id: str, kind: str, jpeg: bytes, size: tuple[int, int]
 ) -> None:
-    """เปลี่ยนรูปของใบนี้เป็นไฟล์ใหม่ (ใช้ตอน reprocess ภาพที่ crop ผิด)
+    """Replace this slip's image with a new file (used when reprocessing a bad crop).
 
-    ลบของเดิมก่อนเพื่อไม่ให้เหลือรูปเก่าค้าง เพราะ get_image หยิบรูปที่เก่าที่สุดของ kind นั้น
+    The old one is deleted first so no stale image is left behind, because get_image picks
+    the oldest image of that kind.
     """
     conn.execute(
         f"DELETE FROM {DB_SCHEMA}.slip_images WHERE slip_id = %s AND kind = %s", (slip_id, kind)
@@ -213,10 +218,12 @@ def replace_image(
 
 
 def slip_with_image(conn: psycopg.Connection, jpeg: bytes) -> dict[str, Any] | None:
-    """ใบที่ถือรูปนี้ (byte ตรงกันเป๊ะ) อยู่แล้ว — None = ยังไม่เคยเห็นรูปนี้
+    """The slip already holding this image (byte-identical). None = this image is new.
 
-    คืน "ใบ" ไม่ใช่ True/False เพราะคนที่อัปซ้ำต้องได้รู้ว่าใบเดิมคือใบไหนและอยู่สถานะไหน
-    เอาใบเก่าสุดเสมอ ถ้าเคยมีซ้ำอยู่แล้วก็ให้ทุกคนชี้ไปที่ใบเดียวกัน ไม่ใช่ไล่ชี้ต่อกันเป็นลูกโซ่
+    Returns the *slip* rather than True/False, because whoever re-uploaded needs to be
+    told which slip it already is and what state that slip is in. Always the oldest one,
+    so that where duplicates already exist everyone points at the same slip rather than
+    forming a chain of pointers.
     """
     cur = conn.execute(
         f"""SELECT s.id::text AS id, s.name, s.tel, s.plate_raw, s.review_status,
@@ -238,11 +245,12 @@ def update_slip(
     review_reason: list[str] | None = None,
     require_status: str | None = None,
 ) -> int | None:
-    """บันทึกค่าที่คนแก้ + เขียน audit log เฉพาะ field ที่เปลี่ยนจริง คืนจำนวน field ที่แก้
+    """Save human edits and write an audit log for the fields that actually changed. Returns how many changed.
 
-    require_status = สถานะที่ใบต้องเป็นอยู่ ณ ตอนเขียน (optimistic lock)
-    คืน None ถ้าสถานะไม่ตรง แปลว่ามีคนอื่นตรวจใบนี้ไปก่อนแล้วระหว่างที่หน้านี้เปิดค้างอยู่
-    ต้องไม่เขียนอะไรเลยในกรณีนั้น ไม่งั้นงานของคนแรกถูกทับเงียบ ๆ พร้อม audit log ซ้ำอีกชุด
+    require_status = the status the slip must be in at write time (an optimistic lock).
+    Returns None when the status does not match, which means somebody else reviewed this
+    slip while this page sat open. Nothing at all must be written in that case, or the
+    first person's work is silently overwritten along with a duplicate set of audit rows.
     """
     before = get_slip(conn, slip_id)
     row = build_row(fields)
@@ -252,7 +260,7 @@ def update_slip(
         row["review_reason"] = review_reason or []
         row["reviewed_by"] = edited_by
         row["reviewed_at"] = "now()"
-        # ใบที่ออกจากกอง pending แล้วไม่ต้องมีใครถืออีก ปล่อยคืนพร้อมกันในคำสั่งเดียว
+        # A slip leaving the pending pile need not be held by anyone; release it in the same statement
         row["claimed_by"] = row["claimed_name"] = row["claimed_at"] = None
 
     sets = ", ".join(f"{c} = %({c})s" for c in row if c != "reviewed_at")
@@ -290,12 +298,14 @@ def mark_returned(
     note: str | None,
     released_to: str | None = None,
 ) -> bool:
-    """ปิดใบว่ารับรถกลับแล้ว คืน False ถ้าใบนี้ถูกปิดไปก่อนแล้ว (ไม่เขียนทับของคนที่กดก่อน)
+    """Close the slip as car-returned. Returns False if it was already closed (never overwrite whoever got there first).
 
-    เงื่อนไข car_status = 'stored' ต้องอยู่ "ใน" UPDATE ไม่ใช่เช็คก่อนแล้วค่อยเขียน —
-    ที่จุด checkout มีเจ้าหน้าที่หลายคนหันจอคนละเครื่อง การกดใบเดียวกันพร้อมกันเกิดขึ้นจริง
-    ถ้าปล่อยให้ทับได้ ชื่อคนส่งมอบกับเวลาจะกลายเป็นของคนที่กดทีหลัง ซึ่งคือการลบร่องรอย
-    ของคนที่ปล่อยรถไปจริง (ปัญหาเดียวกับที่คอมมิต 66fdce4 แก้ไว้ที่ขั้นอนุมัติ)
+    The car_status = 'stored' condition has to live *inside* the UPDATE rather than being
+    checked before writing: at the checkout point several staff work from separate screens,
+    and pressing the same slip simultaneously genuinely happens. Allowing the overwrite
+    would make the handover name and time belong to whoever pressed last, erasing the
+    record of the person who actually released the car. (The same problem that was fixed
+    at the approval step for concurrent reviewers.)
     """
     cur = conn.execute(
         f"""UPDATE {DB_SCHEMA}.slips
@@ -308,35 +318,44 @@ def mark_returned(
 
 
 def norm_loc(alias: str) -> str:
-    """นิพจน์ SQL เทียบที่จอดแบบไม่ถือสาช่องว่าง/ตัวพิมพ์ ("อาคาร 1  ชั้น 2" = "อาคาร 1 ชั้น 2")
+    """SQL expression comparing parking spots ignoring whitespace and case ("อาคาร 1  ชั้น 2" = "อาคาร 1 ชั้น 2").
 
-    OCR อ่านใบกระดาษใบเดียวกันสองรูปได้ช่องว่างไม่เท่ากันเป็นเรื่องปกติ ถ้าเทียบตรง ๆ
-    ใบซ้ำจริงจะหลุดการจับเพราะเว้นวรรคต่างกันอย่างเดียว
+    OCR routinely returns different spacing from two photos of the same paper slip.
+    Compared literally, a genuine duplicate escapes detection over nothing but a space.
     """
     return f"lower(btrim(regexp_replace(coalesce({alias}.location, ''), '\\s+', ' ', 'g')))"
 
 
-# ใบซ้ำสองแบบที่ต้องแยกกัน:
-#   * รูปต้นฉบับ hash ตรงกัน = ไฟล์เดียวกันถูกยิงเข้ามาสองรอบ ชัดเจน 100% ถอนออกจากคิวได้เลย
-#   * ทะเบียน+เบอร์+วันที่+ที่จอด ตรงกัน = ใบกระดาษใบเดียวกันถูกถ่ายสองรูป (คนละมุม hash จึงต่าง)
+# Two kinds of duplicate, which must be kept apart:
+#   * matching original-image hash = the same file was submitted twice. 100% certain, so it
+#     can be pulled straight out of the queue.
+#   * matching plate + phone + date + parking spot = one paper slip photographed twice
+#     (from different angles, hence different hashes).
 #
-# แบบหลังเดาจากค่าในใบ จึงต้องกัน "การฝากรอบใหม่" ให้หลุดออกไปสองชั้น:
-#   1. วันที่ฝากต้องตรงกัน — กันรถคันเดิมที่เอามาฝากใหม่เดือนหน้า
-#   2. ที่จอดต้องตรงกัน — กันรอบใหม่ "ในวันเดียวกัน" (เช้าฝาก บ่ายรับ เย็นฝากอีก)
-#      ซึ่งข้อ 1 กันไม่ได้เลย เพราะทะเบียน/เบอร์/วันที่ตรงกันหมดทั้งที่เป็นคนละรอบ
-#      รอบใหม่ได้ช่องจอดใหม่เสมอ ส่วนใบกระดาษใบเดียวกันสองรูปย่อมเขียนที่จอดเดียวกัน
-#   3. ต้องยัง stored ทั้งคู่ — ใบที่คืนรถไปแล้วปิดรอบของตัวเองไปแล้ว ใบถัดมาคือรอบใหม่
-#      (ชั้นนี้ช่วยเฉพาะตอนงานเอกสารตามหลังของจริง ไม่ใช่ด่านหลัก)
+# The second kind is inferred from the slip's own values, so it needs two further layers to
+# keep a genuine *new parking round* from being swept up:
+#   1. The deposit date must match — keeps out the same car parked again next month.
+#   2. The parking spot must match — keeps out a new round *on the same day* (parked in the
+#      morning, collected at midday, parked again that evening), which layer 1 cannot catch
+#      at all, since plate, phone and date all agree even though these are separate rounds.
+#      A new round always gets a new bay, while two photos of one paper slip necessarily
+#      carry the same spot.
+#   3. Both must still be stored — a returned slip has closed its own round, so the next one
+#      is a new round. (This layer only helps when the paperwork trails the real world; it
+#      is not the main gate.)
 #
-# พลาดทางไหนก็ได้ไม่เท่ากัน: ถ้าเดาว่า "ไม่ซ้ำ" ผิด คนตรวจเสียเวลาทำใบซ้ำใบเดียว
-# ถ้าเดาว่า "ซ้ำ" ผิด รถจอดอยู่จริงแต่ไม่มีใบ active ไปโผล่เอาตอนเจ้าของมารับแล้วหาใบไม่เจอ
-# เงื่อนไขชุดนี้จึงเอียงไปทางปล่อยให้ค้างคิวไว้ก่อน
+# The two ways of being wrong do not cost the same. Guess "not a duplicate" wrongly and a
+# reviewer loses the time it takes to process one extra slip. Guess "duplicate" wrongly and
+# a car is genuinely parked with no active slip for it — which surfaces only when the owner
+# arrives to collect and the slip cannot be found. So this condition set is deliberately
+# biased toward leaving things in the queue.
 def same_slip() -> str:
-    """เงื่อนไข SQL ว่าใบ d กับใบ k เป็นใบเดียวกัน
+    """SQL condition for "slip d and slip k are the same slip".
 
-    ต้องเป็นฟังก์ชัน ไม่ใช่ค่าคงที่ระดับโมดูล — f-string ที่ประกอบตอน import จะฝังชื่อ
-    schema ณ ตอนนั้นไว้ตายตัว พอเทสต์ชี้ schema อื่น คำสั่งยังวิ่งไป ocr_dhammakaya
-    เหมือนเดิม (บั๊กเดียวกับที่ reject_slip เคยเจอ)
+    This has to be a function, not a module-level constant: an f-string assembled at import
+    time bakes in whatever the schema name was then, so when the tests point at a different
+    schema the statement still runs against ocr_dhammakaya. (The same bug reject_slip once
+    had.)
     """
     return f"""(
     EXISTS (SELECT 1 FROM {DB_SCHEMA}.slip_images a
@@ -354,17 +373,18 @@ def same_slip() -> str:
 def reject_slip(
     conn: psycopg.Connection, slip_id: str, reason: str, reviewer: str | None
 ) -> None:
-    """ตีกลับใบที่ใช้ไม่ได้ (รูปเบลอ / ไม่ใช่ใบฝากรถ) — ไม่แตะค่าข้อมูลในใบ
+    """Reject an unusable slip (blurred photo, not a parking slip at all) without touching its data.
 
-    SQL ต้องอยู่ที่นี่ ไม่ใช่ใน route: เดิมเขียนชื่อ schema ตายตัวไว้ใน main.py
-    คำสั่งจึงไปลง ocr_dhammakaya เสมอ ไม่ว่า DB_SCHEMA จะถูกตั้งเป็นอะไร —
-    ตอนรันเทสต์ที่ชี้ schema อื่น การตีกลับจึงเงียบหาย (0 แถว) แต่ยังตอบ 303 เหมือนสำเร็จ
+    The SQL belongs here rather than in the route: it used to carry a hardcoded schema name
+    in main.py, so the statement always landed on ocr_dhammakaya whatever DB_SCHEMA was set
+    to. Running the tests against another schema therefore made rejection vanish silently
+    (0 rows) while still answering 303 as though it had succeeded.
     """
     conn.execute(
         f"""UPDATE {DB_SCHEMA}.slips
                SET review_status = 'rejected', needs_review = false, review_reason = %s,
                    reviewed_by = %s, reviewed_at = now(),
-                   -- ใบที่ออกจากกอง pending แล้วไม่ต้องมีใครถืออีก
+                   -- A slip leaving the pending pile need not be held by anyone
                    claimed_by = NULL, claimed_name = NULL, claimed_at = NULL
              WHERE id = %s""",
         ([reason], reviewer, slip_id),
@@ -372,19 +392,21 @@ def reject_slip(
 
 
 def mark_superseded(conn: psycopg.Connection, keeper_id: str) -> int:
-    """ถอนใบที่ยังค้างคิวและเป็นใบเดียวกับ keeper ออกจากคิว คืนจำนวนใบที่ถอน
+    """Pull still-queued slips that are the same slip as keeper out of the queue. Returns how many.
 
-    เรียกทันทีหลังอนุมัติ — จุดนั้นคือจุดเดียวที่รู้แน่ว่า "ใบนี้มีคนตรวจแล้ว"
-    ที่เหลือที่เหมือนกันจึงเป็นของซ้ำที่ไม่ต้องให้ใครตรวจอีก
+    Called immediately after approval — that is the one moment where we know for certain
+    that "this slip has been reviewed", which makes the remaining identical ones duplicates
+    nobody needs to review again.
 
-    แตะเฉพาะใบที่ยัง pending เท่านั้น ใบที่ตรวจไปแล้ว (ทั้งอนุมัติและตีกลับ) ไม่แตะ —
-    งานที่คนทำไปแล้วต้องไม่ถูกกลบด้วยการเดาของสคริปต์ ถ้ามีใบซ้ำที่อนุมัติไปแล้ว
-    ให้ admin ตัดสินใจลบเองจากรายงาน (python -m ocrslip.dedup)
+    Only pending slips are touched; already-reviewed slips (approved or rejected alike) are
+    left alone, because work a human has done must not be buried by a script's inference.
+    Where duplicates have already been approved, an admin decides what to delete, from the
+    report (python -m ocrslip.dedup).
     """
     cur = conn.execute(
         f"""UPDATE {DB_SCHEMA}.slips d
                SET superseded_by = k.id, superseded_at = now(),
-                   -- ใบที่ออกจากคิวแล้วไม่ต้องมีใครถืออีก
+                   -- A slip leaving the queue need not be held by anyone
                    claimed_by = NULL, claimed_name = NULL, claimed_at = NULL
               FROM {DB_SCHEMA}.slips k
              WHERE k.id = %(keep)s AND d.id <> k.id
@@ -396,13 +418,15 @@ def mark_superseded(conn: psycopg.Connection, keeper_id: str) -> int:
 
 
 def delete_slip(conn: psycopg.Connection, slip_id: str) -> dict[str, Any] | None:
-    """ลบใบถาวร คืนข้อมูลใบที่ลบไป (None ถ้าไม่มีใบนี้แล้ว)
+    """Delete a slip permanently. Returns the deleted row (None if it was already gone).
 
-    รูปหลักฐานกับประวัติการแก้ไขหายตามไปด้วยผ่าน ON DELETE CASCADE ซึ่งคือสิ่งที่ต้องการ —
-    ของที่ลบคือใบขยะ (ใบทดสอบ กรอกมั่ว ยิงซ้ำ) การเก็บซากไว้มีแต่ทำให้ตัวเลขสรุปเพี้ยน
+    Its evidence images and edit history go with it via ON DELETE CASCADE, which is what we
+    want: what gets deleted is junk (test slips, nonsense entries, repeated submissions),
+    and keeping the remains around only skews the summary figures.
 
-    คืนแถวที่ลบด้วย DELETE ... RETURNING ไม่ใช่ SELECT ก่อนแล้วค่อย DELETE
-    เพื่อให้สิ่งที่บันทึกลง log เป็นแถวที่ถูกลบไปจริง ๆ ไม่ใช่แถวที่อ่านมาตอนนั้น
+    The deleted row is returned via DELETE ... RETURNING rather than SELECT-then-DELETE, so
+    that what reaches the log is the row that was genuinely removed, not the row as it read
+    a moment earlier.
     """
     cur = conn.execute(
         f"""DELETE FROM {DB_SCHEMA}.slips WHERE id = %s
@@ -411,19 +435,20 @@ def delete_slip(conn: psycopg.Connection, slip_id: str) -> dict[str, Any] | None
     )
     return cur.fetchone()
 
-# ---------- ค่าตั้งที่แก้จากหน้าเว็บได้ ----------
+# ---------- settings editable from the web UI ----------
 
 def get_settings(conn: psycopg.Connection) -> dict[str, str]:
-    """ค่าตั้งทั้งหมดที่เคยถูกบันทึกจากหน้าเว็บ (คีย์ที่ไม่เคยตั้งจะไม่อยู่ใน dict)"""
+    """Every setting ever saved from the web UI (keys never set are simply absent)"""
     cur = conn.execute(f"SELECT key, value FROM {DB_SCHEMA}.app_settings")
     return {r["key"]: r["value"] for r in cur.fetchall()}
 
 
 def set_setting(conn: psycopg.Connection, key: str, value: str, by: str | None = None) -> None:
-    """บันทึกค่าตั้ง — ค่าว่างแปลว่า "เลิกตั้งจากหน้าเว็บ" จึงลบแถวทิ้งให้ตกไปใช้ env
+    """Save a setting. An empty value means "stop setting this from the web UI", so the row is deleted and the env value takes over.
 
-    ต้องลบ ไม่ใช่เก็บสตริงว่างไว้ ไม่งั้นการล้างช่องในหน้าตั้งค่าจะกลายเป็นการ
-    ตั้งค่าเป็น "ว่าง" ทับค่าใน env แทนที่จะเป็นการถอยกลับไปใช้ค่าตั้งต้น
+    It has to delete rather than store an empty string, otherwise clearing the field on the
+    settings page becomes setting it *to* empty, overriding the env value instead of falling
+    back to the default.
     """
     if not value.strip():
         conn.execute(f"DELETE FROM {DB_SCHEMA}.app_settings WHERE key = %s", (key,))
@@ -436,16 +461,17 @@ def set_setting(conn: psycopg.Connection, key: str, value: str, by: str | None =
         (key, value.strip(), by),
     )
 
-# ---------- อ่านข้อมูล ----------
+# ---------- reads ----------
 
 def open_slip_by_plate(
     conn: psycopg.Connection, plate_norm: str, *, hours: int = 12
 ) -> dict[str, Any] | None:
-    """ใบของทะเบียนนี้ที่ยังไม่ได้รับรถกลับและเพิ่งลงทะเบียนไปไม่นาน
+    """This plate's slip that has not been collected yet and was registered recently.
 
-    ใช้กันการกดส่งฟอร์มขาเข้าซ้ำ (refresh หน้า / กดปุ่มสองที) ไม่ให้รถคันเดียวได้สองใบ
-    ใบซ้ำไม่ได้เจ็บตอนบันทึก แต่เจ็บตอนขาออก — เจ้าหน้าที่เห็นสองแถวเหมือนกัน
-    แล้วไม่รู้ว่าต้องปิดใบไหน ปิดผิดใบก็เหลือใบค้างที่ไม่มีใครมารับตลอดไป
+    Guards against a repeated entry-form submission (page refresh, double-tap) giving one
+    car two slips. A duplicate does no damage at save time; it does damage on the way out,
+    where staff see two identical rows and cannot tell which one to close. Close the wrong
+    one and a slip is left stranded that nobody will ever come to collect.
     """
     cur = conn.execute(
         f"""SELECT * FROM {DB_SCHEMA}.slips
@@ -458,14 +484,17 @@ def open_slip_by_plate(
 
 
 def slips_by_plate(conn: psycopg.Connection, plate_norm: str) -> list[dict[str, Any]]:
-    """ทุกใบที่นับเป็นใบจริงของทะเบียนนี้ ใบใหม่สุดก่อน — ใช้ที่ฟอร์มขาออก (/out)
+    """Every slip that counts as real for this plate, newest first — used by the exit form (/out).
 
-    ต้องคืน "ทั้ง" ใบที่ยังจอดอยู่และใบที่ปิดไปแล้ว ไม่ใช่กรองเอาแต่ใบที่ยังจอด:
-    คนที่เอารถออกไปแล้วแต่กดฟอร์มซ้ำ กับคนที่พิมพ์ทะเบียนผิด ต้องได้ข้อความคนละแบบ
-    ("ใบนี้รับรถกลับไปแล้วเมื่อ..." กับ "ไม่พบใบของทะเบียนนี้") เพราะวิธีแก้คนละเรื่องกัน
-    ถ้าได้ข้อความเดียวกัน คนแรกจะยืนกรอกซ้ำอยู่อย่างนั้นโดยไม่รู้ว่ารถถูกปล่อยไปแล้ว
+    It must return *both* still-parked and already-closed slips rather than filtering down
+    to the parked ones: somebody who has already driven away but submits the form again,
+    and somebody who mistyped their plate, need different messages ("this slip was
+    collected at ..." versus "no slip found for this plate"), because the remedies are
+    different. Given the same message, the first person stands there re-entering their
+    details forever, never learning the car has already been released.
 
-    ไม่เอาใบที่ถูกตีว่าซ้ำ (superseded_by) หรือถูกตีกลับ (rejected) เพราะไม่ใช่การฝากจริง
+    Slips marked as duplicates (superseded_by) or rejected are excluded, since neither is
+    a real deposit.
     """
     if not plate_norm:
         return []
@@ -479,10 +508,11 @@ def slips_by_plate(conn: psycopg.Connection, plate_norm: str) -> list[dict[str, 
 
 
 def _rounds_base(*, one: bool = False) -> str:
-    """ใบที่นับเป็นการฝากจริง + คีย์ของ "รอบ" (วันที่เข้าจอด)
+    """Slips that count as real deposits, plus the key identifying a "round" (the deposit date).
 
-    ใบที่ไม่มีวันที่เข้าจอดจับกลุ่มกับใครไม่ได้ จึงให้เป็นรอบของตัวเอง (คีย์ผูกกับ id)
-    ถ้าปล่อยให้ NULL จับกลุ่มกันเอง ใบที่อ่านวันที่ไม่ออกทุกใบจะถูกฟ้องว่าเป็นใบซ้ำกันหมด
+    A slip with no deposit date cannot be grouped with anything, so it becomes its own
+    round (the key falls back to its id). Letting the NULLs group together would flag every
+    slip with an unreadable date as a duplicate of every other.
     """
     return f"""SELECT id, plate_norm, deposit_date, location, car_status,
                       review_status, returned_at, created_at,
@@ -495,20 +525,24 @@ def _rounds_base(*, one: bool = False) -> str:
 def deposit_rounds(
     conn: psycopg.Connection, plate_norms: list[str]
 ) -> dict[str, dict[str, Any]]:
-    """ใบของทะเบียนที่มีหลายใบ -> {slip_id: {"round": n, "total": m, "dup": k}}
+    """Plates with more than one slip -> {slip_id: {"round": n, "total": m, "dup": k}}
 
-    คนกลุ่มหนึ่งเอารถมาฝาก รับกลับ แล้วเอามาฝากใหม่ เห็นมาแล้ว 2-3 รอบต่อคัน
-    หน้าค้นหาแสดงเป็นแถวคล้าย ๆ กันเรียงตามคะแนน เจ้าหน้าที่ขาออกจึงต้องไล่อ่านวันที่เอง
-    ว่าใบไหนคือรอบปัจจุบัน — ปิดผิดใบเมื่อไหร่จะเหลือใบค้างที่ไม่มีใครมารับตลอดไป
+    A group of people parked, collected, and parked again — two or three rounds per car has
+    been observed. The search page shows these as near-identical rows ordered by score, so
+    exit staff were left reading the dates themselves to work out which slip is the current
+    round. Close the wrong one and a slip is stranded that nobody will come to collect.
 
-    "รอบ" นับตามวันที่เข้าจอด ไม่ใช่นับใบ — ใบเดียวกันที่ถ่ายมาสองสามรูป (คนละ hash
-    ที่จอดพิมพ์ไม่เท่ากัน หรือใบหนึ่งถูกปิดไปแล้ว) หลุดตัวจับซ้ำตอนอนุมัติมาได้
-    ถ้านับใบ ใบซ้ำสามใบของวันเดียวจะกลายเป็นป้าย "ฝากรอบที่ 1/2/3 จาก 3" ซึ่งโกหก
-    เจ้าหน้าที่เต็ม ๆ ว่ารถคันนี้มาฝากสามหน — dup จึงบอกไปตรง ๆ ว่าวันเดียวกันนี้มีกี่ใบ
-    ให้หน้าเว็บติดป้าย "อาจซ้ำ" แทนที่จะแต่งเลขรอบปลอมขึ้นมา
+    A "round" counts by deposit date, not by slip. The same slip photographed two or three
+    times (different hashes, the parking spot transcribed differently, or one of them
+    already closed) can slip past the duplicate check at approval time. Counting by slip
+    would turn three same-day duplicates into badges reading "round 1/2/3 of 3", which lies
+    outright to staff about the car having been parked three times. So dup states plainly
+    how many slips share that one day, and the web UI badges them "possible duplicate"
+    rather than inventing a round number.
 
-    คืนเฉพาะใบที่มีอะไรให้บอก (หลายรอบ หรือมีใบร่วมวัน) — ใบเดี่ยว ๆ ติดป้าย
-    "รอบที่ 1 จาก 1" มีแต่รกตา ไม่นับใบที่ถูกตีว่าซ้ำหรือตีกลับ เพราะไม่ใช่การฝากจริงสักรอบ
+    Only slips with something worth saying are returned (multiple rounds, or same-day
+    siblings): badging a lone slip "round 1 of 1" is pure clutter. Slips marked duplicate
+    or rejected are not counted, since neither is a real deposit.
     """
     plates = [p for p in {p for p in plate_norms} if p]
     if not plates:
@@ -530,11 +564,13 @@ def deposit_rounds(
 
 
 def deposit_history(conn: psycopg.Connection, plate_norm: str) -> list[dict[str, Any]]:
-    """ทุกใบของทะเบียนนี้ เรียงตามรอบ — ไว้โชว์ในหน้าใบตอนจะปล่อยรถ
+    """Every slip for this plate, ordered by round — shown on the slip page when releasing a car.
 
-    เจ้าหน้าที่ต้องเห็นได้ทันทีว่าใบที่เปิดอยู่คือรอบไหน และรอบอื่นปิดไปหมดหรือยัง
-    เลขรอบนับตามวันที่เข้าจอดเหมือน deposit_rounds() สองใบของวันเดียวกันจึงได้เลขรอบ
-    เดียวกัน (= ใบซ้ำ) ไม่ใช่กลายเป็นคนละรอบ ดูเหตุผลเต็มที่ deposit_rounds()
+    Staff need to see at a glance which round the open slip belongs to, and whether the
+    other rounds are all closed. Round numbers count by deposit date, as in
+    deposit_rounds(), so two slips from the same day share a round number (i.e. they are
+    duplicates) rather than becoming separate rounds. See deposit_rounds() for the full
+    reasoning.
     """
     if not plate_norm:
         return []
@@ -601,15 +637,17 @@ def list_slips(
 
 
 def next_in_queue(conn: psycopg.Connection, slip_id: str) -> tuple[str | None, int]:
-    """(id ใบถัดไปในคิว, จำนวนใบที่ยังค้าง) — ถามฐานข้อมูลตรง ๆ
+    """(id of the next slip in the queue, how many remain) — asked of the database directly.
 
-    เดิมดึงคิวทั้งกอง (SELECT * 200 แถว พร้อม jsonb ของ OCR) มาเรียงใน Python
-    เพื่อเอาแค่ใบแรกกับจำนวน ซึ่งหนักเกินเหตุเพราะหน้านี้เปิดทุกครั้งที่ตรวจ 1 ใบ
+    This used to pull the whole queue (SELECT * over 200 rows, OCR jsonb included) and sort
+    it in Python just to get the first slip and a count — far too heavy for a page that
+    loads on every single slip reviewed.
 
-    เรียงให้ใบที่ต้องตรวจมาก่อน แล้วไล่จากใบเก่าสุด (เคลียร์งานตกค้างให้หมดก่อน)
+    Ordered so slips needing review come first, oldest first within that (clear the backlog
+    before anything else).
     """
-    # สอง subquery ใน statement เดียว = คุยรอบเดียว แต่ไม่ต้องใช้ count(*) OVER ()
-    # ซึ่งบังคับให้อ่านแถวที่ sort แล้วทั้งกอง (วัดที่ 66,000 ใบ: 96 ms -> 25 ms)
+    # Two subqueries in one statement = a single round trip, without needing count(*) OVER (),
+    # which would force a read of the entire sorted set (measured at 66,000 slips: 96 ms -> 25 ms)
     row = conn.execute(
         f"""SELECT (SELECT id FROM {DB_SCHEMA}.slips
                      WHERE review_status = 'pending' AND superseded_by IS NULL
@@ -623,24 +661,26 @@ def next_in_queue(conn: psycopg.Connection, slip_id: str) -> tuple[str | None, i
     return (str(row["next_id"]) if row["next_id"] else None), row["remaining"]
 
 
-# ---------- การจองใบในคิว ----------
+# ---------- claiming slips in the queue ----------
 #
-# ปัญหาที่แก้: next_in_queue() ยื่นใบหัวแถวใบเดียวกันให้ทุกคน สามคนที่นั่งตรวจพร้อมกัน
-# จึงได้ใบเดียวกันเสมอ แล้วเสียเวลาทำซ้ำของกันและกัน
+# The problem this solves: next_in_queue() handed the same head-of-line slip to everyone,
+# so three people reviewing at once always got the same slip and spent their time redoing
+# each other's work.
 #
-# การจองเป็นแค่คำแนะนำ ไม่ใช่การล็อก — คนถือใบแล้วปิดแท็บเกิดขึ้นตลอด ถ้าล็อกแข็ง
-# จะมีใบที่แตะไม่ได้ค้างเต็มคิว ตัวที่การันตีว่าข้อมูลไม่ทับกันยังเป็น require_status
-# ใน update_slip() เหมือนเดิม การจองแค่ทำให้ "ไม่ค่อยเจอกัน" ส่วน write guard
-# ทำให้ "เจอกันแล้วไม่พัง"
+# A claim is advisory, not a lock. People claim a slip and close the tab all the time; a
+# hard lock would leave the queue full of untouchable slips. What guarantees data is not
+# overwritten is still require_status in update_slip(). The claim only makes collisions
+# rare; the write guard makes a collision harmless.
 
 CLAIM_COLS = "claimed_by = NULL, claimed_name = NULL, claimed_at = NULL"
 
 
 def release_claims(conn: psycopg.Connection, worker: str) -> None:
-    """ปล่อยใบที่คนนี้ถืออยู่ทั้งหมด — คนหนึ่งถือได้ทีละใบเสมอ
+    """Release every slip this person holds — one person holds at most one slip at a time.
 
-    เรียกก่อนจองใบใหม่ทุกครั้ง ไม่งั้นคนที่กดข้ามไปเรื่อย ๆ จะทิ้งใบที่จองค้างไว้
-    เต็มคิว แล้วคนอื่นต้องรอจนหมดอายุทั้งที่ไม่มีใครตรวจอยู่จริง
+    Called before every new claim. Without it, somebody repeatedly pressing "skip" leaves
+    the queue littered with claimed slips, and everyone else waits for those leases to
+    expire even though nobody is actually reviewing them.
     """
     conn.execute(
         f"UPDATE {DB_SCHEMA}.slips SET {CLAIM_COLS}"
@@ -650,16 +690,17 @@ def release_claims(conn: psycopg.Connection, worker: str) -> None:
 
 
 def claim_next(conn: psycopg.Connection, worker: str, name: str | None = None) -> str | None:
-    """ปล่อยใบเดิมแล้วจองใบถัดไปในคิว คืน id ที่จองได้ (None = คิวหมด)
+    """Release the current slip and claim the next in the queue. Returns the claimed id (None = queue empty).
 
-    ต้องมีทั้งสองเงื่อนไขในคำสั่งเดียว เพราะกันคนละกรณีกัน:
+    Both conditions have to be in the one statement, because they guard different cases:
 
-    * claimed_at — กันใบที่คนอื่นจองไปแล้วและ commit แล้ว (การชนระดับนาที)
-    * FOR UPDATE SKIP LOCKED — กันสอง transaction ที่ยิงพร้อมกันแล้วยังไม่ commit
-      แย่งแถวเดียวกัน (การชนระดับมิลลิวินาที) ตัวนี้ไม่รู้จักใบที่จอง+commit ไปแล้ว
-      ส่วน claimed_at ก็ไม่เห็น transaction ที่ยังค้างอยู่ ขาดตัวใดตัวหนึ่งไม่ได้
+    * claimed_at — excludes slips somebody else has claimed and committed (minute-scale collisions)
+    * FOR UPDATE SKIP LOCKED — stops two simultaneous, uncommitted transactions fighting over
+      the same row (millisecond-scale collisions). This one knows nothing about slips already
+      claimed and committed, while claimed_at cannot see a transaction still in flight.
+      Neither can be dropped.
 
-    เรียงเหมือน next_in_queue เดิม: ใบที่ต้องตรวจมาก่อน แล้วไล่จากใบเก่าสุด
+    Ordered as next_in_queue was: slips needing review first, oldest first within that.
     """
     release_claims(conn, worker)
     row = conn.execute(
@@ -681,10 +722,11 @@ def claim_next(conn: psycopg.Connection, worker: str, name: str | None = None) -
 def claim_one(
     conn: psycopg.Connection, slip_id: str, worker: str, name: str | None = None
 ) -> dict[str, Any] | None:
-    """จองใบที่ระบุ (คนคลิกจากรายการคิว) คืน None ถ้าจองได้
+    """Claim a specific slip (somebody clicked it in the queue list). Returns None on success.
 
-    ถ้าจองไม่ได้ คืนแถวของคนที่ถืออยู่ไว้เอาไปบอกบนหน้าจอ — เตือนเฉย ๆ ไม่บล็อก
-    เพราะอาจเป็นคนเดียวกันเปิดจากอีกเครื่อง หรือเขาตั้งใจเข้ามาดูใบนี้จริง ๆ
+    On failure it returns the holder's row, to be shown on screen — a warning, not a block,
+    because it may be the same person on a second device, or they may have deliberately
+    come to look at this particular slip.
     """
     row = conn.execute(
         f"""UPDATE {DB_SCHEMA}.slips
@@ -709,7 +751,7 @@ def claim_one(
 
 
 def release_other_claims(conn: psycopg.Connection, worker: str, keep: str) -> None:
-    """ปล่อยใบอื่นที่คนนี้ถืออยู่ เหลือไว้ใบเดียวคือใบที่กำลังเปิด"""
+    """Release the other slips this person holds, leaving only the one currently open"""
     conn.execute(
         f"UPDATE {DB_SCHEMA}.slips SET {CLAIM_COLS}"
         f" WHERE claimed_by = %s AND id <> %s AND review_status = 'pending'",
@@ -718,7 +760,7 @@ def release_other_claims(conn: psycopg.Connection, worker: str, keep: str) -> No
 
 
 def known_people(conn: psycopg.Connection) -> list[str]:
-    """รายชื่อที่ยังใช้งานอยู่ ไว้ให้เลือกตอนอัปโหลด"""
+    """The active names, offered as choices at upload time"""
     cur = conn.execute(
         f"SELECT name FROM {DB_SCHEMA}.staff_members WHERE active ORDER BY name"
     )
@@ -726,13 +768,13 @@ def known_people(conn: psycopg.Connection) -> list[str]:
 
 
 def list_staff(conn: psycopg.Connection) -> list[dict[str, Any]]:
-    """รายชื่อทั้งหมด + จำนวนใบที่แต่ละคน "อัปโหลด" และ "ตรวจ" (ไว้ให้ admin ดูว่าใครทำไปเท่าไร)
+    """Every name plus how many slips each person uploaded and reviewed (so an admin can see who did what).
 
-    คนอัปกับคนตรวจเป็นคนละบทบาท แถวเดียวกันจึงต้องนับแยกสองช่อง
-    ใช้ LEFT JOIN กับยอดที่ group มาแล้วรอบเดียว ไม่ใช้ subquery ต่อแถว
-    ไม่งั้นมีกี่ชื่อก็ต้องกวาดตาราง slips เท่านั้นรอบ
-    เทียบชื่อแบบ lower(btrim()) ให้ตรงกับที่ build_filters ใช้ ตัวเลขบนหน้านี้
-    จะได้เท่ากับจำนวนแถวที่กดเข้าไปดูจริง
+    Uploading and reviewing are separate roles, so one row needs two separate counts.
+    Implemented as a LEFT JOIN against totals grouped once, not a per-row subquery, which
+    would scan the slips table once per name.
+    Names are matched with lower(btrim()) to agree with build_filters, so the numbers on
+    this page equal the number of rows you actually get when you click through.
     """
     cur = conn.execute(
         f"""SELECT m.*,
@@ -755,17 +797,18 @@ def list_staff(conn: psycopg.Connection) -> list[dict[str, Any]]:
     return cur.fetchall()
 
 
-# ค่าที่ฟอร์มใช้สื่อว่า "ขอพิมพ์ชื่อใหม่" ห้ามหลุดเข้าไปเป็นชื่อคนจริง
-# ไม่งั้นจะโผล่เป็นตัวเลือกซ้ำในรายการ และคนที่เลือกมันจะถูกตีความเป็น sentinel ตลอดไป
+# The value the form uses to mean "let me type a new name" must never make it through as a
+# real person's name: it would show up as a duplicate option in the list, and anyone who
+# picked it would be read as the sentinel forever after.
 NEW_NAME_SENTINEL = "__new__"
 
-# อักขระที่มองไม่เห็น (zero-width, BOM) .strip() เอาออกไม่ได้
-# ถ้าปล่อยผ่านจะได้ชื่อที่ว่างเปล่าในสายตาคน แต่ระบบนับว่ามีค่า
+# Invisible characters (zero-width, BOM) that .strip() cannot remove. Let them through and
+# you get a name that reads as empty to a human while the system counts it as a value.
 _INVISIBLE = re.compile(r"[\u200b-\u200f\u2028\u2029\ufeff\u00ad]")
 
 
 def clean_person_name(name: str | None) -> str:
-    """ชื่อคนที่ใช้ได้จริง — ตัดอักขระล่องหนออก และปฏิเสธค่า sentinel"""
+    """A usable person name — invisible characters stripped, and the sentinel value rejected"""
     cleaned = _INVISIBLE.sub("", str(name or "")).strip()
     if cleaned == NEW_NAME_SENTINEL:
         return ""
@@ -773,7 +816,7 @@ def clean_person_name(name: str | None) -> str:
 
 
 def add_staff(conn: psycopg.Connection, name: str, created_by: str | None = None) -> bool:
-    """เพิ่มชื่อเข้ารายการ คืน False ถ้าชื่อซ้ำ (เทียบแบบไม่สนตัวพิมพ์และช่องว่างหัวท้าย)"""
+    """Add a name to the list. Returns False if it already exists (compared case- and trim-insensitively)."""
     name = clean_person_name(name)
     if not name:
         return False
@@ -795,7 +838,7 @@ def set_staff_active(conn: psycopg.Connection, staff_id: int, active: bool) -> N
 def review_counts(conn: psycopg.Connection) -> dict[str, int]:
     cur = conn.execute(
         f"""SELECT
-              -- กองที่ต้องทำต้องไม่นับใบซ้ำ ไม่งั้นยอดบนแถบกองจะไม่ตรงกับจำนวนแถวที่เห็น
+              -- The to-do pile must not count duplicates, or the tab badge disagrees with the rows shown
               count(*) FILTER (WHERE review_status = 'pending' AND superseded_by IS NULL
                                AND needs_review)                                       AS needs_review,
               count(*) FILTER (WHERE review_status = 'pending' AND superseded_by IS NULL
@@ -811,7 +854,7 @@ def review_counts(conn: psycopg.Connection) -> dict[str, int]:
 
 
 def export_rows(conn: psycopg.Connection, filters: tuple[str, dict] | None = None) -> Iterable[dict]:
-    """แถวสำหรับ Excel — ใช้ filter ชุดเดียวกับหน้าตาราง"""
+    """Rows for the Excel export — using the same filter set as the table page"""
     where, params = filters or ("TRUE", {})
     cur = conn.execute(
         f"""SELECT name, tel, plate_raw, province, brand, car_type, location, deposit_date,
@@ -822,7 +865,7 @@ def export_rows(conn: psycopg.Connection, filters: tuple[str, dict] | None = Non
     )
     return cur.fetchall()
 
-# ---------- ตารางข้อมูล + dashboard ----------
+# ---------- data table + dashboard ----------
 
 def build_filters(
     q: str | None = None,
@@ -834,12 +877,14 @@ def build_filters(
     uploaded_by: str | None = None,
     reviewed_by: str | None = None,
 ) -> tuple[str, dict]:
-    """สร้าง WHERE clause ที่ใช้ร่วมกันระหว่างหน้าตาราง, คิวตรวจ, ตัวนับ และ Excel
+    """Build the WHERE clause shared by the table page, the review queue, the counters and the Excel export.
 
-    ใช้ตัวเดียวกันทุกที่ เพื่อให้ปุ่ม 'โหลด Excel' ได้ข้อมูลตรงกับที่เห็นบนจอเสมอ
+    One implementation everywhere, so the "download Excel" button always returns exactly
+    what is on screen.
 
-    ค้นบนคอลัมน์ *_norm ไม่ใช่คอลัมน์ดิบ เพราะ trigram index อยู่บน *_norm
-    ถ้า ILIKE คอลัมน์ดิบ index ใช้ไม่ได้เลย ทุกการค้นจะกวาดทั้งตาราง
+    Searches run against the *_norm columns rather than the raw ones, because the trigram
+    indexes live on *_norm. ILIKE against a raw column cannot use an index at all, which
+    turns every search into a full table scan.
     """
     where, params = ["TRUE"], {}
     if review_status:
@@ -854,31 +899,34 @@ def build_filters(
     if car_type:
         where.append("car_type = %(car_type)s")
         params["car_type"] = car_type
-    # ใบซ้ำไม่ได้หายไปจากระบบ แค่ไม่อยู่ในกองที่ต้องทำ — จึงเป็นตัวกรอง ไม่ใช่การซ่อนถาวร
+    # Duplicates have not left the system, they are just out of the to-do pile — hence a
+    # filter, not permanent hiding.
     if superseded is not None:
         where.append(f"superseded_by IS {'NOT NULL' if superseded else 'NULL'}")
-    # กรองตามคน: เทียบแบบไม่สนตัวพิมพ์/ช่องว่างหัวท้าย เพราะชื่อที่พิมพ์เองตอนอัปโหลดหรือตอนตรวจ
-    # อาจต่างจากชื่อในรายการแค่ช่องว่าง แล้วจะกลายเป็นคนละคนในสายตา query
+    # Filter by person, compared case- and trim-insensitively: a name typed by hand at
+    # upload or review time may differ from the one in the list by nothing but whitespace,
+    # which would make them two different people as far as the query is concerned.
     for key, val in (("uploaded_by", uploaded_by), ("reviewed_by", reviewed_by)):
         name = clean_person_name(val)
         if name:
             where.append(f"lower(btrim({key})) = lower(btrim(%({key})s))")
             params[key] = name
     if q and q.strip():
-        # normalize คำค้นแบบเดียวกับตอนบันทึก ไม่งั้นพิมพ์ "นายสมชาย" จะไม่เจอแถวที่เก็บ "สมชาย"
-        # ใส่เฉพาะช่องที่ normalize แล้วยังเหลือข้อความ ไม่งั้น LIKE '%%' จะแมตช์ทุกแถว
+        # Normalize the query the same way the data was normalized on save, otherwise typing
+        # "นายสมชาย" fails to find the row stored as "สมชาย".
+        # Only include fields that still hold text after normalizing, or LIKE '%%' matches every row.
         parts = []
         for col, key, val in (
             ("name_norm", "qname", norm_name(q)),
             ("plate_norm", "qplate", norm_plate(q)),
             ("brand_norm", "qbrand", norm_brand(q)),
-            ("location", "qloc", _base(q).strip()),   # ที่จอดไม่มีคอลัมน์ norm ใช้ trgm บนคอลัมน์ดิบ
+            ("location", "qloc", _base(q).strip()),   # parking spot has no norm column; trgm sits on the raw one
         ):
             if val:
                 parts.append(f"{col} ILIKE %({key})s")
                 params[key] = f"%{val}%"
         digits = "".join(ch for ch in q if ch.isdigit())
-        if digits:  # ถ้าไม่มีตัวเลขเลย ห้ามใส่เงื่อนไขเบอร์ ไม่งั้น LIKE '%%' จะแมตช์ทุกแถว
+        if digits:  # with no digits at all, the phone condition must be omitted, or LIKE '%%' matches every row
             parts.append("tel_digits LIKE %(qd)s")
             params["qd"] = f"%{digits}%"
         if parts:
@@ -899,27 +947,30 @@ def query_slips(
     sort: str = "created_at", desc: bool = True, page: int = 1, per_page: int = 50,
     total: int | None = None,
 ) -> tuple[list[dict], int]:
-    """(แถวของหน้านี้, จำนวนทั้งหมดที่เข้าเงื่อนไข) ในการคุยกับฐานข้อมูลรอบเดียว
+    """(rows for this page, total matching the filters) in a single round trip to the database.
 
-    ส่ง total มาได้ถ้าผู้เรียกรู้ยอดอยู่แล้ว (หน้าคิวตรวจรู้จาก review_counts)
-    จะได้ไม่ต้องนับใหม่เลย
+    total may be passed in when the caller already knows it (the review queue knows it from
+    review_counts), so nothing needs counting again.
 
-    ฐานข้อมูลอยู่คนละเครื่องกับเว็บ RTT วัดได้ 60-550 ms ขณะที่งานฝั่ง Postgres
-    ใช้ไม่ถึง 1 ms ฉะนั้นตัวที่กินเวลาคือ "จำนวนรอบที่คุย" ไม่ใช่ความหนักของ query
-    count(*) OVER () จึงคุ้มกว่าการยิง COUNT(*) แยกอีกรอบ
-    แลกกับการที่ window ต้องอ่านแถวที่แมตช์ทั้งหมด วัดบน dataset สังเคราะห์แล้ว:
+    The database lives on a different machine from the web app: RTT measures 60-550 ms while
+    the work on the Postgres side takes under 1 ms. So what costs time is the *number of
+    round trips*, not how heavy the query is — which makes count(*) OVER () cheaper than a
+    second COUNT(*) call, at the price of the window having to read every matching row.
+    Measured on a synthetic dataset:
 
-        จำนวนใบ    count(*) OVER ()    COUNT(*) แยกรอบ (+1 RTT ~67 ms)
+        slips      count(*) OVER ()    separate COUNT(*) (+1 RTT ~67 ms)
         1,700              1.3 ms                      ~68 ms
         33,000            96.5 ms                      ~92 ms
         200,000          408.0 ms                      ~75 ms
 
-    จุดคุ้มทุนอยู่ราว 20,000-30,000 ใบ ต่ำกว่านั้น window ชนะ สูงกว่านั้นให้แยก COUNT
-    (ตอนนี้ของจริงมี ~1,700 ใบ) ส่วนหน้าคิวตรวจไม่ต้องใช้ทางไหนเลยถ้าไม่ได้ค้นหา
-    เพราะ review_counts() ให้ยอดของทุกกองมาอยู่แล้วในรอบที่ยิงไปแล้ว
+    The break-even point sits around 20,000-30,000 slips: below that the window wins, above
+    it a separate COUNT does (production currently holds ~1,700). The review queue needs
+    neither when nothing is being searched, because review_counts() already returned every
+    pile's total in a round trip already made.
 
-    ไม่ SELECT * เพราะจะลาก raw_ocr / ocr_confidence (jsonb ก้อนใหญ่) มาเปล่า ๆ
-    ทั้งที่หน้าตารางกับคิวตรวจไม่ได้ใช้ — วัดแล้วต่างกันหลายเท่าตัวบนสายจริง
+    SELECT * is avoided, because it drags raw_ocr and ocr_confidence (large jsonb blobs)
+    along for nothing — neither the table page nor the review queue uses them, and over a
+    real connection the difference measured several times over.
     """
     where, params = filters
     order = SORTABLE.get(sort, "created_at")
@@ -930,8 +981,9 @@ def query_slips(
                    car_status, returned_at, returned_by, uploaded_by, photographer,
                    reviewed_by, ocr_model, created_at,
                    claimed_name, claimed_at, superseded_by,
-                   -- คำนวณที่ฐานข้อมูลเพราะเวลาของ Postgres คือตัวเดียวกับที่ใช้ตัดสิน
-                   -- ว่าการจองหมดอายุหรือยัง ถ้าไปเทียบฝั่ง Python นาฬิกาคนละตัวกัน
+                   -- Computed in the database, because Postgres's clock is the one that
+                   -- decides whether a claim has expired. Comparing on the Python side
+                   -- would be comparing against a different clock.
                    (claimed_at IS NOT NULL
                     AND claimed_at >= now() - %(lease)s * interval '1 minute') AS claim_live{counter}
             FROM {DB_SCHEMA}.slips WHERE {where}
@@ -946,7 +998,8 @@ def query_slips(
             for r in rows:
                 del r["total_rows"]
         elif page > 1:
-            # หน้าว่างเพราะเลยหน้าสุดท้ายไป ต้องถามจำนวนจริงเพื่อให้ปุ่มแบ่งหน้ายังถูก
+            # The page is empty because we are past the last page; ask for the real count
+            # so the pagination controls stay correct.
             total = conn.execute(
                 f"SELECT count(*) AS n FROM {DB_SCHEMA}.slips WHERE {where}", params
             ).fetchone()["n"]
@@ -956,7 +1009,7 @@ def query_slips(
 
 
 def dashboard_stats(conn: psycopg.Connection) -> dict[str, Any]:
-    """สรุปตัวเลขทั้งหมดในการ query ไม่กี่ครั้ง — หน้า dashboard ต้องเบา"""
+    """Every summary figure in a handful of queries — the dashboard has to stay light"""
     kpi = dict(conn.execute(
         f"""SELECT count(*) AS total,
                    count(*) FILTER (WHERE review_status='approved')            AS approved,
@@ -979,9 +1032,10 @@ def dashboard_stats(conn: psycopg.Connection) -> dict[str, Any]:
             (limit,),
         ).fetchall()
 
-    # แกนวันต้องเป็น "ทุกวันใน 30 วันล่าสุด" ไม่ใช่ "14 วันที่บังเอิญมีใบ"
-    # ของเดิมเอาวันที่มีใบมาเรียงติดกัน วันว่างจึงหายไปจากแกน และวันที่ OCR อ่านผิดปี
-    # (2083, 2027) ถูกวาดเป็นแท่งข้าง ๆ 2026 โดยป้ายโชว์แค่ วว/ดด — อ่านแล้วเข้าใจผิดว่าเรียงกัน
+    # The day axis has to be "every day in the last 30", not "the 14 days that happen to have
+    # slips". The previous version strung the days that had slips together, so empty days
+    # vanished from the axis, and dates whose year OCR misread (2083, 2027) were drawn as bars
+    # next to 2026 with labels showing only DD/MM — which read as though they were in sequence.
     by_day = conn.execute(
         f"""WITH days AS (
                 SELECT generate_series(current_date - 29, current_date, '1 day')::date AS day
@@ -995,8 +1049,9 @@ def dashboard_stats(conn: psycopg.Connection) -> dict[str, Any]:
             GROUP BY 1 ORDER BY 1"""
     ).fetchall()
 
-    # ใบที่ไม่ได้อยู่ในกราฟข้างบน ต้องบอกจำนวนไว้เสมอ ไม่งั้นกราฟจะดูเหมือนข้อมูลทั้งหมด
-    # ทั้งที่จริงมีใบตกขอบอยู่หลักร้อย (วันที่ว่าง / ปีที่เป็นไปไม่ได้ / วันที่เก่ากว่า 30 วัน)
+    # Slips that fall outside the chart above must always be counted somewhere, or the chart
+    # looks like the whole dataset when in fact hundreds sit off its edges (no date, an
+    # impossible year, or a date older than 30 days).
     date_health = dict(conn.execute(
         f"""SELECT count(*) FILTER (WHERE deposit_date IS NULL) AS no_date,
                    count(*) FILTER (WHERE deposit_date < current_date - 365
@@ -1008,17 +1063,20 @@ def dashboard_stats(conn: psycopg.Connection) -> dict[str, Any]:
             FROM {DB_SCHEMA}.slips WHERE review_status <> 'rejected'"""
     ).fetchone())
 
-    # คุณภาพ OCR: ช่องไหนที่คนต้องแก้บ่อยที่สุด (มาจาก audit log ของการใช้งานจริง)
+    # OCR quality: which fields humans correct most often (taken from the production audit log)
     edits = conn.execute(
         f"""SELECT field AS label, count(*) AS n FROM {DB_SCHEMA}.slip_edits
             GROUP BY 1 ORDER BY n DESC LIMIT 8"""
     ).fetchall()
-    # ใครอนุมัติ/ตีกลับไปกี่ใบ — คนละชุดกับ by_uploader เพราะคนอัปกับคนตรวจไม่ใช่คนเดียวกัน
-    # รวมกลุ่ม "ไม่ระบุ" ไว้ด้วย (ใบเก่าที่ตรวจก่อนจะมีช่องชื่อผู้ตรวจ) ไม่งั้นยอดรวมจะไม่ตรงกับ approved
+    # Who approved or rejected how many — a separate set from by_uploader, because uploading
+    # and reviewing are not done by the same people. The "unattributed" group is included
+    # (older slips reviewed before there was a reviewer-name field), otherwise the total does
+    # not reconcile with approved.
     #
-    # จัดกลุ่มด้วย lower(btrim()) แบบเดียวกับ build_filters แล้วใช้ mode() เลือกตัวสะกดที่พบบ่อยสุด
-    # เป็นชื่อที่แสดง ไม่งั้น "first" กับ "FIRST" จะเป็นสองแถวบนจอ แต่กดเข้าไปได้ใบชุดเดียวกัน
-    # (= ตัวเลขบนแถวไม่ตรงกับจำนวนที่เห็นจริง)
+    # Grouped by lower(btrim()) as in build_filters, then mode() picks the most common
+    # spelling as the display name. Otherwise "first" and "FIRST" become two rows on screen
+    # that both lead to the same set of slips (i.e. the number on the row disagrees with what
+    # you actually see).
     by_reviewer = conn.execute(
         f"""SELECT coalesce(mode() WITHIN GROUP (ORDER BY btrim(reviewed_by)), '— ไม่ระบุ —') AS label,
                    count(*) FILTER (WHERE review_status = 'approved') AS n,
@@ -1070,6 +1128,6 @@ if __name__ == "__main__":
                 "SELECT tablename FROM pg_tables WHERE schemaname = %s ORDER BY tablename",
                 (DB_SCHEMA,),
             )
-            print(f"schema {DB_SCHEMA} พร้อมใช้งาน:", [r["tablename"] for r in cur.fetchall()])
+            print(f"schema {DB_SCHEMA} ready:", [r["tablename"] for r in cur.fetchall()])
     else:
         print(__doc__)

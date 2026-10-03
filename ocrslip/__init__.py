@@ -1,1 +1,1 @@
-"""OCR ใบจอดรถ (ระบบเอื้อเฟื้อที่จอดรถ) — preprocessing, OCR, ค้นหา."""
+"""Parking slip OCR (temple courtesy-parking system) — preprocessing, OCR, search."""

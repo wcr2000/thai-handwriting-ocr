@@ -1,17 +1,17 @@
-"""เทียบวิธี "หาตัวใบก่อนอ่าน" ว่าแบบไหนอ่านข้อมูลได้แม่นกว่ากัน
+"""Compare strategies for locating the slip before reading it, to see which reads most accurately.
 
-วิธีที่เทียบ (ใช้ model เดียวกันหมด ต่างกันแค่ภาพที่ส่งเข้าไป):
-    full     ส่งภาพเต็ม ไม่ crop เลย
-    cv       crop ด้วย OpenCV ตามโค้ด production
-    cv_fb    เหมือน cv แต่ถ้าอ่านช่องสำคัญไม่ได้เลย ถอยไปใช้ผลของ full (พฤติกรรมจริงตอนนี้)
-    llm_box  ให้ LLM หา 4 มุมก่อน แล้ว warp ตามนั้น แล้วค่อยอ่าน (ยิง 2 ครั้ง)
+The strategies compared (identical model throughout; only the image sent differs):
+    full     send the whole frame, no crop at all
+    cv       crop with OpenCV, as the production code does
+    cv_fb    as cv, but fall back to full's result when no key field could be read (current behaviour)
+    llm_box  have an LLM find the 4 corners first, warp to those, then read (two API calls)
 
-ชุดทดสอบมาจาก 2 แหล่งที่ label โดยคน ไม่ได้มาจาก model ตัวไหนในนี้:
-    example/label.json        ใบตัวอย่างที่ label ไว้ตั้งแต่ต้นโปรเจกต์
-    ใบที่เจ้าหน้าที่ approve   ค่าที่คนตรวจยืนยัน/แก้แล้วในระบบจริง
+The test set comes from two human-labelled sources, never from any model in this comparison:
+    example/label.json        the sample slips labelled at the start of the project
+    staff-approved slips      values confirmed or corrected by reviewers in the live system
 
-    python bench/crop_bench.py            # รัน (cache ไว้ รันซ้ำไม่เสียเงินซ้ำ)
-    python bench/crop_bench.py --report   # ออกรายงานอย่างเดียว
+    python bench/crop_bench.py            # run it (cached, so a re-run costs nothing again)
+    python bench/crop_bench.py --report   # emit the report only
 """
 
 from __future__ import annotations
@@ -39,15 +39,15 @@ from ocrslip.preprocess import landscape, preprocess, warp_quad
 from ocrslip.schema import canonicalize
 
 ROOT = Path(__file__).resolve().parent.parent
-CASES = ROOT / "bench" / "crop_cases"      # รูป + ground truth ของชุดทดสอบ
+CASES = ROOT / "bench" / "crop_cases"      # the test set: images plus ground truth
 OUT = ROOT / "bench" / "crop_out"
-METHODS = ("full", "cv", "cv_deskew", "llm_box")   # cv_fb คำนวณจาก cv + full ไม่ต้องยิงเพิ่ม
+METHODS = ("full", "cv", "cv_deskew", "llm_box")   # cv_fb is derived from cv + full, needing no extra calls
 FIELDS = ["name", "tel", "date", "noplate", "brand", "typecar", "location"]
-CORE = ["name", "tel", "noplate"]          # ช่องที่ใช้ตามหารถจริง ๆ
+CORE = ["name", "tel", "noplate"]          # the fields actually used to find a car again
 
 
 def variants(path: Path, model: str, client: httpx.Client) -> dict[str, dict]:
-    """สร้างภาพของแต่ละวิธี คืน {method: {"jpeg":..., "extra_calls":..., ...}}"""
+    """Build the image for each strategy. Returns {method: {"jpeg":..., "extra_calls":..., ...}}"""
     pre = preprocess(path.read_bytes())
     raw_jpeg = encode_jpeg(pre.raw)
     out = {
@@ -78,7 +78,7 @@ def run(model: str, workers: int, force: bool) -> None:
         todo = [m for m in METHODS
                 if force or not (OUT / m / f"{path.stem}.json").exists()]
         if not todo:
-            return f"ข้าม {path.stem}"
+            return f"skipped {path.stem}"
         built = variants(path, model, client)
         for m in todo:
             v = built[m]
@@ -110,7 +110,7 @@ def _read_something(fields: dict) -> bool:
 
 
 def cer(truth: str, got: str) -> float:
-    """character error rate: 0 = ตรงเป๊ะ, 1 = ผิดหมด"""
+    """Character error rate: 0 = exact, 1 = entirely wrong"""
     if not truth:
         return 0.0 if not got else 1.0
     return min(1.0, Levenshtein.distance(truth, got) / len(truth))
@@ -148,8 +148,9 @@ def score(cases: list[dict]) -> dict[str, dict]:
                 got = normalize_field(f, fields.get(f))
                 e = cer(want, got)
                 per_field[f].append(want == got)
-                # "ใกล้เคียง" = ผิดไม่เกิน ~20% ของความยาว ซึ่ง fuzzy search ยังหาเจอ
-                # และคนตรวจแก้ได้เร็ว — ละเอียดกว่า exact match มากเวลาเทียบวิธี crop
+                # "near" = wrong by no more than ~20% of the length, which fuzzy search still
+                # finds and a reviewer corrects quickly. Far more discriminating than exact
+                # match when comparing crop strategies.
                 near_field[f].append(want == got or (bool(want) and e <= 0.2))
                 cer_field[f].append(e)
                 if f in CORE and want != got:
@@ -183,28 +184,29 @@ def report(cases: list[dict]) -> str:
     stats = score(cases)
     near = sum(1 for c in cases if c.get("style") == "ใกล้")
     lines = [
-        "# เทียบวิธีจับตัวใบก่อนอ่าน (crop strategy)",
+        "# Comparing crop strategies: locating the slip before reading it",
         "",
-        f"ชุดทดสอบ {len(cases)} ใบ — ถ่ายใกล้ {near} ใบ, ถ่ายไกล {len(cases) - near} ใบ",
-        f"model เดียวกันหมด: `{OCR_MODEL}` ต่างกันแค่ภาพที่ส่งเข้าไป",
+        f"Test set of {len(cases)} slips — {near} shot close up, {len(cases) - near} shot from a distance",
+        f"Identical model throughout: `{OCR_MODEL}`. Only the image sent differs.",
         "",
-        "เกณฑ์หลักคือ **CER** (สัดส่วนตัวอักษรที่ผิด ยิ่งต่ำยิ่งดี) เพราะ exact match หยาบเกินไป",
-        "กับลายมือไทย — ส่วนใหญ่ผิดแค่ 1-2 ตัว ซึ่งยังค้นเจอด้วย fuzzy search และคนแก้ได้เร็ว",
+        "The primary metric is **CER** (the share of characters read wrongly; lower is better), "
+        "because exact match is far too coarse for Thai handwriting — most reads are wrong by only "
+        "1-2 characters, which fuzzy search still finds and a reviewer corrects quickly.",
         "",
-        "| วิธี | CER ช่องหลัก | ใกล้เคียง | ตรงเป๊ะ | ถูกครบ 3 ช่อง | ชื่อ≈ | เบอร์ | ทะเบียน≈ | $/1000 ใบ | p50 | หมายเหตุ |",
+        "| strategy | core CER | near | exact | all 3 fields | name≈ | phone | plate≈ | $/1000 slips | p50 | notes |",
         "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
-    label = {"full": "ภาพเต็ม ไม่ crop", "cv": "OpenCV crop",
-             "cv_deskew": "OpenCV crop + แก้เอียง", "cv_fb": "OpenCV + ถอยไปภาพเต็ม",
-             "llm_box": "LLM หากรอบ แล้ว crop"}
+    label = {"full": "full frame, no crop", "cv": "OpenCV crop",
+             "cv_deskew": "OpenCV crop + deskew", "cv_fb": "OpenCV, falling back to full frame",
+             "llm_box": "LLM finds the quad, then crop"}
     for m in ("full", "cv", "cv_deskew", "cv_fb", "llm_box"):
         s = stats[m]
         f = s["field"]
         note = []
         if s["no_crop"]:
-            note.append(f"หากรอบไม่เจอ {s['no_crop']} ใบ")
+            note.append(f"quad not found on {s['no_crop']} slips")
         if s["rescued"]:
-            note.append(f"ถอยไปใช้ภาพเต็ม {s['rescued']} ใบ")
+            note.append(f"fell back to the full frame on {s['rescued']} slips")
         lines.append(
             f"| {label[m]} | **{s['core_cer']:.3f}** | {s['core_near']*100:.0f}% | "
             f"{s['core_mean']*100:.0f}% | {s['core_all']*100:.0f}% | "
@@ -218,8 +220,9 @@ def report(cases: list[dict]) -> str:
         if not subset:
             continue
         sub = score(subset)
-        lines += ["", f"## เฉพาะใบที่ถ่าย{style} ({len(subset)} ใบ)", "",
-                  "| วิธี | CER ช่องหลัก | ใกล้เคียง | ตรงเป๊ะ | ถูกครบ 3 ช่อง |",
+        style_en = "close up" if style == "ใกล้" else "from a distance"
+        lines += ["", f"## Slips shot {style_en} only ({len(subset)} slips)", "",
+                  "| strategy | core CER | near | exact | all 3 fields |",
                   "|---|---|---|---|---|"]
         for m in ("full", "cv", "cv_deskew", "cv_fb", "llm_box"):
             t = sub[m]
@@ -233,7 +236,7 @@ def main() -> None:
     ap.add_argument("--model", default=OCR_MODEL)
     ap.add_argument("--workers", type=int, default=5)
     ap.add_argument("--force", action="store_true")
-    ap.add_argument("--report", action="store_true", help="ออกรายงานอย่างเดียว ไม่ยิงเพิ่ม")
+    ap.add_argument("--report", action="store_true", help="emit the report only, making no further calls")
     args = ap.parse_args()
 
     cases = json.loads((CASES / "cases.json").read_text(encoding="utf-8"))

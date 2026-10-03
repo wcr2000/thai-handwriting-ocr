@@ -1,13 +1,15 @@
-"""crop รูปที่เก็บไว้ใหม่ แล้ว OCR ซ้ำเฉพาะใบที่ยังไม่มีคนยืนยัน
+"""Re-crop the stored images, then re-run OCR only on slips nobody has confirmed yet.
 
-ใช้หลังแก้ตัวจับขอบกระดาษ: ใบเก่าถูก crop ไปโดนพื้นหลัง/กระดาษเปล่า หรือโดนตัดขอบ
-ภาพที่ส่งเข้า model จึงเอียง/หมุน/ขอบขาด และอ่านผิดโดยไม่มีสัญญาณเตือน
+Run this after fixing the paper-edge detector: older slips were cropped onto the
+background or a blank sheet, or had their edges clipped, so the image sent to the model
+was skewed, rotated or cut — and misread with no warning signal.
 
-    python -m ocrslip.reprocess            # ดูว่าจะกระทบใบไหนบ้าง (ไม่เขียนอะไร)
-    python -m ocrslip.reprocess --apply    # ลงมือแก้จริง
+    python -m ocrslip.reprocess            # show which slips would be affected (writes nothing)
+    python -m ocrslip.reprocess --apply    # actually make the changes
 
-กฎความปลอดภัย: รูป original ไม่ถูกแตะต้องเลย และข้อมูลของใบที่คนยืนยัน/แก้ไปแล้ว
-จะไม่ถูกเขียนทับ — อัปเดตแค่รูป processed ให้เห็นภาพที่ถูกต้องตอนย้อนดู
+Safety rules: the original image is never touched, and data on slips a human has
+confirmed or edited is never overwritten — only the processed image is updated, so that
+looking back at the slip shows the correct picture.
 """
 
 from __future__ import annotations
@@ -30,17 +32,19 @@ from .web.pipeline import VARIANT, build_raw_ocr, count_duplicates, read_with_fa
 class Candidate:
     slip_id: str
     old_size: tuple[int, int]
-    locked: bool          # คนยืนยัน/แก้ข้อมูลใบนี้แล้ว — ห้ามเขียนทับข้อมูล
+    locked: bool          # a human has confirmed or edited this slip — its data must not be overwritten
     lock_reason: str
     why: str
 
 
 def find_candidates(conn: psycopg.Connection) -> list[Candidate]:
-    """ใบที่ยังไม่ได้ผ่าน preprocess เวอร์ชันปัจจุบัน — ตัดสินด้วย SQL ล้วน ๆ
+    """Slips that have not been through the current preprocess version — decided in pure SQL.
 
-    เดิมตัดสินด้วยการ crop ใหม่ทุกใบแล้วดูว่าขนาดเปลี่ยนไหม ซึ่งต้องดึงรูปต้นฉบับ
-    ทั้งฐานข้อมูลข้ามเน็ตมา (ระดับ GB) จน Postgres ตัด connection ทิ้งก่อนได้เริ่มทำงาน
-    การ stamp เลขเวอร์ชันไว้ในแต่ละใบทำให้รู้คำตอบเดียวกันโดยไม่ต้องแตะรูปเลย
+    This used to be decided by re-cropping every slip and checking whether the size
+    changed, which meant pulling every original image in the database across the network
+    (gigabytes of it) — Postgres dropped the connection before the job even got going.
+    Stamping the version number onto each slip answers the same question without touching
+    a single image.
     """
     rows = conn.execute(
         f"""SELECT s.id::text AS id, s.review_status,
@@ -68,12 +72,13 @@ def find_candidates(conn: psycopg.Connection) -> list[Candidate]:
 
 
 def reprocess_one(conn: psycopg.Connection, cand: Candidate) -> dict[str, Any]:
-    """crop ใหม่ + หมุนถ้ากลับหัว + (ถ้าไม่ล็อก) เขียนทับข้อมูลที่ model เคยอ่านผิด"""
+    """Re-crop, rotate if upside down, and (unless locked) overwrite data the model previously misread"""
     original = get_image(conn, cand.slip_id, "original")
     pre = preprocess(original)
 
-    # ต้องยิง model แม้กับใบที่คนยืนยันแล้ว เพราะเป็นทางเดียวที่รู้ว่าใบกลับหัวหรือไม่
-    # แต่ของใบพวกนั้นจะใช้แค่ orientation ไม่แตะข้อมูลที่คนยืนยันไว้
+    # The model has to be called even for human-confirmed slips, because it is the only
+    # way to know whether the slip is upside down. For those slips only the orientation is
+    # used; the confirmed data is left alone.
     res, used, full_frame = read_with_fallback(pre)
     if not res.ok:
         replace_image(conn, cand.slip_id, "processed", encode_jpeg(pre.cropped), pre.cropped.size)
@@ -84,7 +89,8 @@ def reprocess_one(conn: psycopg.Connection, cand: Candidate) -> dict[str, Any]:
     replace_image(conn, cand.slip_id, "processed", encode_jpeg(cropped), cropped.size)
 
     if cand.locked:
-        # บันทึกไว้ว่าเช็ค orientation ของใบนี้แล้ว ไม่งั้นรอบหน้าจะถูกหยิบมาทำซ้ำไม่จบ
+        # Record that this slip's orientation was checked, or the next run picks it up
+        # again, forever.
         conn.execute(
             f"""UPDATE {DB_SCHEMA}.slips
                 SET raw_ocr = raw_ocr || %s::jsonb WHERE id = %s""",
@@ -151,8 +157,9 @@ def main() -> None:
                 r = reprocess_one(conn, c)
                 conn.commit()
             except psycopg.OperationalError as exc:
-                # Postgres ฝั่ง Render ตัด connection เป็นระยะเมื่อรันยาว ๆ
-                # ต่อใหม่แล้วไปต่อใบถัดไป ใบที่ค้างจะถูกหยิบมาทำในรอบหน้าเอง
+                # Postgres on Render drops the connection periodically on long runs.
+                # Reconnect and move to the next slip; whatever was left is picked up on
+                # the next run by itself.
                 print(f"[{i}/{len(cands)}] {c.slip_id[:8]} connection หลุด ({exc}) — ต่อใหม่")
                 conn = connect()
                 continue

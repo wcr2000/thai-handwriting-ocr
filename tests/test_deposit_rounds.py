@@ -1,12 +1,13 @@
-"""รถคันเดิมที่เอามาฝากหลายรอบ ต้องดูออกว่าแถวไหน/ใบไหนคือรอบที่เท่าไหร่
+"""For a car parked over several rounds, it must be obvious which row or slip is which round.
 
-ที่มา: มีคนเอารถมาฝาก รับกลับ แล้วเอามาฝากใหม่ เห็นมาแล้ว 2-3 รอบต่อคัน
-ข้อมูลถูกอยู่แล้ว (1 ใบ = 1 รอบ) แต่หน้าค้นหาคืนมาเป็นแถวคล้าย ๆ กันเรียงตามคะแนน
-เจ้าหน้าที่ขาออกจึงต้องไล่อ่านวันที่เองว่าใบไหนคือรอบปัจจุบัน ปิดผิดใบเมื่อไหร่
-จะเหลือใบค้างที่ไม่มีใครมารับตลอดไป
+Origin: people parked, collected, and parked again — two or three rounds per car has been
+observed. The data was already correct (one slip = one round), but the search page returned
+near-identical rows ordered by score, leaving exit staff to read the dates themselves to work out
+which slip is the current round. Close the wrong one and a slip is stranded that nobody will ever
+come to collect.
 
-ต้องใช้ Postgres จริง — ของที่ทดสอบคือ window function กับลำดับแถวที่ SQL คืนมา
-ดูวิธีรันที่ tests/conftest.py
+Needs a real Postgres: what is under test is a window function and the row order SQL returns.
+See tests/conftest.py for how to run it.
 """
 
 import pytest
@@ -20,7 +21,7 @@ PLATE, TEL = "กก1234", "0810000044"
 
 @pytest.fixture
 def rounds(pgenv):
-    """สร้างใบของทะเบียนเดียวกัน N รอบ (วันละรอบ เก่าไปใหม่) คืน id เรียงตามรอบ"""
+    """Create N rounds for one plate (one per day, oldest first), returning ids in round order"""
     from ocrslip.db import connect
     from ocrslip.normalize import norm_phone, norm_plate
 
@@ -53,15 +54,16 @@ def rounds(pgenv):
 
 @pytest.fixture
 def dup_day(rounds):
-    """ใบของทะเบียนเดียวกัน N ใบใน "วันเดียวกัน" = ใบกระดาษใบเดียวที่ถูกอัปซ้ำ
+    """N slips for one plate on the *same day* = one paper slip uploaded repeatedly.
 
-    จงใจให้ที่จอดกับสถานะรถไม่เหมือนกัน — นั่นคือเหตุผลที่ของจริงหลุดตัวจับซ้ำ
-    ตอนอนุมัติมาได้ (db.same_slip() ต้องการที่จอดตรงกันและยังไม่คืนรถทั้งคู่)
+    The parking spot and car status are deliberately made to differ — that is precisely how these
+    escaped the duplicate check at approval time in production (db.same_slip() requires a matching
+    parking spot and both slips un-returned).
     """
     from ocrslip.db import connect
     from ocrslip.normalize import norm_phone, norm_plate
 
-    assert rounds  # พึ่ง fixture เดิมเพื่อล้างตาราง ไม่ต้องมีสองที่ที่รู้วิธีล้าง
+    assert rounds  # lean on the existing fixture to clear the table, rather than two places knowing how
 
     def _make(n: int = 3, *, day: str | None = "2026-09-26"):
         with connect() as conn:
@@ -82,17 +84,17 @@ def dup_day(rounds):
 
 
 def test_a_car_deposited_once_gets_no_round_label(rounds):
-    """ใบเดี่ยว ๆ ไม่ต้องติดป้าย "รอบที่ 1 จาก 1" — มีแต่รกตา"""
+    """A lone slip needs no "round 1 of 1" badge — it is pure clutter"""
     from ocrslip.db import connect, deposit_rounds
 
     only = rounds(1)
     with connect() as conn:
         assert deposit_rounds(conn, [_plate_norm()]) == {}
-        assert only  # ใบมีอยู่จริง แค่ไม่ติดป้าย
+        assert only  # the slip does exist; it simply carries no badge
 
 
 def test_rounds_are_numbered_by_deposit_date_oldest_first(rounds):
-    """รอบที่ 1 ต้องเป็นการฝากครั้งแรก ไม่ใช่ใบที่บันทึกเข้าระบบก่อน"""
+    """Round 1 must be the first deposit, not whichever slip was recorded in the system first"""
     from ocrslip.db import connect, deposit_rounds
 
     first, second, third = rounds(3)
@@ -104,7 +106,7 @@ def test_rounds_are_numbered_by_deposit_date_oldest_first(rounds):
 
 
 def test_superseded_and_rejected_slips_are_not_rounds(rounds):
-    """ใบซ้ำกับใบที่ตีกลับไม่ใช่การฝากจริงสักรอบ ต้องไม่ถูกนับรวมจนเลขรอบเพี้ยน"""
+    """Duplicates and rejected slips are not real deposits and must not be counted into a skewed round number"""
     from ocrslip.db import connect, deposit_rounds
 
     first, second, third = rounds(3)
@@ -116,11 +118,11 @@ def test_superseded_and_rejected_slips_are_not_rounds(rounds):
         conn.commit()
         got = deposit_rounds(conn, [_plate_norm()])
 
-    assert got == {}, "เหลือรอบจริงใบเดียว จึงไม่ต้องติดป้ายเลย"
+    assert got == {}, "one real round remains, so no badge is needed at all"
 
 
 def test_rounds_of_other_plates_never_bleed_in(rounds):
-    """รถคนละคันต้องนับรอบแยกกัน ไม่ใช่นับรวมเป็นกองเดียว"""
+    """Different cars must have their rounds counted separately, not pooled together"""
     from ocrslip.db import connect, deposit_rounds
     from ocrslip.normalize import norm_plate
 
@@ -134,7 +136,7 @@ def test_rounds_of_other_plates_never_bleed_in(rounds):
 
 
 def test_history_shows_every_round_with_its_slot_and_status(rounds):
-    """หน้าใบต้องบอกได้ว่ารอบไหนจอดช่องไหน และรอบไหนยังไม่ได้รับรถกลับ"""
+    """The slip page must show which bay each round used and which round is still uncollected"""
     from ocrslip.db import connect, deposit_history
 
     ids = rounds(3)
@@ -148,35 +150,36 @@ def test_history_shows_every_round_with_its_slot_and_status(rounds):
 
 
 def test_history_of_an_unknown_plate_is_empty(pgenv):
-    """ใบที่อ่านทะเบียนไม่ออก (plate_norm ว่าง) ต้องไม่ไปกวาดใบอื่นที่ก็ว่างเหมือนกัน"""
+    """A slip whose plate could not be read (empty plate_norm) must not sweep up other equally empty slips"""
     from ocrslip.db import connect, deposit_history
 
     with connect() as conn:
         assert deposit_history(conn, "") == []
 
 
-# ---------- หน้าเว็บ ----------
+# ---------- the web pages ----------
 
 def test_search_puts_the_round_still_parked_first(rounds, worker):
-    """ค้นทะเบียนแล้วแถวแรกต้องเป็นรอบที่รถยังจอดอยู่ ไม่ใช่รอบที่ปิดไปแล้ว
+    """Searching a plate must put the still-parked round first, not an already-closed one.
 
-    ใบทุกรอบได้คะแนนเท่ากันหมด (ทะเบียน/ชื่อ/เบอร์ชุดเดียวกัน) ลำดับจึงขึ้นกับชั้นรอง
-    ที่นี่จงใจให้ใบรอบที่ปิดไปแล้วเป็นใบที่บันทึกล่าสุด — ถ้าเรียงตามเวลาบันทึกอย่างเดียว
-    ใบที่รับรถไปแล้วจะขึ้นก่อน ซึ่งคือใบที่เจ้าหน้าที่ขาออกต้องไม่เปิดเป็นใบแรก
+    Every round scores identically (one set of plate, name and phone), so the order comes down to
+    the secondary sort. Here the closed round is deliberately made the most recently recorded slip:
+    ordered by record time alone, the collected slip would come first — exactly the slip exit staff
+    must not open first.
     """
     from ocrslip.db import connect
 
     ids = rounds(3)
-    with connect() as conn:  # ใบรอบแรก (รับรถไปแล้ว) ถูกบันทึกเข้าระบบทีหลังสุด
+    with connect() as conn:  # the first round (already collected) is the last one recorded
         conn.execute(f"UPDATE {TEST_SCHEMA}.slips SET created_at = now() WHERE id=%s",
                      (ids[0],))
         conn.commit()
 
     page = worker("staff").get(f"/api/search?q={PLATE}").text
 
-    # เรียงตามตำแหน่งที่ปรากฏในหน้า ไม่ใช่ลำดับที่สร้างใบ
+    # Ordered by position on the page, not by the order the slips were created
     order = sorted((i for i in ids if f"/slips/{i}" in page), key=lambda i: page.index(i))
-    assert order[0] == ids[-1], "ใบรอบที่รถยังจอดอยู่ต้องมาก่อนใบที่รับรถไปแล้ว"
+    assert order[0] == ids[-1], "the still-parked round must come before the collected one"
 
 
 def test_search_labels_which_round_each_row_is(rounds, worker):
@@ -188,31 +191,32 @@ def test_search_labels_which_round_each_row_is(rounds, worker):
 
 
 def test_slip_page_lists_all_rounds_of_the_plate(rounds, worker):
-    """จุดที่กดปล่อยรถต้องเห็นทุกรอบตรงนั้นเลย ไม่ต้องย้อนกลับไปหน้าค้นหา"""
+    """The page where a car gets released must show every round right there, with no need to go back to search"""
     ids = rounds(3)
     page = worker("staff").get(f"/slips/{ids[1]}").text
 
     assert "ทะเบียนนี้ฝากมาแล้ว 3 รอบ" in page
     assert "← ใบนี้" in page
-    assert f"/slips/{ids[2]}" in page, "ต้องกระโดดไปรอบอื่นได้"
+    assert f"/slips/{ids[2]}" in page, "it must be possible to jump to another round"
 
 
 def test_slip_page_of_a_single_round_has_no_history_card(rounds, worker):
-    """ใบที่ฝากรอบเดียวไม่ต้องมีการ์ดประวัติที่มีแถวเดียวคือตัวมันเอง"""
+    """A single-round slip needs no history card whose one row is itself"""
     only = rounds(1)
     page = worker("staff").get(f"/slips/{only[0]}").text
 
     assert "ฝากมาแล้ว" not in page
 
 
-# ---------- ใบเดียวกันที่ถูกอัปซ้ำ (วันเดียวกัน) ----------
+# ---------- the same slip uploaded repeatedly (one day) ----------
 
 def test_slips_of_the_same_day_are_one_round_not_many(dup_day):
-    """ใบซ้ำสามใบของวันเดียวกันต้องไม่กลายเป็น "ฝากรอบที่ 1/2/3 จาก 3"
+    """Three same-day duplicates must not become "round 1/2/3 of 3".
 
-    ที่มา: ใบกระดาษใบเดียวถูกถ่ายมาสามรูป ทั้งสามหลุดตัวจับซ้ำตอนอนุมัติมาได้
-    (ที่จอดพิมพ์ไม่เท่ากัน ใบหนึ่งว่าง อีกใบถูกปิดไปแล้ว) ป้ายบอกรอบจึงไปอ่านว่า
-    รถคันนี้มาฝากสามหน ซึ่งไม่จริงและทำให้เจ้าหน้าที่ขาออกไล่ปิดใบผิด
+    Origin: one paper slip photographed three times, all three escaping the duplicate check at
+    approval time (the parking spot transcribed differently, one of them empty, another already
+    closed). The round badge then read as this car having parked three times, which is untrue and
+    led exit staff to close the wrong slip.
     """
     from ocrslip.db import connect, deposit_rounds
 
@@ -221,8 +225,8 @@ def test_slips_of_the_same_day_are_one_round_not_many(dup_day):
         got = deposit_rounds(conn, [_plate_norm()])
 
     assert [got[i]["round"] for i in ids] == [1, 1, 1]
-    assert {got[i]["total"] for i in ids} == {1}, "วันเดียว = รอบเดียว"
-    assert {got[i]["dup"] for i in ids} == {3}, "ต้องบอกได้ว่าวันนั้นมีสามใบ"
+    assert {got[i]["total"] for i in ids} == {1}, "one day means one round"
+    assert {got[i]["dup"] for i in ids} == {3}, "it must convey that three slips share that day"
 
 
 def test_search_calls_same_day_slips_duplicates_not_extra_rounds(dup_day, worker):
@@ -230,12 +234,12 @@ def test_search_calls_same_day_slips_duplicates_not_extra_rounds(dup_day, worker
     page = worker("staff").get(f"/api/search?q={PLATE}").text
 
     assert "อาจเป็นใบซ้ำ · วันนี้มี 3 ใบ" in page
-    assert "ฝากรอบที่" not in page, "รอบเดียว ไม่ต้องมีป้ายบอกรอบ"
+    assert "ฝากรอบที่" not in page, "a single round needs no round badge"
     assert len(ids) == 3
 
 
 def test_a_real_second_round_still_counts_even_with_a_duplicate(dup_day):
-    """ฝากจริงสองรอบ + รอบแรกมีใบซ้ำ = ยังต้องเป็น "จาก 2 รอบ" ไม่ใช่ 3"""
+    """Two real rounds with a duplicate in the first must still read "of 2 rounds", not 3"""
     from ocrslip.db import connect, deposit_rounds
 
     twins = dup_day(2, day="2026-09-10")
@@ -246,11 +250,11 @@ def test_a_real_second_round_still_counts_even_with_a_duplicate(dup_day):
     assert [got[i]["round"] for i in twins] == [1, 1]
     assert got[later]["round"] == 2
     assert {got[i]["total"] for i in twins + [later]} == {2}
-    assert got[later]["dup"] == 1, "รอบที่สองมีใบเดียว ไม่ต้องฟ้องว่าซ้ำ"
+    assert got[later]["dup"] == 1, "the second round has one slip, so nothing should be flagged as duplicate"
 
 
 def test_slips_without_a_deposit_date_are_not_duplicates_of_each_other(dup_day):
-    """ใบที่อ่านวันที่ไม่ออกทุกใบมีวันเดียวกันคือ NULL — ต้องไม่ถูกเหมาว่าซ้ำกันหมด"""
+    """Every slip with an unreadable date shares the same "day" of NULL and must not all be lumped together as duplicates"""
     from ocrslip.db import connect, deposit_rounds
 
     ids = dup_day(2, day=None)
@@ -258,7 +262,7 @@ def test_slips_without_a_deposit_date_are_not_duplicates_of_each_other(dup_day):
         got = deposit_rounds(conn, [_plate_norm()])
 
     assert {got[i]["dup"] for i in ids} == {1}
-    assert {got[i]["total"] for i in ids} == {2}, "แยกไม่ได้ ก็ต้องนับเป็นคนละรอบไว้ก่อน"
+    assert {got[i]["total"] for i in ids} == {2}, "indistinguishable means counting them as separate rounds for now"
 
 
 def test_slip_page_marks_the_duplicate_rows(dup_day, worker):
@@ -267,7 +271,7 @@ def test_slip_page_marks_the_duplicate_rows(dup_day, worker):
 
     assert "ทะเบียนนี้ฝากมาแล้ว 1 รอบ" in page and "(2 ใบ)" in page
     assert "ซ้ำ" in page
-    assert f"/slips/{ids[1]}" in page, "ต้องกระโดดไปดูใบซ้ำอีกใบได้"
+    assert f"/slips/{ids[1]}" in page, "it must be possible to jump to the other duplicate"
 
 
 def _plate_norm() -> str:

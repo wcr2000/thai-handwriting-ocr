@@ -27,8 +27,9 @@
     <p class="muted">{% if from_db.quotes %}ตั้งไว้จากหน้านี้
        {% else %}ยังไม่เคยตั้ง — กำลังใช้ชุดคำคมที่มากับระบบ{% endif %}
        · คำคมจะวนไปทีละบรรทัดทุกวัน ส่วนสีมาจากวันในสัปดาห์</p>
-    {# ตัวเลขนี้คือทั้งหมดที่แถบสีกันได้ ถ้าไม่โชว์ คนแก้คำคมจะไม่มีทางรู้ว่าการลบคำคม
-       ให้เหลือ 7 บรรทัดทำให้ของที่ตัวเองตั้งใจใช้ตรวจภาพปลอมหมดประโยชน์ไปเกือบหมด #}
+    {# This number is the entire protection the colour band provides. Without showing it, whoever is
+       editing the quotes has no way to know that trimming them down to 7 lines strips almost all
+       the value from the very thing they meant to use for spotting a forged screenshot. #}
     {% if quote_days <= 7 %}
     <p class="field-err">มีคำคมน้อยเกินไป — คำคมจะกลับมาซ้ำที่สีเดิมทุก {{ quote_days }} วัน
        แปลว่าภาพของสัปดาห์ก่อนจะดูถูกต้องทุกอย่าง เจ้าหน้าที่จะแยกไม่ออก
@@ -53,9 +54,10 @@
   {% else %}
   <p><span class="badge bad">หน้า /in ปิดอยู่</span> — ยังไม่ได้ตั้ง <code>ENTRY_PASSWORD</code></p>
   {% endif %}
-  {# รหัสตั้งใจไม่ให้แก้จากหน้าเว็บ: ถ้าแก้ได้ก็ต้องอ่านกลับได้ แปลว่าต้องเก็บแบบไม่ hash
-     ลงฐานข้อมูล แล้วความลับก็จะไปอยู่ในที่ที่ backup ทุกชุดพาไปด้วย
-     อยู่ใน .env มันอยู่ที่เดียว และคนที่เปลี่ยนได้คือคนที่ดูแลระบบจริง ๆ เท่านั้น #}
+  {# The passcode is deliberately not editable from the web UI: being editable means being
+     readable back, which means storing it unhashed in the database — and the secret would then
+     live somewhere every backup carries along with it. In .env it lives in one place, and the only
+     people who can change it are the ones who actually administer the system. #}
   <p class="muted">เปลี่ยนรหัสที่ <code>ENTRY_PASSWORD</code> ใน <code>.env</code> เท่านั้น
      ไม่ได้ทำให้แก้จากหน้าเว็บโดยตั้งใจ — รหัสที่แก้จากหน้าเว็บได้ต้องเก็บแบบอ่านกลับได้
      ซึ่งแปลว่ามันจะติดไปกับ backup ทุกชุด</p>

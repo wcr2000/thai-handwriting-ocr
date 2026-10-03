@@ -1,11 +1,11 @@
-"""หน้าเทียบใบซ้ำที่อนุมัติไปแล้ว — ปุ่มเดียวลบถาวร จึงต้องมีเทสต์กันพลาดทุกทาง
+"""The page for comparing already-approved duplicates — one button deletes permanently, so every failure mode needs a test.
 
-สิ่งที่หน้านี้ต้องไม่ทำ สำคัญกว่าสิ่งที่มันทำ:
-  * ห้ามลบใบที่ไม่ได้อยู่ในกลุ่มเดียวกับใบที่เลือก (ฟอร์มถูกแก้ได้ทุกเมื่อ)
-  * ห้ามให้ใครที่ไม่ใช่ admin เข้าถึง
-  * ห้ามหยิบกลุ่มที่ยังไม่มีใครตรวจมาให้ตัดสิน — พวกนั้นระบบจัดการเองตอนอนุมัติ
+What this page must *not* do matters more than what it does:
+  * never delete a slip outside the group of the one selected (a form can always be tampered with)
+  * never be reachable by anybody but an admin
+  * never present a group nobody has reviewed for a decision — the system handles those at approval time
 
-ต้องใช้ Postgres จริง ดูวิธีรันที่ tests/conftest.py
+Needs a real Postgres. See tests/conftest.py for how to run it.
 """
 
 import pytest
@@ -20,7 +20,7 @@ FIELDS = {"tel": "0810000044", "province": "กรุงเทพมหานค
 
 @pytest.fixture
 def approved_twins(pgenv):
-    """ใบที่อนุมัติแล้ว N ใบของใบกระดาษใบเดียวกัน แต่ AI อ่านชื่อได้ไม่เหมือนกัน"""
+    """N approved slips for one paper slip, where the AI read the name differently each time"""
     from ocrslip.db import connect
     from ocrslip.normalize import norm_phone, norm_plate
 
@@ -54,10 +54,11 @@ def approved_twins(pgenv):
 
 @pytest.fixture
 def link_photo(pgenv):
-    """ผูกใบหลายใบให้ถือ "รูปต้นฉบับ" ก้อนเดียวกัน (hash ตรงกัน)
+    """Attach several slips to one shared original image (matching hash).
 
-    จำเป็นเพราะคีย์ข้อความของ same_slip() บังคับว่าต้องยังไม่คืนรถทั้งคู่ กลุ่มที่มีใบ
-    คืนรถไปแล้วจึงเกาะกันได้ทางรูปเท่านั้น — ซึ่งก็ตรงกับของจริง (ไฟล์เดียวกันยิงซ้ำ)
+    Necessary because same_slip()'s text key requires both slips to be un-returned, so a group
+    containing an already-collected slip can only be linked by image — which matches reality
+    anyway (the same file submitted twice).
     """
     from ocrslip.db import connect
 
@@ -88,9 +89,9 @@ def test_page_shows_the_conflicting_fields(approved_twins, worker):
 
     assert "กลุ่มที่ 1 จาก 1" in html
     assert "นายกิตติ อินเพ็ง" in html and "นายกิตติ วันเพ็ง" in html
-    # ชื่อต่างกัน -> แถวชื่อต้องถูกไฮไลต์ ส่วนเบอร์ที่ตรงกันต้องไม่
+    # The names differ -> the name row must be highlighted, while the matching phone row must not
     assert 'class="clash"' in html
-    assert html.count('class="clash"') == 1, "ต้องไฮไลต์เฉพาะช่องที่ขัดกันจริง"
+    assert html.count('class="clash"') == 1, "only genuinely conflicting fields may be highlighted"
 
 
 def test_keeping_one_slip_deletes_only_its_twins(approved_twins, worker):
@@ -103,7 +104,7 @@ def test_keeping_one_slip_deletes_only_its_twins(approved_twins, worker):
 
 
 def test_a_slip_outside_the_group_is_never_deleted(approved_twins, worker):
-    """ใบของรถคันอื่นต้องรอดทุกกรณี แม้จะอยู่ในฐานเดียวกัน"""
+    """Another car's slip must survive in every case, even sharing the same database"""
     a, b = approved_twins(("ก ก", "ข ข"))
     outsider = approved_twins(("ค ค",), plate="1กก9999")[0]
 
@@ -113,11 +114,12 @@ def test_a_slip_outside_the_group_is_never_deleted(approved_twins, worker):
 
 
 def test_forged_form_cannot_delete_across_groups(approved_twins, worker):
-    """ฟอร์มส่ง id อะไรมาก็ตาม กลุ่มถูกคำนวณใหม่ฝั่ง server เสมอ"""
+    """Whatever ids the form submits, the group is always recomputed server-side"""
     a, b = approved_twins(("ก ก", "ข ข"))
     lonely = approved_twins(("ค ค",), plate="1กก9999")[0]
 
-    # เลือกเก็บใบที่ไม่ได้อยู่ในกลุ่มซ้ำเลย -> ไม่มีกลุ่มให้จัดการ ต้องไม่ลบอะไรทั้งนั้น
+    # Choosing to keep a slip that is in no duplicate group at all -> there is no group to act on,
+    # so nothing may be deleted
     r = worker("admin").post("/dups/resolve", data={"keep": lonely, "i": 0},
                              follow_redirects=False)
     assert r.status_code == 404
@@ -125,13 +127,13 @@ def test_forged_form_cannot_delete_across_groups(approved_twins, worker):
 
 
 def test_groups_nobody_reviewed_are_not_listed(approved_twins, worker):
-    """กลุ่มที่ยังค้างคิวทั้งกลุ่มไม่ใช่งานของหน้านี้ — ระบบถอนออกเองตอนอนุมัติ"""
+    """A group still entirely in the queue is not this page's job — the system clears it at approval time"""
     approved_twins(("ก ก", "ข ข"), status="pending")
     assert "ไม่มีกลุ่มไหนเหลือให้ตัดสินแล้ว" in worker("admin").get("/dups").text
 
 
 def test_one_approved_plus_one_pending_is_not_listed(approved_twins, worker):
-    """มีใบอนุมัติใบเดียว = ไม่มีอะไรขัดกันในคลัง ใบที่ค้างคิวถูกถอนออกด้วย mark_superseded"""
+    """One approved slip means nothing conflicts in the archive; the queued one is pulled by mark_superseded"""
     approved_twins(("ก ก",))
     approved_twins(("ข ข",), status="pending")
     assert "ไม่มีกลุ่มไหนเหลือให้ตัดสินแล้ว" in worker("admin").get("/dups").text
@@ -147,7 +149,7 @@ def test_page_warns_when_the_group_mixes_stored_and_returned(approved_twins, lin
 
 
 def test_same_photo_group_shows_one_image(approved_twins, link_photo, worker):
-    """รูป hash ตรงกันทุกใบ = โชว์รูปเดียว ไม่ให้คนไล่ดูรูปเดียวกันสามรูป"""
+    """Matching image hashes across every slip = show one image, not three copies of the same one"""
     ids = approved_twins(("ก ก", "ข ข"))
     link_photo(ids)
 
@@ -167,10 +169,10 @@ def test_only_admin_can_open_or_resolve(approved_twins, worker, who):
     assert ids_left() == {a, b}
 
 
-# ---------- ปุ่มรวบกลุ่มที่ไม่มีอะไรให้ตัดสิน ----------
+# ---------- the bulk-resolve button for groups with nothing to decide ----------
 
 def test_bulk_keeps_the_oldest_of_every_identical_group(approved_twins, worker):
-    """กลุ่มที่ทุกช่องตรงกันหมด เก็บใบเก่าสุดใบเดียว — ผลในคลังเท่าเดิมทุกตัวอักษร"""
+    """A group where every field agrees keeps only the oldest — the archive ends up character-for-character the same"""
     a, b, c = approved_twins(("ก ก", "ก ก", "ก ก"))
     x, y = approved_twins(("ข ข", "ข ข"), plate="1กก9999")
 
@@ -180,7 +182,7 @@ def test_bulk_keeps_the_oldest_of_every_identical_group(approved_twins, worker):
 
 
 def test_bulk_never_touches_a_group_with_a_conflict(approved_twins, worker):
-    """ชื่ออ่านได้ไม่เหมือนกัน = มีแถวที่ผิดในคลัง ต้องให้คนดูรูป ห้ามปุ่มรวบแตะ"""
+    """Names read differently means a wrong row in the archive; a person must look at the photo, and bulk-resolve must not touch it"""
     a, b = approved_twins(("นายกิตติ อินเพ็ง", "นายกิตติ วันเพ็ง"))
 
     r = worker("admin").post("/dups/resolve-identical", follow_redirects=False)
@@ -189,7 +191,7 @@ def test_bulk_never_touches_a_group_with_a_conflict(approved_twins, worker):
 
 
 def test_bulk_skips_groups_that_mix_stored_and_returned(approved_twins, link_photo, worker):
-    """ข้อมูลตรงกันหมดแต่คนละสถานะรถ — เลือกผิดใบเปลี่ยนคำตอบว่ารถยังอยู่ไหม ต้องให้คนตัดสิน"""
+    """Identical data but differing car status — picking the wrong copy changes whether the car is still here, so a person decides"""
     a = approved_twins(("ก ก",))[0]
     b = approved_twins(("ก ก",), car_status="returned")[0]
     link_photo([a, b])
@@ -215,11 +217,12 @@ def test_bulk_needs_admin(approved_twins, worker):
 
 
 def test_whitespace_only_difference_is_not_a_conflict(approved_twins, worker):
-    """'1ขก1111' กับ '1ขก 1111' คือทะเบียนเดียวกัน ห้ามส่งไปให้คนตัดสิน
+    """'1ขก1111' and '1ขก 1111' are the same plate and must never be put to a person.
 
-    ของจริงที่เจอบนหน้าเว็บ: ใบสองใบมาจากรูปเดียวกัน (hash ตรงกัน) ต่างกันแค่ที่ AI
-    ใส่เว้นวรรคในทะเบียนกับเบอร์ไม่เหมือนกัน หน้านี้เคยไฮไลต์ว่า "ขัดกัน" ทั้งที่
-    plate_norm/tel_digits ในคลังเท่ากันเป๊ะ — คนเลยต้องมานั่งกดกลุ่มที่ไม่มีอะไรให้ตัดสิน
+    Observed on the live page: two slips from the same photo (matching hash), differing only in
+    where the AI put spaces in the plate and the phone number. This page used to highlight that as
+    a conflict even though plate_norm and tel_digits in the archive were byte-identical, leaving
+    somebody clicking through groups with nothing in them to decide.
     """
     a, b = approved_twins(("นภา ทดสอบ", "นภา ทดสอบ"))
     from ocrslip.db import connect
@@ -231,12 +234,12 @@ def test_whitespace_only_difference_is_not_a_conflict(approved_twins, worker):
         conn.commit()
 
     html = worker("admin").get("/dups").text
-    assert 'class="clash"' not in html, "เว้นวรรคต่างกันไม่ใช่ความขัดแย้ง"
+    assert 'class="clash"' not in html, "differing whitespace is not a conflict"
     assert "รวบกลุ่มที่ไม่มีอะไรให้ตัดสินทีเดียว" in html
 
 
 def test_bulk_collapses_a_whitespace_only_group(approved_twins, worker):
-    """และกลุ่มแบบนั้นต้องถูกปุ่มรวบเก็บได้เลย ไม่ใช่ค้างไว้ให้คนกด"""
+    """And such a group must be clearable by the bulk-resolve button, not left for somebody to click"""
     a, b = approved_twins(("นภา ทดสอบ", "นภา ทดสอบ"))
     from ocrslip.db import connect
     with connect() as conn:
@@ -245,11 +248,11 @@ def test_bulk_collapses_a_whitespace_only_group(approved_twins, worker):
         conn.commit()
 
     worker("admin").post("/dups/resolve-identical", follow_redirects=False)
-    assert ids_left() == {a}, "ต้องเหลือใบเก่าสุดใบเดียว"
+    assert ids_left() == {a}, "only the oldest slip may remain"
 
 
 def test_a_real_difference_is_still_a_conflict(approved_twins, worker):
-    """กันแก้เกิน: ทะเบียนที่ตัวอักษรคนละตัวยังต้องเป็นความขัดแย้งเหมือนเดิม"""
+    """Guard against overcorrecting: plates differing by an actual character must still count as a conflict"""
     a, b = approved_twins(("นภา ทดสอบ", "นภา ทดสอบ"))
     from ocrslip.db import connect
     with connect() as conn:

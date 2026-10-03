@@ -1,57 +1,62 @@
-# เทียบวิธีจับตัวใบก่อนอ่าน (crop strategy)
+# Comparing crop strategies: locating the slip before reading it
 
-ชุดทดสอบ 49 ใบ — ถ่ายใกล้ 36 ใบ, ถ่ายไกล 13 ใบ
-model เดียวกันหมด: `google/gemini-3-flash-preview` ต่างกันแค่ภาพที่ส่งเข้าไป
+Test set of 49 slips — 36 shot close up, 13 shot from a distance
+Identical model throughout: `google/gemini-3-flash-preview`. Only the image sent differs.
 
-เกณฑ์หลักคือ **CER** (สัดส่วนตัวอักษรที่ผิด ยิ่งต่ำยิ่งดี) เพราะ exact match หยาบเกินไป
-กับลายมือไทย — ส่วนใหญ่ผิดแค่ 1-2 ตัว ซึ่งยังค้นเจอด้วย fuzzy search และคนแก้ได้เร็ว
+The primary metric is **CER** (the share of characters read wrongly; lower is better), because
+exact match is far too coarse for Thai handwriting — most reads are wrong by only 1-2
+characters, which fuzzy search still finds and a reviewer corrects quickly.
 
-| วิธี | CER ช่องหลัก | ใกล้เคียง | ตรงเป๊ะ | ถูกครบ 3 ช่อง | ชื่อ≈ | เบอร์ | ทะเบียน≈ | $/1000 ใบ | p50 | หมายเหตุ |
+| strategy | core CER | near | exact | all 3 fields | name≈ | phone | plate≈ | $/1000 slips | p50 | notes |
 |---|---|---|---|---|---|---|---|---|---|---|
-| ภาพเต็ม ไม่ crop | **0.161** | 77% | 53% | 14% | 49% | 78% | 84% | $2.16 | 3.7s | - |
-| OpenCV crop | **0.124** | 82% | 59% | 18% | 61% | 86% | 88% | $1.86 | 3.4s | หากรอบไม่เจอ 1 ใบ |
-| OpenCV crop + แก้เอียง | **0.131** | 82% | 59% | 18% | 65% | 86% | 84% | $1.84 | 3.4s | หากรอบไม่เจอ 1 ใบ |
-| OpenCV + ถอยไปภาพเต็ม | **0.124** | 82% | 59% | 18% | 61% | 86% | 88% | $1.86 | 3.4s | หากรอบไม่เจอ 1 ใบ |
-| LLM หากรอบ แล้ว crop | **0.184** | 73% | 57% | 24% | 57% | 80% | 73% | $2.72 | 7.1s | หากรอบไม่เจอ 1 ใบ |
+| full frame, no crop | **0.161** | 77% | 53% | 14% | 49% | 78% | 84% | $2.16 | 3.7s | - |
+| OpenCV crop | **0.124** | 82% | 59% | 18% | 61% | 86% | 88% | $1.86 | 3.4s | quad not found on 1 slip |
+| OpenCV crop + deskew | **0.131** | 82% | 59% | 18% | 65% | 86% | 84% | $1.84 | 3.4s | quad not found on 1 slip |
+| OpenCV, falling back to full frame | **0.124** | 82% | 59% | 18% | 61% | 86% | 88% | $1.86 | 3.4s | quad not found on 1 slip |
+| LLM finds the quad, then crop | **0.184** | 73% | 57% | 24% | 57% | 80% | 73% | $2.72 | 7.1s | quad not found on 1 slip |
 
-## เฉพาะใบที่ถ่ายใกล้ (36 ใบ)
+## Slips shot close up only (36 slips)
 
-| วิธี | CER ช่องหลัก | ใกล้เคียง | ตรงเป๊ะ | ถูกครบ 3 ช่อง |
+| strategy | core CER | near | exact | all 3 fields |
 |---|---|---|---|---|
-| ภาพเต็ม ไม่ crop | **0.125** | 82% | 56% | 19% |
+| full frame, no crop | **0.125** | 82% | 56% | 19% |
 | OpenCV crop | **0.122** | 82% | 58% | 19% |
-| OpenCV crop + แก้เอียง | **0.120** | 83% | 58% | 22% |
-| OpenCV + ถอยไปภาพเต็ม | **0.122** | 82% | 58% | 19% |
-| LLM หากรอบ แล้ว crop | **0.131** | 80% | 61% | 28% |
+| OpenCV crop + deskew | **0.120** | 83% | 58% | 22% |
+| OpenCV, falling back to full frame | **0.122** | 82% | 58% | 19% |
+| LLM finds the quad, then crop | **0.131** | 80% | 61% | 28% |
 
-## เฉพาะใบที่ถ่ายไกล (13 ใบ)
+## Slips shot from a distance only (13 slips)
 
-| วิธี | CER ช่องหลัก | ใกล้เคียง | ตรงเป๊ะ | ถูกครบ 3 ช่อง |
+| strategy | core CER | near | exact | all 3 fields |
 |---|---|---|---|---|
-| ภาพเต็ม ไม่ crop | **0.260** | 62% | 44% | 0% |
+| full frame, no crop | **0.260** | 62% | 44% | 0% |
 | OpenCV crop | **0.132** | 79% | 62% | 15% |
-| OpenCV crop + แก้เอียง | **0.161** | 77% | 59% | 8% |
-| OpenCV + ถอยไปภาพเต็ม | **0.132** | 79% | 62% | 15% |
-| LLM หากรอบ แล้ว crop | **0.332** | 54% | 46% | 15% |
+| OpenCV crop + deskew | **0.161** | 77% | 59% | 8% |
+| OpenCV, falling back to full frame | **0.132** | 79% | 62% | 15% |
+| LLM finds the quad, then crop | **0.332** | 54% | 46% | 15% |
 
-## สรุป
+## Conclusions
 
-1. **การ crop ก่อนอ่านคุ้ม** — CER 0.161 -> 0.124 และถูกกว่าเพราะภาพเล็กลง token ก็น้อยลง
-   ผลชัดที่สุดกับใบที่ถ่ายไกล: CER 0.260 -> 0.132 (ครึ่งหนึ่ง) และ "ถูกครบ 3 ช่องหลัก"
-   จาก 0% เป็น 15% — ใบที่ถ่ายไกลถ้าไม่ crop คือแทบใช้ไม่ได้เลย
+1. **Cropping before reading pays off** — CER 0.161 -> 0.124, and it is cheaper, because a
+   smaller image means fewer tokens. The effect is starkest on slips shot from a distance: CER
+   0.260 -> 0.132 (halved), and "all 3 core fields correct" goes from 0% to 15%. Uncropped,
+   distant shots are essentially unusable.
 
-2. **ให้ LLM หากรอบแทน OpenCV แย่กว่า** — CER 0.184 แย่กว่าทั้ง OpenCV และภาพเต็มด้วยซ้ำ
-   แพงกว่า 46% และช้ากว่าเท่าตัว (ยิง 2 ครั้ง) LLM ตอบพิกัดมุมได้ "ใกล้เคียง" แต่ไม่แม่น
-   ระดับพิกเซล พอเอาไป warp ความคลาดเคลื่อนไม่กี่ % กลายเป็นภาพบิด/เฉือนหายทั้งบรรทัด
-   ยิ่งใบถ่ายไกลยิ่งพัง (CER 0.332)
+2. **Having an LLM find the quad instead of OpenCV is worse** — CER 0.184, worse than both
+   OpenCV and the full frame. It costs 46% more and takes twice as long (two API calls). The LLM
+   gets the corner coordinates roughly right but not to pixel accuracy, and once those are used
+   for a warp, an error of a few percent becomes a skewed image with whole lines sheared away.
+   The further the shot, the worse it gets (CER 0.332).
 
-3. **หมุนแก้เอียงหลัง crop ไม่ช่วย** — ใบถ่ายใกล้ดีขึ้นนิดเดียวซึ่งอยู่ในช่วง noise
-   แต่ใบถ่ายไกลแย่ลงชัด (0.132 -> 0.161) เพราะการหมุนต้อง interpolate ใหม่
-   ตัวหนังสือที่เล็กอยู่แล้วยิ่งเบลอ ส่วน model เองทนความเอียงระดับนี้ได้อยู่แล้ว
+3. **Deskewing after the crop does not help** — close-up shots improve marginally, within the
+   noise, while distant shots get clearly worse (0.132 -> 0.161), because rotating means
+   interpolating afresh and text that was already small blurs further. The model itself
+   tolerates this much skew anyway.
 
-## ข้อควรระวังในการอ่านตัวเลขชุดนี้
+## Caveats when reading these figures
 
-- ชุดทดสอบ 49 ใบ ถ่ายไกลแค่ 13 ใบ — ตัวเลขของกลุ่มถ่ายไกลจึงแกว่งได้มาก
-- ground truth มาจากค่าที่เจ้าหน้าที่ยืนยัน/แก้ในระบบจริง (39/49 ใบมีการแก้จริง)
-  ใบที่ไม่ได้แก้อาจเป็นเพราะคนตรวจเห็นด้วยกับที่ model อ่าน หรือกดผ่านเฉย ๆ ก็ได้
-- ทุกวิธีใช้ model เดียวกัน ต่างกันแค่ภาพที่ส่งเข้าไป จึงเทียบกันได้ตรง ๆ
+- Of the 49 slips, only 13 were shot from a distance, so figures for that group can swing widely
+- The ground truth comes from values staff confirmed or corrected in the live system (39 of 49
+  slips were actually corrected). A slip left uncorrected may mean the reviewer agreed with what
+  the model read, or simply that they clicked through
+- Every strategy uses the same model and differs only in the image sent, so they compare directly

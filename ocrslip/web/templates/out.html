@@ -7,20 +7,24 @@
 
   {% if errors %}<div class="err">กรอกไม่ครบหรือไม่ถูกต้อง {{ errors|length }} จุด — ดูข้อความสีแดงใต้ช่องนั้น</div>{% endif %}
 
-  {# ไม่มี hx-post เหมือนขาเข้า: หน้านี้ถูกเปิดจากเน็ตมือถือกลางลาน ถ้า htmx โหลดไม่ขึ้น
-     ฟอร์มต้องยัง submit ได้เอง จึงใช้ POST ธรรมดาทั้งหน้า ไม่พึ่ง JavaScript เลย #}
+  {# No hx-post, as on the way in: this page is opened over mobile data in the middle of a car
+     park. If htmx fails to load, the form still has to submit on its own — so the whole page
+     uses a plain POST and depends on no JavaScript at all. #}
   <form method="post" action="/out" autocomplete="off">
     <label for="tel">เบอร์โทร</label>
-    {# type=tel -> มือถือเด้งแป้นตัวเลขขึ้นมาให้ ไม่ต้องสลับแป้นเอง
-       ฝั่ง server เทียบจาก tel_digits ที่เหลือแต่ตัวเลข ขีดหรือช่องว่างจึงไม่ทำให้ค้นไม่เจอ #}
+    {# type=tel brings up the numeric keypad, so nobody has to switch keyboards by hand.
+       The server compares against tel_digits, which holds digits only, so a dash or a space
+       cannot stop the lookup finding anything. #}
     <input type="tel" id="tel" name="tel" value="{{ v.tel or '' }}" required
            class="{{ 'bad' if errors.tel }}" placeholder="0812345678"
            inputmode="numeric" autocomplete="off" enterkeyhint="next">
     {% if errors.tel %}<p class="field-err">{{ errors.tel }}</p>{% endif %}
 
     <label for="noplate">ทะเบียนรถ</label>
-    {# ไม่ต้องถามจังหวัด: ฝั่ง server เทียบจาก plate_norm ซึ่งตัดชื่อจังหวัด ช่องว่าง ขีด จุด
-       ออกไปแล้วตอนลงทะเบียน ถามเพิ่มมีแต่จะพลาดตรงที่คนเลือกจังหวัดคนละอันกับขาเข้า #}
+    {# The province is not asked for: the server compares against plate_norm, which already had
+       the province, spaces, dashes and dots stripped at registration time. Asking again only
+       creates a way to fail, where somebody picks a different province from the one they chose
+       on the way in. #}
     <input type="text" id="noplate" name="noplate" value="{{ v.noplate or '' }}" required
            class="{{ 'bad' if errors.noplate }}" placeholder="1กก 1234"
            autocapitalize="characters" autocorrect="off" spellcheck="false" enterkeyhint="next">
@@ -30,8 +34,9 @@
     <p class="muted" style="margin:0"><b>ส่วนนี้สำหรับเจ้าหน้าที่</b><br>
        ตรวจบัตรประชาชนเทียบชื่อบนใบก่อน แล้วพิมพ์รหัสและกดยืนยันการนำรถออก</p>
     <label for="entry_pw">รหัสเจ้าหน้าที่</label>
-    {# autocomplete=off + ไม่ render ค่าที่พิมพ์กลับลงไปในหน้า: หน้านี้เปิดบนเครื่องของผู้มาจอด
-       ห้ามให้เบราว์เซอร์ของเขาจำรหัสไว้ และห้ามให้รหัสหลุดออกไปกับ HTML เด็ดขาด #}
+    {# autocomplete=off, and what was typed is never rendered back into the page: this is opened on
+       the driver's own device, so their browser must never remember the passcode, and the
+       passcode must never leave with the HTML. #}
     <input type="password" id="entry_pw" name="entry_pw" required autocomplete="off"
            class="{{ 'bad' if errors.entry_pw }}" inputmode="text">
     {% if errors.entry_pw %}<p class="field-err">{{ errors.entry_pw }}</p>{% endif %}

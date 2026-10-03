@@ -1,35 +1,37 @@
-/* ---------- หน้าสรุปภาพรวม ----------
-   โทเคนสีของกราฟแยกออกมาจาก app.css โดยตั้งใจ: สีในกราฟต้อง "ผ่านการวัด" ไม่ใช่เลือกตามชอบ
-   ชุดนี้ผ่าน validator ของ dataviz ครบทุกข้อบนพื้นขาว (ตาบอดสี/ระยะห่างสี/คอนทราสต์)
-   ถ้าจะเปลี่ยนสี ต้องรัน validator ใหม่ อย่าเปลี่ยนด้วยสายตา */
+/* ---------- the dashboard ----------
+   The chart colour tokens are deliberately kept out of app.css: chart colours have to be
+   *measured*, not picked by taste. This set passes every check in the dataviz validator
+   against a white background (colour blindness, perceptual separation, contrast).
+   To change a colour, re-run the validator. Never change these by eye. */
 .dash {
   --surface:#fff;
   --ink:#0b0b0b;
   --ink-2:#52514e;
   --muted:#898781;
-  --grid:#e8eaee;      /* เส้นกริด: จาง 1 ระดับจากพื้น ห้ามเป็นเส้นประ */
+  --grid:#e8eaee;      /* gridlines: one step off the background, and never dashed */
   --ring:#e3e6eb;
-  --track:#eef1f6;     /* รางของแถบ = พื้นที่ว่างของค่าเดียวกัน */
+  --track:#eef1f6;     /* a bar's track = the empty remainder of the same value */
   --hover:#f5f7fa;
-  --s1:#2a78d6;        /* ซีรีส์ 1 — ยังจอดอยู่ / ค่าหลักของทุกกราฟแท่ง */
-  --s2:#1baf7a;        /* ซีรีส์ 2 — รับรถกลับแล้ว */
+  --s1:#2a78d6;        /* series 1 — still parked / the primary value in every bar chart */
+  --s2:#1baf7a;        /* series 2 — collected */
   --warn:#fab219;
   --serious:#ec835a;
   --good:#0ca30c;
 }
 
-/* ---------- หัวหน้า ---------- */
+/* ---------- page header ---------- */
 .dash-head { display:flex; align-items:flex-end; justify-content:space-between;
              gap:1rem 1.5rem; flex-wrap:wrap; margin:.2rem 0 1.4rem; }
 .dash-head .eyebrow { margin:0 0 .15rem; font-size:.9rem; font-weight:600; color:var(--ink-2); }
-/* ตัวเลขนำของหน้า มีได้ตัวเดียว — ใช้ฟอนต์เดียวกับทั้งระบบ และเป็นเลขความกว้างปกติ
-   (tabular-nums ทำให้เลขใหญ่ดูหลวม จึงสงวนไว้ใช้กับคอลัมน์ตัวเลขที่ต้องตรงหลักกันเท่านั้น) */
+/* The page's headline figure, of which there is exactly one. Same typeface as the rest of the
+   system, in proportional figures. (tabular-nums makes large numbers look loose, so it is
+   reserved for numeric columns that have to line up digit for digit.) */
 .dash-head .hero { font-size:3rem; font-weight:650; line-height:1; letter-spacing:-.02em; }
 .dash-head .hero small { font-size:1rem; font-weight:500; color:var(--ink-2); margin-left:.35rem; }
 .dash-head .asof { margin:.35rem 0 0; font-size:.85rem; color:var(--muted); }
 .dash-head .actions { display:flex; gap:.5rem; align-items:center; }
 
-/* ---------- บล็อกของหน้า ---------- */
+/* ---------- page blocks ---------- */
 .block { margin:0 0 1.6rem; }
 .block > h3 { margin:0 0 .15rem; font-size:1rem; }
 .block > .hint { margin:0 0 .7rem; font-size:.83rem; color:var(--muted); }
@@ -37,17 +39,19 @@
 .panel > h4 { margin:0 0 .1rem; font-size:.95rem; }
 .panel > .hint { margin:0 0 .8rem; font-size:.8rem; color:var(--muted); }
 .panel > .foot { margin:.8rem 0 0; font-size:.78rem; color:var(--muted); }
-/* align-items:start — ปล่อยให้แต่ละการ์ดสูงเท่าเนื้อหาตัวเอง ไม่ยืดตามการ์ดที่ยาวที่สุด
-   จนเหลือช่องว่างก้อนใหญ่ใต้การ์ดสั้น */
+/* align-items:start lets each card be as tall as its own content, rather than stretching to
+   the tallest and leaving a slab of whitespace under the short ones. */
 .grid2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr));
          gap:1rem; align-items:start; }
 
-/* ---------- ไทล์ตัวเลข ---------- */
-/* ความกว้างขั้นต่ำต้องเผื่อให้จอ 390px ได้ 2 คอลัมน์: main เหลือพื้นที่จริง 367.6px
-   ดังนั้น 2 คอลัมน์ + gap ต้องไม่เกินนั้น (164×2 + 8 = 336 เหลือที่หายใจพอควร)
-   ถ้าคำนวณไม่ผ่านแม้แต่เศษ px auto-fit จะตกไปเหลือคอลัมน์เดียวทันที
-   แล้วไทล์ 4 ใบจะเรียงเป็นตับกินทั้งหน้าจอแรกจนต้องเลื่อนยาวกว่าจะเจอกราฟ
-   ตัวเลขนี้คู่กับ gap ใน media query ข้างล่าง — แก้ตัวใดตัวหนึ่งต้องคิดอีกตัวด้วย */
+/* ---------- stat tiles ---------- */
+/* The minimum width has to leave room for 2 columns on a 390px screen: main has 367.6px of
+   usable space, so 2 columns plus the gap must come in under that (164x2 + 8 = 336, leaving
+   reasonable breathing room). Miss the arithmetic by even a fraction of a pixel and auto-fit
+   immediately drops to a single column, at which point the 4 tiles stack into a slab filling
+   the entire first screen and the charts take a long scroll to reach.
+   This number is paired with the gap in the media query below — change one and you have to
+   reconsider the other. */
 .tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(164px,1fr)); gap:.75rem; }
 .tile { background:var(--surface); border:1px solid var(--ring); border-radius:12px;
         padding:.85rem .95rem; display:flex; flex-direction:column; gap:.35rem; min-width:0; }
@@ -58,23 +62,25 @@
 .tile .v .unit { font-size:.8rem; font-weight:500; color:var(--muted); margin-left:.25rem; letter-spacing:0; }
 .tile .sub { font-size:.78rem; color:var(--muted); margin-top:auto; }
 .tile.flag .v { color:#a06a00; }
-/* มิเตอร์: รางเป็นสีอ่อนของ ramp เดียวกับแถบ เพื่อให้อ่านสถานะได้ตลอดความยาว */
+/* Meters: the track is a pale tint from the same ramp as the fill, so the status reads along
+   the full length. */
 .meter { height:6px; border-radius:99px; background:var(--track); overflow:hidden; }
 .meter > i { display:block; height:100%; border-radius:99px; background:var(--s1); }
 .meter.ok > i { background:var(--s2); }
 
-/* ---------- แถบเทียบสัดส่วน ---------- */
+/* ---------- proportional bar rows ---------- */
 .blist { display:flex; flex-direction:column; gap:.05rem; }
 .brow { display:grid; grid-template-columns:minmax(0,10.5rem) 1fr auto; align-items:center;
         gap:.7rem; padding:.3rem .35rem; border-radius:7px; }
 .brow:hover { background:var(--hover); }
-/* ป้ายภาษาไทยยาวกว่าคอลัมน์บ่อย — ให้ขึ้นบรรทัดใหม่ ดีกว่าตัดท้ายทิ้งด้วย ellipsis
-   เพราะ "model ไม่มั่นใจใน..." อ่านแล้วไม่รู้ว่าไม่มั่นใจในอะไร */
+/* Thai labels frequently run longer than the column. Wrapping beats truncating with an
+   ellipsis, because "the model was unsure about..." leaves the reader not knowing what it was
+   unsure about. */
 .brow .lbl { font-size:.88rem; line-height:1.35; overflow-wrap:anywhere; }
 .brow .lbl a { color:var(--ink); text-decoration:none; }
 .brow .lbl a:hover { color:var(--s1); text-decoration:underline; }
 .btrack { height:10px; border-radius:99px; background:var(--track); }
-/* min-width กันแถวค่าน้อยหายไปจนดูเหมือนไม่มีข้อมูล */
+/* min-width keeps a low-value row from vanishing and reading as "no data" */
 .bfill { height:100%; border-radius:99px; background:var(--s1); min-width:3px; }
 .bfill.warn { background:var(--warn); }
 .bfill.serious { background:var(--serious); }
@@ -82,8 +88,9 @@
 .bn .pct { color:var(--muted); font-size:.76rem; margin-left:.35rem; }
 .bn .ret { color:var(--muted); font-size:.76rem; margin-left:.3rem; text-decoration:none; }
 
-/* ---------- กราฟแท่งรายวัน ---------- */
-/* ความสูงรวมนับรวมแถบป้ายวันที่ไว้แล้ว ไม่ให้แกน x ตกขอบจนการ์ดมี scroll ซ้อนเล็ก ๆ */
+/* ---------- the per-day bar chart ---------- */
+/* The total height already accounts for the date-label row, so the x axis cannot fall off the
+   edge and leave the card with a small nested scrollbar. */
 .chart { --plot-h:200px; padding-left:3.2rem; position:relative; }
 .plot { position:relative; height:var(--plot-h); }
 .gl { position:absolute; left:0; right:0; height:1px; background:var(--grid); }
@@ -95,22 +102,24 @@
         display:flex; flex-direction:column; justify-content:flex-end; }
 .dcol:hover { background:linear-gradient(var(--hover),var(--hover)); }
 .seg { width:100%; max-width:22px; margin:0 auto; background:var(--s1); }
-.seg.top { border-radius:4px 4px 0 0; }        /* ปลายด้านค่าโค้ง ฐานตรงเสมอ */
+.seg.top { border-radius:4px 4px 0 0; }        /* rounded at the value end, always square at the base */
 .seg.ret { background:var(--s2); }
-.seg + .seg { margin-top:2px; }                 /* ช่องว่างสีพื้น 2px คั่นสองส่วน ไม่ใช่เส้นขอบ */
-.seg.v { min-height:2px; }   /* วันที่มีใบอยู่จริงต้องมองเห็น แม้ยอดจะเล็กกว่า 1px ของแกน */
-/* ป้ายค่าติดเฉพาะแท่งสูงสุด — ติดทุกแท่งแล้วจะอ่านไม่ออกและไม่มีใครอ่าน */
+.seg + .seg { margin-top:2px; }                 /* a 2px background gap separates the segments, not a border */
+.seg.v { min-height:2px; }   /* a day that really has slips must be visible, even when its total is under 1px of axis */
+/* Only the tallest bar is labelled — label every bar and it becomes illegible, so nobody reads any of them */
 .dcol .peak { font-size:.72rem; color:var(--ink-2); text-align:center; margin-bottom:3px;
               font-variant-numeric:tabular-nums; }
 .tip { position:absolute; bottom:100%; left:50%; transform:translateX(-50%); margin-bottom:.4rem;
        background:var(--ink); color:#fff; border-radius:7px; padding:.4rem .55rem; font-size:.75rem;
        line-height:1.45; white-space:nowrap; opacity:0; pointer-events:none; transition:opacity .1s;
        z-index:5; }
-/* :active ด้วย เพราะบนมือถือการแตะ div ที่มี tabindex ไม่ได้ทำให้เกิด :focus ทุกเบราว์เซอร์
-   ค่าตัวเลขยังอ่านได้จาก "ดูเป็นตาราง" อยู่ดี tooltip เป็นของแถมไม่ใช่ทางเดียวที่จะอ่านค่า */
+/* :active is included because on mobile, tapping a div with tabindex does not produce :focus
+   in every browser. The figures are readable from the table view regardless; the tooltip is a
+   convenience, not the only way to read a value. */
 .dcol:hover .tip, .dcol:focus-within .tip, .dcol:active .tip { opacity:1; }
-/* แท่งริมซ้าย/ขวา: ป้ายที่จัดกึ่งกลางจะล้นออกนอกจอแล้วโดน overflow-x:hidden ของ html ตัดหาย
-   จึงให้ป้ายของแท่งริมยึดขอบของตัวเองแทนการจัดกึ่งกลาง */
+/* Bars at the left and right edges: a centred tooltip overflows the viewport and gets clipped
+   by the overflow-x:hidden on html. So edge tooltips anchor to their own edge instead of
+   centring. */
 .dcol:nth-child(-n+4) .tip { left:0; transform:none; }
 .dcol:nth-last-child(-n+4) .tip { left:auto; right:0; transform:none; }
 .dcol:focus-visible { outline:2px solid var(--s1); outline-offset:-2px; }
@@ -122,12 +131,12 @@
 .legend i { width:10px; height:10px; border-radius:3px; background:var(--s1); }
 .legend i.ret { background:var(--s2); }
 
-/* ---------- แถบเตือนเรื่องคุณภาพวันที่ ---------- */
+/* ---------- the date-quality callout ---------- */
 .callout { display:flex; gap:.6rem; align-items:flex-start; margin-top:.9rem; padding:.7rem .8rem;
            background:#fff8e6; border:1px solid #f0dca8; border-radius:9px; font-size:.83rem; color:#6b5000; }
 .callout b { font-variant-numeric:tabular-nums; }
 
-/* ---------- มุมมองตาราง (ทุกกราฟต้องมี ค่าห้ามอ่านได้จาก hover อย่างเดียว) ---------- */
+/* ---------- table view (every chart needs one; a value must never be readable by hover alone) ---------- */
 .tableview { margin-top:.9rem; }
 .tableview > summary { cursor:pointer; font-size:.8rem; color:var(--ink-2); }
 .tableview table { margin-top:.5rem; font-size:.84rem; }
@@ -150,6 +159,7 @@
   .chart { padding-left:2.4rem; --plot-h:170px; }
   .gl span { font-size:.66rem; }
   .xtick { font-size:.65rem; }
-  /* นิ้วแตะได้แน่นอน: แท่งกว้าง ~11px แต่พื้นที่แตะคือทั้งคอลัมน์เต็มความสูงกราฟ */
+  /* Reliably tappable: the bar is ~11px wide, but the tap target is the whole column at full
+     chart height. */
   .tip { white-space:normal; max-width:11rem; }
 }

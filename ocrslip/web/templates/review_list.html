@@ -10,16 +10,19 @@
   <p class="filters">
     <a href="/review?filter=needs"    class="{{ 'active' if active=='needs' }}">ต้องตรวจ ({{ counts.needs_review }})</a>
     <a href="/review?filter=quick"    class="{{ 'active' if active=='quick' }}">ผ่านเร็ว ({{ counts.quick_pass }})</a>
-    {# กองใบซ้ำต้องมองเห็นได้ ไม่ใช่ซ่อนหายไปเฉย ๆ — ถ้าตีว่าซ้ำผิด ต้องมีที่ให้เจอ #}
+    {# The duplicates pile has to be visible rather than silently hidden: when something is wrongly
+     flagged as a duplicate, there has to be somewhere to find it #}
     <a href="/review?filter=dup"      class="{{ 'active' if active=='dup' }}">ซ้ำ ({{ counts.superseded }})</a>
-    {# approver เห็นเฉพาะกองที่ยังต้องทำ — กองที่ปิดงานแล้วเป็นคลังข้อมูลของทั้งระบบ #}
+    {# An approver sees only the piles still to be worked; the closed piles are the whole system's
+     data archive #}
     {% if not (user and user.is_approver) %}
     <a href="/review?filter=approved" class="{{ 'active' if active=='approved' }}">อนุมัติแล้ว ({{ counts.approved }})</a>
     <a href="/review?filter=rejected" class="{{ 'active' if active=='rejected' }}">ตีกลับ ({{ counts.rejected }})</a>
     <a href="/review?filter=all"      class="{{ 'active' if active=='all' }}">ทั้งหมด ({{ counts.total }})</a>
     {% endif %}
   </p>
-  {# ค้นในกองที่เลือกอยู่เท่านั้น กองจึงเดินไปพร้อมคำค้นเป็น hidden field #}
+  {# Searching is confined to the selected pile, so the pile travels along with the query as a
+     hidden field #}
   <form method="get" action="/review" class="row" style="align-items:flex-end; gap:.7rem">
     <input type="hidden" name="filter" value="{{ active }}">
     <div style="flex:2 1 240px">
@@ -50,8 +53,9 @@
       <td class="muted">{{ s.created_at.strftime('%d/%m %H:%M') if s.created_at else '—' }}</td>
       {% if show_reviewer %}<td>{{ s.reviewed_by or '—' }}</td>{% endif %}
       <td>{% for reason in s.review_reason %}<span class="badge warn">{{ reason_labels.get(reason, reason) }}</span>{% endfor %}
-        {# ป้ายบอกว่ามีคนถืออยู่ ไม่ซ่อนแถวทิ้ง เพราะยอดของกองกับจำนวนแถวจะไม่ตรงกันแล้วคนงง
-           การจองเป็นคำแนะนำ ไม่ใช่การล็อก ยังคลิกเข้าไปได้ถ้าจงใจ #}
+        {# A badge marks a held slip rather than hiding the row, because then the pile's total would
+           disagree with the number of rows and confuse people. A claim is advisory, not a lock —
+           it can still be clicked into deliberately. #}
         {% if s.claim_live %}<span class="badge">{{ s.claimed_name or 'มีคน' }}กำลังตรวจ</span>{% endif %}
         {% if s.superseded_by %}<span class="badge">ซ้ำกับใบที่ตรวจแล้ว</span>{% endif %}</td>
       <td><a href="/review/{{ s.id }}">ตรวจ →</a></td>

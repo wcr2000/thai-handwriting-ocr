@@ -1,21 +1,24 @@
-"""ดึงใบที่ "ยืนยันไว้ตอนที่ระบบยัง crop รูปพลาด" กลับเข้าคิวตรวจ
+"""Pull slips that were "confirmed while cropping was still broken" back into the review queue.
 
-ช่วงที่ตัวจับขอบกระดาษยังพัง คนตรวจเห็นรูปที่บิด/หมุน/ขอบขาด จึงอาจกดยืนยันข้อมูล
-ที่ผิดไปโดยไม่รู้ตัว ตัวอย่างที่เจอจริง: ใบหนึ่งเก็บทะเบียนกับยี่ห้อเป็นของรถคนละคัน
-ทั้งที่ในรูปเขียนไว้ชัดเจน
+While the paper-edge detector was still broken, reviewers were looking at images that
+were skewed, rotated or clipped, so they may have confirmed wrong data without realising
+it. A real example found in production: one slip had stored the plate and the brand from
+two different cars, even though both were written clearly in the photo.
 
-เกณฑ์: ให้ model อ่าน "ภาพคนละมุม" ของใบเดียวกัน (ภาพที่ crop แล้ว กับภาพเต็ม)
-ถ้าทั้งสองมุมได้ค่าตรงกันเอง แต่ต่างจากค่าที่เก็บไว้มาก ถึงจะหยิบมาให้คนดูซ้ำ
+The test: have the model read *two different views* of the same slip (the cropped image
+and the full frame). Only when both views agree with each other, yet differ sharply from
+the stored value, is the slip pulled back for a second human look.
 
-ต้องเป็น "คนละภาพ" เท่านั้น — การอ่านภาพเดิมซ้ำสองรอบไม่ใช่หลักฐานอะไรเลย
-เพราะ temperature=0 ภาพเดิมย่อมได้คำตอบเดิม
+The views have to be genuinely different images. Reading the same image twice proves
+nothing at all, because at temperature=0 the same image yields the same answer.
 
-ข้อจำกัดที่ต้องรู้: การที่ model อ่านได้ค่าเดิมจากสองมุม ไม่ได้แปลว่าค่าที่คนกรอก
-ผิดเสมอไป — ลายมือที่กำกวมจริง ๆ model ก็อ่านผิดเหมือนกันได้ทั้งสองมุม
-สคริปต์นี้จึง "ไม่เขียนทับข้อมูล" เด็ดขาด แค่เปลี่ยนสถานะกลับเป็น pending
-พร้อมเหตุผล recheck_bad_crop ให้คนตรวจตัดสินเองจากรูปที่ถูกต้องแล้ว
+A limitation worth stating plainly: the model agreeing across two views does not always
+mean the human-entered value is wrong — genuinely ambiguous handwriting can be misread
+the same way from both views. So this script never overwrites data. All it does is set
+the status back to pending with the reason recheck_bad_crop, leaving the decision to a
+reviewer now looking at a correct image.
 
-    python -m ocrslip.recheck            # ดูว่าจะดึงใบไหนกลับ
+    python -m ocrslip.recheck            # show which slips would be pulled back
     python -m ocrslip.recheck --apply
 """
 
@@ -34,10 +37,11 @@ from .normalize import normalize_field
 from .ocr import read_slip
 from .preprocess import preprocess
 
-# ช่องที่ใช้ตัดสิน — เป็นช่องที่ใช้ตามหารถจริง ๆ ถ้าผิดคือหารถไม่เจอ
+# The fields this decision rests on: the ones actually used to find a car again. Wrong
+# here means the car cannot be found.
 CHECKED = ("name", "tel", "noplate")
-AGREE_MAX = 0.15        # ต่างกันเองได้ไม่เกินเท่านี้ ถึงจะนับว่า "สองมุมอ่านตรงกัน"
-CONFLICT_MIN = 0.5      # ต่างจากค่าที่เก็บไว้เกินเท่านี้ ถึงจะนับว่าขัดแย้งจริง
+AGREE_MAX = 0.15        # the two views may differ by at most this much to count as "agreeing"
+CONFLICT_MIN = 0.5      # must differ from the stored value by more than this to count as a real conflict
 
 
 def _cer(truth: str, got: str) -> float:
@@ -47,9 +51,10 @@ def _cer(truth: str, got: str) -> float:
 
 
 def conflicts(stored: dict[str, Any], reads: list[dict[str, Any]]) -> list[str]:
-    """ช่องที่อ่านจากทุกมุมได้ค่าตรงกัน แต่ขัดกับค่าที่เก็บไว้
+    """Fields where every view read the same value, yet that value conflicts with what is stored.
 
-    reads ต้องมาจากภาพคนละแบบของใบเดียวกัน ไม่ใช่ภาพเดิมอ่านซ้ำ
+    reads must come from genuinely different images of the same slip, not the same image
+    read twice.
     """
     out = []
     for field in CHECKED:
@@ -77,7 +82,7 @@ def scan(conn: psycopg.Connection) -> list[dict[str, Any]]:
         if original is None:
             continue
         pre = preprocess(original)
-        # สองมุมที่เป็นอิสระจากกันจริง: ภาพที่ crop แล้ว กับภาพเต็มทั้งเฟรม
+        # Two genuinely independent views: the cropped image, and the whole frame
         views = [encode_jpeg(pre.cropped), encode_jpeg(pre.raw)]
         reads = []
         for jpeg in views:
@@ -97,7 +102,7 @@ def scan(conn: psycopg.Connection) -> list[dict[str, Any]]:
 
 
 def send_back(conn: psycopg.Connection, slip_id: str) -> None:
-    """คืนสถานะเป็น pending พร้อมเหตุผล — ไม่แตะค่าข้อมูลเลยสักช่อง"""
+    """Set the status back to pending with a reason. Not one field value is touched."""
     conn.execute(
         f"""UPDATE {DB_SCHEMA}.slips
             SET review_status = 'pending', needs_review = true,
@@ -105,8 +110,9 @@ def send_back(conn: psycopg.Connection, slip_id: str) -> None:
                                  FROM unnest(array_append(review_reason,
                                                           'recheck_bad_crop')) r),
                 reviewed_by = NULL, reviewed_at = NULL,
-                -- ใบที่ดึงกลับเข้าคิวต้องไม่พกการจองเก่ามาด้วย ไม่งั้นมันถูกถือโดยคน
-                -- ที่ไม่ได้นั่งอยู่แล้ว และจะไม่ถูกจ่ายให้ใครจนกว่าการจองจะหมดอายุ
+                -- A slip pulled back into the queue must not carry its old claim with
+                -- it, or it stays held by someone who is no longer at their desk and gets
+                -- handed to nobody until the claim expires.
                 claimed_by = NULL, claimed_name = NULL, claimed_at = NULL
             WHERE id = %s""",
         (slip_id,),

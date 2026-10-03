@@ -52,10 +52,12 @@
 </style>
 {% if error %}<div class="err">{{ error }}</div>{% endif %}
 
-{# ใบนี้มีคนตรวจไปแล้ว — ปิดปุ่มอนุมัติไว้ก่อน ไม่งั้นคนที่สองกดทับงานคนแรกได้ทันที
-   และช่อง "ผู้ตรวจ" จะโชว์ชื่อคนแรกค้างอยู่ ทำให้เข้าใจผิดว่าระบบสลับชื่อเอง #}
-{# มีคนอื่นถือใบนี้อยู่ — เตือนเฉย ๆ ไม่บล็อก อาจเป็นคนเดียวกันเปิดจากอีกเครื่อง
-   และด่านจริงคือ require_status ตอนกดอนุมัติอยู่แล้ว #}
+{# This slip has already been reviewed, so the approve button is withheld. Otherwise a second
+   person could overwrite the first one's work on the spot, and the reviewer field would still
+   be showing the first person's name — reading as though the system had swapped names by
+   itself. #}
+{# Somebody else holds this slip — a warning, not a block. It may be the same person on
+   another device, and the real guard is require_status at approval time anyway. #}
 {% if held_by %}
 <div class="err" style="background:#eef1f6; border-color:#c8d0dc; color:#42506b">
   <strong>{{ held_by.claimed_name or 'อีกคน' }}กำลังตรวจใบนี้อยู่</strong>
@@ -64,8 +66,9 @@
 </div>
 {% endif %}
 
-{# ใบที่ถูกตีว่าซ้ำกับใบที่ตรวจไปแล้ว — คิวไม่จ่ายใบนี้ให้ใครอีก แต่ยังเปิดดูได้
-   ต้องบอกให้เห็นชัดพร้อมทางไปดูใบตัวจริง ไม่งั้นคนที่เปิดมาจะไม่รู้ว่าทำไมกดอนุมัติแล้วเงียบ #}
+{# A slip marked as a duplicate of one already reviewed. The queue no longer hands it to
+   anybody, but it can still be opened. That has to be stated plainly, with a route to the
+   canonical slip — otherwise whoever opened it has no idea why pressing approve did nothing. #}
 {% if slip.superseded_by %}
 <div class="err" style="background:#eef1f6; border-color:#c8d0dc; color:#42506b">
   <strong>ใบนี้เป็นของซ้ำ</strong> — ใบกระดาษใบเดียวกันถูกอัปเข้ามาสองรอบ และใบตัวจริงตรวจไปแล้ว
@@ -90,9 +93,10 @@
 </div>
 {% endif %}
 
-{# ใบที่ผู้มาจอดกรอกเอง (/in) ไม่มีรูปใบกระดาษ ถ้ายัด <img> ไปจะได้กรอบรูปแตกครึ่งจอ
-   พร้อมบรรทัด "อ่านโดย None" — และตั้งแต่หน้า /slips มีลิงก์ "แก้ไขข้อมูลใบนี้"
-   ใบกลุ่มนี้คือใบที่ถูกเปิดเข้ามาบ่อยที่สุด ให้ฟอร์มกินเต็มความกว้างไปเลยดีกว่า #}
+{# Self-service slips (/in) have no photo of a paper slip. Forcing an <img> in gives a broken
+   image frame filling half the screen, along with a line reading "read by None". And ever
+   since the /slips page gained its "edit this slip" link, these are the slips opened most
+   often — so the form may as well take the full width. #}
 <form method="post" action="/review/{{ slip.id }}/approve" class="rev{{ ' rev-noimg' if not has_image }}">
   {% if has_image %}
   <div class="rev-img">
@@ -113,7 +117,8 @@
       <div style="margin-bottom:.3rem">
         <strong style="display:block; margin-bottom:.2rem">ตรวจและแก้ข้อมูล</strong>
         {% for reason in slip.review_reason %}<span class="badge warn">{{ reason_labels.get(reason, reason) }}</span>{% endfor %}
-        {# ใบที่กรอกเองไม่เคยผ่าน AI จะบอกว่า "AI มั่นใจทุกช่อง" ไม่ได้ #}
+        {# A self-service slip never went through the AI, so we cannot claim "the AI was confident
+   about every field". #}
         {% if not slip.review_reason %}<span class="badge ok">{{ 'ผู้มาจอดกรอกเอง เจ้าหน้าที่ยืนยันแล้ว'
            if slip.entry_source == 'typed' else 'AI มั่นใจทุกช่อง' }}</span>{% endif %}
       </div>
@@ -127,10 +132,11 @@
         {{ f('brand', 'ยี่ห้อ / รุ่น / สี', slip.brand, problems) }}
         <div class="fld">
           <label for="typecar">ประเภทรถ</label>
-          {# รายการนี้เคย hardcode ไว้ 4 อย่าง แต่ฟอร์มขาเข้าให้ผู้มาจอดพิมพ์ชนิดรถเองได้
-             (suv, มอเตอร์ไซค์, ...) ค่าที่ไม่อยู่ในรายการจึงไม่มี option ให้ selected
-             <select> เลยส่งค่าว่างกลับมา = เปิดใบมาแก้เบอร์แล้วชนิดรถหายไปเงียบ ๆ
-             ต้องเอาค่าที่ใบนี้ถืออยู่ใส่เข้าไปในรายการด้วยเสมอ #}
+          {# This list was once hardcoded to 4 entries, but the entry form lets drivers type their own
+             vehicle type (suv, motorcycle, ...). A value outside the list then had no option to
+             mark selected, so the <select> posted back an empty value — meaning that opening a
+             slip to fix a phone number silently erased its vehicle type. Whatever value this
+             slip currently holds must always be added into the list. #}
           {% set opts = [''] + car_types|list + ['อื่นๆ'] %}
           {% if slip.car_type and slip.car_type not in opts %}{% set opts = opts + [slip.car_type] %}{% endif %}
           <select id="typecar" name="typecar">
@@ -141,7 +147,7 @@
         {{ f('location', 'ที่จอดรถ', slip.location, problems, 2) }}
         <div class="fld" style="grid-column:span 2">
           <label for="reviewed_by">ผู้ตรวจ <span class="muted">(ชื่อคนจริง ไม่ใช่ชื่อบัญชี)</span></label>
-          {# ใช้ <select> ไม่ใช่ <datalist> เพราะ Safari บน iOS ไม่รองรับ datalist #}
+          {# A <select> rather than a <datalist>, because iOS Safari does not support datalist #}
           <select id="reviewed_by" name="reviewed_by" required>
             <option value="">— เลือกชื่อ —</option>
             {% for person in people %}<option value="{{ person }}"
@@ -153,7 +159,8 @@
         </div>
       </div>
 
-      {# ใบที่กรอกเองไม่ได้ผ่าน AI จึงไม่มีคะแนนความมั่นใจ ขึ้นหัวข้อว่างไว้เฉย ๆ ชวนสงสัยเปล่า ๆ #}
+      {# Self-service slips never went through the AI, so they carry no confidence scores. Showing
+   an empty heading would only invite needless doubt. #}
       {% if slip.ocr_confidence %}
       <p class="muted" style="margin:.6rem 0 0">ความมั่นใจของ AI:
         {% for k, v in slip.ocr_confidence.items() %}<span
@@ -161,11 +168,13 @@
       {% endif %}
     </div>
 
-    {# ใบที่ตรวจไปแล้วยังแสดงข้อมูลกับรูปได้ (ไว้เทียบว่าเพื่อนกรอกอะไรไว้)
-       แต่ไม่มีแถบปุ่ม — ถ้าจะแก้จริงต้องเข้ามาทาง ?edit=1 ให้รู้ตัวก่อน
-       ส่วนการกด Enter ในช่องกรอกยังยิง POST ได้อยู่ ด่านจริงจึงอยู่ที่ require_status ฝั่ง server #}
+    {# An already-reviewed slip still shows its data and photo (useful for checking what a
+       colleague entered), but without the button bar: actually editing it means coming in via
+       ?edit=1, so the intent is explicit. Pressing Enter in a field can still fire the POST,
+       which is why the real guard is require_status on the server. #}
     <div class="actbar"{% if taken %} hidden{% endif %}>
-      {# force = เจ้าของใบตั้งใจกลับมาแก้เอง (เข้ามาทาง ?edit=1) จึงข้าม optimistic lock ได้ #}
+      {# force = a deliberate return to edit one's own slip (arrived via ?edit=1), so the optimistic
+   lock may be skipped #}
       {% if slip.review_status != 'pending' %}<input type="hidden" name="force" value="1">{% endif %}
       <button type="submit" class="big">✓ {{ slip.review_status == 'pending' and 'อนุมัติ' or 'บันทึกทับ' }}{% if next_id %} → ใบถัดไป{% endif %}</button>
       <span class="muted">กด <span class="kbd">Enter</span> ก็ได้{% if remaining %} · เหลืออีก {{ remaining }} ใบ{% endif %}</span>
@@ -173,11 +182,13 @@
   </div>
 </form>
 
-{# ใครที่ตรวจใบนี้ได้ก็ตีกลับได้ — คนตรวจคือคนที่เห็นกับตาว่ารูปเบลอหรือไม่ใช่ใบจอดรถ
-   ถ้าต้องรอ admin มากด เขาจะกดอนุมัติข้อมูลที่อ่านไม่ออกทิ้งไว้แทน ซึ่งตามเก็บยากกว่า #}
-{# เฉพาะใบที่ยังอยู่ในคิวเท่านั้น — ใบที่อนุมัติไปแล้วถูกเปิดมาทาง "แก้ไขข้อมูล"
-   ซึ่งคือคนที่ตั้งใจมาแก้เบอร์ ไม่ใช่มาตัดสินว่ารูปอ่านออกไหม ถ้าปุ่มตีกลับอยู่ตรงนั้น
-   แล้วมือลั่น รถที่จอดอยู่จริงจะหลุดจากผลค้นหา แล้วตอนเจ้าของมารับจะหาไม่เจอ #}
+{# Anybody who can review this slip can reject it: the reviewer is the person who can see with
+   their own eyes that the photo is blurred or is not a parking slip at all. Made to wait for an
+   admin, they would approve unreadable data instead, which is harder to clean up afterwards. #}
+{# Only for slips still in the queue. An already-approved slip was opened through "edit", by
+   somebody who came to fix a phone number — not to judge whether a photo is readable. A reject
+   button sitting there, hit by a slip of the hand, would drop a genuinely parked car out of the
+   search results, and it would not be found when the owner came to collect. #}
 {% if user and not taken and slip.review_status == 'pending' %}
 <form method="post" action="/review/{{ slip.id }}/reject" class="card" style="margin-top:.8rem; padding:.7rem 1rem">
   <div class="row" style="align-items:flex-end; gap:.6rem">
@@ -185,8 +196,9 @@
       <label for="reason" style="margin-top:0">ตีกลับ — รูปเบลอ / ไม่ใช่ใบจอดรถ / ข้อมูลใช้ไม่ได้</label>
       <input type="text" id="reason" name="reason" placeholder="เหตุผล">
     </div>
-    {# ช่อง "ผู้ตรวจ" อยู่ในฟอร์มอนุมัติ คนละฟอร์มกัน ค่าจึงไม่ติดมาด้วย
-       ต้องคัดลอกมาตอนกดส่ง ไม่งั้นใบที่ถูกตีกลับจะไม่รู้ว่าใครเป็นคนกด #}
+    {# The reviewer field lives in the approve form, a different form, so its value does not come
+       along. It has to be copied over on submit, or a rejected slip carries no record of who
+       rejected it. #}
     <input type="hidden" name="reviewed_by" id="reject_reviewed_by">
     <div><button type="submit" class="danger">ตีกลับ</button></div>
   </div>

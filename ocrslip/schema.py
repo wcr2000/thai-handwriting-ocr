@@ -1,11 +1,18 @@
-"""Schema ของข้อมูลบนใบฝากรถ — ใช้ร่วมกันทั้ง bench และ web app
+"""Schema for the data on a parking slip — shared by the benchmark and the web app.
 
-ออกแบบจาก layout จริงของใบ (ดู example/):
-    ชื่อ ....................................................
-    เบอร์โทร ..................  วันที่ ....................
-    ทะเบียนรถ ................  ยี่ห้อ .....................
-    ประเภทรถ  ตู้ ☐  กระบะ ☐  เก๋ง ☐  อื่นๆ ..............
-และหลายใบมีข้อความ "อาคารจอด 3 ชั้น 5" เขียนแทรกข้างบน/ข้างล่างฟอร์ม
+Modelled on the real slip layout (see example/), whose printed labels read:
+    name ....................................................
+    phone .....................  date ......................
+    plate .....................  brand .....................
+    vehicle type   van |_|   pickup |_|   sedan |_|   other .....
+
+Many slips also carry a hand-written parking spot such as "อาคารจอด 3 ชั้น 5"
+("parking building 3, floor 5") squeezed in above or below the form.
+
+The field descriptions and PROMPT below stay in Thai on purpose: the slips are
+hand-written Thai, and prompting in the same language as the handwriting measured
+better in bench/report.md than an English prompt did. They are model-facing
+instructions, not comments.
 """
 
 from __future__ import annotations
@@ -82,8 +89,8 @@ PROMPT = """คุณคืออ่านลายมือภาษาไท�
 ให้ค่า confidence 0-1 ของแต่ละ field ตามความชัดของลายมือจริง ๆ (ถ้าเดาไม่ออกให้ต่ำกว่า 0.5)"""
 
 
-# model บางตัว (เช่น claude) ไม่ทำตาม json_schema แล้วตั้งชื่อ key เอง
-# map กลับเข้า field มาตรฐาน ไม่งั้นจะถูกนับว่าอ่านไม่ได้ทั้งที่อ่านถูก
+# Some models (Claude among them) ignore json_schema and invent their own key names.
+# Map those back onto the canonical fields, otherwise a correct read is scored as a miss.
 ALIASES = {
     "phone": "tel", "tel_no": "tel", "telephone": "tel", "phone_number": "tel", "mobile": "tel",
     "license_plate": "noplate", "plate": "noplate", "license": "noplate",
@@ -97,7 +104,7 @@ ALIASES = {
 
 
 def canonicalize(fields: dict) -> dict:
-    """เปลี่ยนชื่อ key ที่ model ตั้งเอง ให้กลับมาเป็น field มาตรฐาน"""
+    """Rename model-invented keys back to the canonical fields"""
     out: dict = {}
     for key, value in (fields or {}).items():
         canon = ALIASES.get(key, key)

@@ -1,4 +1,4 @@
-"""เรียก OpenRouter ให้อ่านใบฝากรถออกมาเป็น JSON ตาม SLIP_JSON_SCHEMA"""
+"""Call OpenRouter to read a parking slip into JSON shaped by SLIP_JSON_SCHEMA"""
 
 from __future__ import annotations
 
@@ -17,11 +17,11 @@ from .schema import PROMPT, SLIP_JSON_SCHEMA, canonicalize
 @dataclass
 class OcrResult:
     model: str
-    fields: dict[str, Any]              # ค่าที่อ่านได้ (name, tel, ...)
+    fields: dict[str, Any]              # the values that were read (name, tel, ...)
     confidence: dict[str, float]
     latency_s: float
-    orientation: str = "upright"        # "upside_down" = ต้องหมุนรูป 180 องศาถึงจะอ่านได้ตามปกติ
-    fills_frame: bool = True            # False = ภาพที่ส่งไปเห็นพื้นหลังเป็นส่วนใหญ่ แปลว่า crop มาผิดที่
+    orientation: str = "upright"        # "upside_down" = the image must be rotated 180° to read normally
+    fills_frame: bool = True            # False = the submitted image is mostly background, so the crop missed
     usage: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
     raw_text: str | None = None
@@ -36,14 +36,14 @@ def _data_url(jpeg: bytes) -> str:
 
 
 def _extract_json(text: str) -> dict:
-    """model บางตัวห่อ JSON ด้วย markdown fence หรือมีคำอธิบายนำหน้า"""
+    """Some models wrap the JSON in a markdown fence or prepend an explanation"""
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
     start, end = text.find("{"), text.rfind("}")
     if start == -1 or end <= start:
-        raise ValueError(f"ไม่พบ JSON ใน response: {text[:200]}")
+        raise ValueError(f"no JSON found in response: {text[:200]}")
     return json.loads(text[start : end + 1])
 
 
@@ -51,7 +51,8 @@ def _payload(model: str, jpeg: bytes, structured: bool) -> dict:
     body: dict[str, Any] = {
         "model": model,
         "temperature": 0,
-        # model รุ่นใหม่คิดก่อนตอบ (reasoning tokens) ถ้า budget น้อย JSON จะถูกตัดกลางคัน
+        # Newer models think before answering (reasoning tokens); too small a budget
+        # truncates the JSON mid-object.
         "max_tokens": 4000,
         "reasoning": {"effort": "low"},
         "usage": {"include": True},
@@ -79,7 +80,7 @@ def read_slip(
     client: httpx.Client | None = None,
     retries: int = 3,
 ) -> OcrResult:
-    """ยิงรูป 1 ใบเข้า model 1 ตัว คืนค่าที่อ่านได้ (ไม่ raise — error เก็บไว้ในผลลัพธ์)"""
+    """Send one image to one model and return what it read (never raises — errors land in the result)"""
     own_client = client is None
     client = client or httpx.Client(timeout=180)
     headers = {
@@ -99,7 +100,8 @@ def read_slip(
                     json=_payload(model, jpeg, structured),
                 )
                 if r.status_code == 400 and structured:
-                    # model ไม่รองรับ json_schema — ถอยไปใช้ prompt ล้วนแล้วแกะ JSON เอง
+                    # Model does not support json_schema — fall back to prompt-only
+                    # and parse the JSON out ourselves.
                     structured = False
                     continue
                 if r.status_code in (429, 500, 502, 503, 504):
@@ -115,7 +117,7 @@ def read_slip(
                     continue
 
                 text = body["choices"][0]["message"]["content"]
-                if isinstance(text, list):  # บาง provider คืน content เป็น list ของ block
+                if isinstance(text, list):  # some providers return content as a list of blocks
                     text = "".join(b.get("text", "") for b in text)
                 parsed = _extract_json(text)
                 conf = parsed.pop("confidence", None) or {}
@@ -125,7 +127,8 @@ def read_slip(
                     model=model,
                     fields=canonicalize(parsed),
                     orientation="upside_down" if orientation == "upside_down" else "upright",
-                    # model ที่ไม่ตอบ field นี้มา ถือว่าภาพปกติ จะได้ไม่ยิงซ้ำโดยไม่จำเป็น
+                    # Models that omit this field are treated as a normal image, so we
+                    # do not re-read it for no reason.
                     fills_frame=fills is not False,
                     confidence={k: float(v) for k, v in conf.items() if isinstance(v, (int, float))},
                     latency_s=round(time.monotonic() - started, 2),

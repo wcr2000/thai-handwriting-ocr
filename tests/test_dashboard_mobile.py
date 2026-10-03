@@ -1,15 +1,17 @@
-"""เปิดหน้าสรุปด้วยเบราว์เซอร์จริงในโหมดมือถือ แล้ววัดว่ามันไม่พัง
+"""Open the dashboard in a real browser in mobile mode and measure that it does not break.
 
-ทำไมต้องใช้เบราว์เซอร์จริง: บั๊ก layout ไม่โผล่ใน HTML ที่ server ส่งออกมา
-มันโผล่ตอนเบราว์เซอร์คำนวณความกว้างเสร็จแล้วเท่านั้น เช่น auto-fit ที่ขาดไป 0.4px
-แล้วไทล์ 4 ใบตกลงมาเรียงเป็นตับเต็มหน้าจอ — HTML เหมือนเดิมทุกตัวอักษร
+Why a real browser is needed: layout bugs do not appear in the HTML the server emits. They appear
+only once the browser has finished computing widths — an auto-fit short by 0.4px, say, dropping
+the 4 tiles into a slab filling the screen, with the HTML identical character for character.
 
-ข้อควรระวังตอนถ่ายภาพหน้าจอเอง: `--headless --window-size=390,844` ใช้วัดมือถือไม่ได้
-Chrome บน macOS บังคับความกว้างหน้าต่างขั้นต่ำ 500px แล้วค่อยครอปรูปให้เหลือ 390
-หน้าจึงถูก layout ที่ 500px — ภาพที่ได้ดูเหมือนขอบขวาโดนตัด ทั้งที่จริงไม่มีอะไรล้น
-ต้องสั่ง Emulation.setDeviceMetricsOverride ผ่าน CDP เท่านั้นถึงจะได้ viewport 390 จริง
+A caveat when taking screenshots by hand: `--headless --window-size=390,844` cannot measure
+mobile. Chrome on macOS enforces a 500px minimum window width and then crops the image down to
+390, so the page was laid out at 500px — the resulting screenshot looks as though the right edge
+were cut off when in fact nothing overflows. Only Emulation.setDeviceMetricsOverride over CDP
+yields a genuine 390 viewport.
 
-เทสนี้ข้ามเองถ้าไม่มี Chrome หรือไม่ได้ตั้ง DATABASE_URL จึงไม่บังคับให้ CI ต้องมีเบราว์เซอร์
+These tests skip themselves when Chrome is absent or DATABASE_URL is unset, so CI is not required
+to have a browser.
 """
 
 import asyncio
@@ -33,15 +35,15 @@ CHROME_CANDIDATES = (
     shutil.which("google-chrome") or "",
     shutil.which("chromium") or "",
 )
-PHONE = (390, 844)          # iPhone 15 — จอเล็กสุดที่ทีมใช้จริง
-MIN_TAP_TARGET = 24         # ขนาดพื้นที่แตะขั้นต่ำที่นิ้วกดโดน
+PHONE = (390, 844)          # iPhone 15 — the smallest screen the team actually uses
+MIN_TAP_TARGET = 24         # the smallest tap target a finger reliably hits
 
 
 def _chrome() -> str:
     for path in CHROME_CANDIDATES:
         if path and os.path.exists(path):
             return path
-    pytest.skip("ไม่มี Chrome ในเครื่องนี้")
+    pytest.skip("no Chrome on this machine")
 
 
 def _free_port() -> int:
@@ -52,9 +54,9 @@ def _free_port() -> int:
 
 @pytest.fixture(scope="module")
 def server():
-    """ยิง uvicorn จริงขึ้นมา เพราะ TestClient ไม่มี socket ให้เบราว์เซอร์ต่อ"""
+    """Start a real uvicorn, because TestClient exposes no socket for a browser to connect to"""
     if not DATABASE_URL:
-        pytest.skip("ไม่ได้ตั้ง DATABASE_URL")
+        pytest.skip("DATABASE_URL is not set")
     port = _free_port()
     proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "ocrslip.web.main:app", "--port", str(port)],
@@ -70,7 +72,7 @@ def server():
             except Exception:
                 time.sleep(0.2)
         else:
-            pytest.skip("uvicorn ไม่ขึ้นภายในเวลาที่รอ")
+            pytest.skip("uvicorn did not come up within the timeout")
         yield f"http://127.0.0.1:{port}"
     finally:
         proc.terminate()
@@ -79,7 +81,7 @@ def server():
 
 @pytest.fixture(scope="module")
 def measure(server):
-    """คืนฟังก์ชันที่รับ JS แล้วคืนค่าที่ JS นั้น return จากหน้า /dashboard บนมือถือจำลอง"""
+    """Return a function that takes JS and returns what that JS returns, from /dashboard in the emulated phone"""
     chrome = _chrome()
     token = auth.make_token(auth.User("admin", "admin"), SECRET_KEY)
 
@@ -94,8 +96,8 @@ async def _evaluate(chrome: str, base: str, token: str, expression: str):
     import websockets
 
     port = _free_port()
-    # โปรไฟล์ใหม่ทุกครั้ง — ถ้าใช้โฟลเดอร์เดิมซ้ำ Chrome จะหยิบ CSS ที่ cache ไว้รอบก่อนมาใช้
-    # แล้วเทสจะเขียวทั้งที่แก้ CSS พัง (เจอมาแล้วตอนเขียนไฟล์นี้)
+    # A fresh profile every time: reusing the same folder makes Chrome serve the CSS it cached on a
+    # previous run, so the tests go green over broken CSS (encountered while writing this file).
     profile = tempfile.TemporaryDirectory(prefix="ocrslip-cdp-")
     proc = subprocess.Popen(
         [chrome, "--headless=new", "--disable-gpu", f"--remote-debugging-port={port}",
@@ -111,7 +113,7 @@ async def _evaluate(chrome: str, base: str, token: str, expression: str):
             except Exception:
                 time.sleep(0.2)
         else:
-            pytest.skip("ต่อ CDP ไม่ติด")
+            pytest.skip("could not connect to CDP")
         ws_url = next(t["webSocketDebuggerUrl"] for t in tabs if t["type"] == "page")
         async with websockets.connect(ws_url, max_size=50_000_000) as ws:
             seq = [0]
@@ -128,7 +130,7 @@ async def _evaluate(chrome: str, base: str, token: str, expression: str):
             await call("Page.enable")
             await call("Network.enable")
             await call("Network.setCacheDisabled", cacheDisabled=True)
-            # จุดสำคัญของไฟล์นี้ — ขนาด viewport จริงของมือถือ ไม่ใช่หน้าต่างที่ถูกครอป
+            # The crux of this file: a genuine mobile viewport size, not a cropped window
             await call("Emulation.setDeviceMetricsOverride",
                        width=PHONE[0], height=PHONE[1], deviceScaleFactor=2, mobile=True)
             await call("Emulation.setFocusEmulationEnabled", enabled=True)
@@ -146,11 +148,11 @@ async def _evaluate(chrome: str, base: str, token: str, expression: str):
         profile.cleanup()
 
 
-# ---------- เทสจริง ----------
+# ---------- the tests themselves ----------
 
 def test_page_never_scrolls_sideways(measure):
-    """หน้าห้ามกว้างกว่าจอ — app.css ตั้ง overflow-x:hidden ไว้ที่ html
-    ของที่ล้นจึงไม่ทำให้เลื่อนได้ แต่จะ "โดนตัดหาย" เงียบ ๆ ซึ่งแย่กว่า
+    """The page must not be wider than the screen. app.css sets overflow-x:hidden on html, so
+    anything overflowing does not become scrollable — it is silently clipped away, which is worse.
     """
     got = measure("""({
       viewport: innerWidth,
@@ -161,26 +163,26 @@ def test_page_never_scrolls_sideways(measure):
                       && getComputedStyle(el).position !== 'absolute')
         .slice(0, 5).map(el => el.tagName + '.' + el.className)
     })""")
-    assert got["overflowing"] == [], f"มี element ล้นขอบจอ: {got['overflowing']}"
+    assert got["overflowing"] == [], f"elements overflow the viewport: {got['overflowing']}"
     assert got["doc"] <= got["viewport"] + 1
     assert got["body"] <= got["viewport"] + 1
 
 
 def test_stat_tiles_fit_two_per_row_on_a_phone(measure):
-    """ไทล์ต้องได้ 2 คอลัมน์ ไม่งั้นแค่ 4 ตัวเลขก็กินทั้งหน้าจอแรกจนต้องเลื่อนหากราฟ
+    """The tiles must come out as 2 columns, or 4 numbers alone fill the first screen and the charts take a scroll to reach.
 
-    พังง่ายมากเพราะขึ้นกับเลขสองตัวพร้อมกัน (ความกว้างขั้นต่ำของ track กับ gap)
-    เทียบกับพื้นที่จริงใน main ที่เหลือ 367.6px บนจอ 390px — เกินไปเศษ px เดียว
-    auto-fit ก็ตัดเหลือคอลัมน์เดียวทันที โดย HTML ไม่เปลี่ยนสักตัวอักษร
+    Very easy to break, because it depends on two numbers at once (the track minimum width and the
+    gap) against the 367.6px main actually has on a 390px screen. Over by a fraction of a pixel and
+    auto-fit immediately drops to one column, with the HTML unchanged character for character.
     """
     cols = measure(
         "getComputedStyle(document.querySelector('.tiles')).gridTemplateColumns.split(' ').length"
     )
-    assert cols == 2, f"ได้ {cols} คอลัมน์"
+    assert cols == 2, f"got {cols} column(s)"
 
 
 def test_chart_columns_are_big_enough_to_tap(measure):
-    """พื้นที่แตะของแต่ละวันคือทั้งคอลัมน์เต็มความสูงกราฟ ไม่ใช่เฉพาะแท่งที่กว้าง ~10px"""
+    """Each day's tap target is the whole column at full chart height, not just the ~10px-wide bar"""
     got = measure("""(() => {
       const c = document.querySelector('.dcol').getBoundingClientRect();
       return { w: Math.round(c.width), h: Math.round(c.height) };
@@ -190,7 +192,7 @@ def test_chart_columns_are_big_enough_to_tap(measure):
 
 
 def test_tooltips_stay_inside_the_screen(measure):
-    """ป้ายของแท่งริมซ้าย/ขวาต้องไม่ล้นขอบจอ ไม่งั้นจะโดนตัดจนอ่านไม่ครบ"""
+    """Tooltips on the leftmost and rightmost bars must not overflow the viewport, or they are clipped unreadable"""
     got = measure("""(() => {
       const cols = [...document.querySelectorAll('.dcol')];
       return [cols[0], cols[1], cols.at(-2), cols.at(-1)].map(c => {
@@ -204,8 +206,8 @@ def test_tooltips_stay_inside_the_screen(measure):
 
 
 def test_tapping_a_column_reveals_its_numbers(measure):
-    """บนมือถือไม่มี hover — แตะแท่งแล้วต้องเห็นตัวเลขของวันนั้น"""
-    # ต้องรอให้ transition ของ opacity วิ่งจบก่อน ไม่งั้นอ่านค่าได้ 0 ทั้งที่ CSS ถูกแล้ว
+    """There is no hover on a phone — tapping a bar must reveal that day's figures"""
+    # The opacity transition has to finish first, or the value reads 0 even though the CSS is correct
     opacity = measure("""(async () => {
       const c = document.querySelectorAll('.dcol')[15];
       c.focus();
@@ -216,7 +218,7 @@ def test_tapping_a_column_reveals_its_numbers(measure):
 
 
 def test_every_value_is_readable_without_hovering(measure):
-    """tooltip เป็นของแถม ไม่ใช่ทางเดียวที่จะอ่านค่า — ทุกกราฟต้องมีตารางกำกับ"""
+    """A tooltip is a convenience, not the only way to read a value — every chart needs an accompanying table"""
     got = measure("""({
       charts: document.querySelectorAll('.panel').length,
       tables: document.querySelectorAll('details.tableview').length
@@ -225,7 +227,7 @@ def test_every_value_is_readable_without_hovering(measure):
 
 
 def test_text_is_never_smaller_than_the_readable_floor(measure):
-    """ตัวหนังสือบนมือถือห้ามเล็กกว่า 10px — เล็กกว่านี้คืออ่านไม่ออกจริง ๆ"""
+    """Text on a phone must not be smaller than 10px — below that it is genuinely unreadable"""
     smallest = measure("""(() => {
       let min = 99;
       document.querySelectorAll('.dash *').forEach(el => {
@@ -234,4 +236,4 @@ def test_text_is_never_smaller_than_the_readable_floor(measure):
       });
       return min;
     })()""")
-    assert smallest >= 10, f"เจอตัวหนังสือขนาด {smallest}px"
+    assert smallest >= 10, f"found text at {smallest}px"

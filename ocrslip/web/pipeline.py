@@ -1,4 +1,4 @@
-"""รวมขั้นตอน: ไฟล์ที่อัปโหลด -> preprocess -> OCR -> ตัดสินว่าต้องตรวจไหม -> บันทึกลง DB"""
+"""The whole chain: uploaded file -> preprocess -> OCR -> decide if review is needed -> save to the DB"""
 
 from __future__ import annotations
 
@@ -15,18 +15,20 @@ from ..ocr import OcrResult, read_slip
 from ..preprocess import PREPROCESS_VERSION, PreprocessResult, preprocess, upright
 from ..review import evaluate
 
-# bench ชี้ว่า crop อย่างเดียวแม่นกว่าการปรับสี (71% vs 68%) — การเพิ่ม contrast ทำให้เส้นปากกาบางเสียรูป
+# The benchmark says cropping alone beats tone adjustment (71% vs 68%) — lifting contrast
+# distorts thin pen strokes.
 VARIANT = "v1_crop"
 
 
 def build_raw_ocr(
     res: OcrResult, quad_found: bool, problems: dict[str, str], **extra: Any
 ) -> dict[str, Any]:
-    """ร่องรอยของ OCR ที่เก็บไว้ตรวจย้อนหลัง — ใช้ร่วมกันระหว่างตอนอัปโหลดกับตอน reprocess
+    """The OCR audit trail kept for later inspection — shared between upload and reprocess.
 
-    orientation, fills_frame และ preprocess_version ต้องอยู่ในนี้เสมอ เพราะ reprocess
-    ใช้สามตัวนี้ตัดสินว่าใบไหนต้องทำใหม่ — ด้วย SQL ล้วน ๆ ไม่ต้องโหลดรูปมาดู
-    ถ้าไม่บันทึก ใบที่เพิ่งอัปโหลดจะถูกหยิบไปยิง model ซ้ำทุกครั้งที่รัน
+    orientation, fills_frame and preprocess_version must always be in here, because
+    reprocess uses those three to decide which slips need redoing — in pure SQL, without
+    loading a single image. Omit them and every freshly uploaded slip gets sent back to
+    the model on every run.
     """
     return {
         "fields": res.fields,
@@ -42,22 +44,27 @@ def build_raw_ocr(
 def read_with_fallback(
     pre: PreprocessResult, model: str = OCR_MODEL
 ) -> tuple[OcrResult, Image.Image, bool]:
-    """อ่านจากภาพที่ crop แล้ว ถ้าอ่านไม่ได้เลยค่อยลองใหม่ด้วยภาพเต็ม
+    """Read from the cropped image; only if that reads nothing, retry with the full frame.
 
-    คืน (ผลที่ใช้, ภาพที่ใช้อ่าน, ใช้ภาพเต็มไหม)
+    Returns (result used, image that was read, whether the full frame was used).
 
-    ตัวจับขอบกระดาษไม่มีทางถูก 100% — ที่เจอมาแล้วคือไปจับปึกกระดาษเปล่าข้าง ๆ
-    และไปจับลายไม้บนโต๊ะ พอ crop ผิด model ก็คืน null ทุกช่องโดยไม่มีใครรู้ว่าเพราะอะไร
-    การลองใหม่ด้วยภาพเต็มกู้เคสพวกนี้ได้หมดในคราวเดียว ไม่ต้องไล่จูน CV ทีละเคส
-    และเสียค่าใช้จ่ายเพิ่มเฉพาะตอนที่พังจริง ๆ เท่านั้น
+    The paper-edge detector will never be right 100% of the time — observed failures
+    include locking onto the stack of blank paper next to the slip, and onto the wood
+    grain of the table. Once the crop is wrong the model returns null for every field,
+    with nobody able to tell why. Retrying with the full frame recovers all of these cases
+    in one stroke, with no need to tune the CV for each one, and costs extra only when
+    something has actually gone wrong.
 
-    สัญญาณที่ใช้มีสองอย่าง เพราะ crop ผิดมีสองแบบ:
-      - อ่านไม่ได้สักช่อง = ไปจับของที่ไม่มีตัวหนังสือเลย (กระดาษเปล่า/พื้นโต๊ะ)
-      - model บอกว่าตัวใบไม่ได้กินพื้นที่เกือบทั้งภาพ = จับติดพื้นหลังมาเยอะจน
-        ตัวใบเล็กและเอียงอยู่ในมุมภาพ ซึ่งยังพออ่านออกแต่แม่นน้อยลงและคนตรวจดูลำบาก
-        แบบหลังนี้วัดจากฝั่ง CV ไม่ได้เลย ลองมาแล้วทุกสัญญาณ (ขนาด/สัดส่วน/ความเป็น
-        สี่เหลี่ยม/ความหนาแน่นหมึก/การชนขอบภาพ/ความอิ่มสี/คะแนนรวม) ค่าของ crop ที่ถูก
-        กับที่ไปจับโต๊ะทับกันหมด แต่ model ตอบได้ถูก 13/13 ใบตอนลองจริง
+    Two signals are used, because a bad crop comes in two shapes:
+      - nothing read at all = we locked onto something with no text on it (blank paper, table top)
+      - the model reports the slip does not fill most of the frame = so much background was
+        taken in that the slip sits small and tilted in a corner, still just about readable
+        but less accurately, and hard for a reviewer to look at.
+        The second shape cannot be measured from the CV side at all. Every signal was tried
+        (size, aspect ratio, rectangularity, ink density, collision with the frame edge,
+        colour saturation, combined score) and the values for a correct crop and for one
+        that landed on the table overlap completely. The model, meanwhile, got it right on
+        13 of 13 slips in the real trial.
     """
     res = read_slip(encode_jpeg(pre.cropped), model)
     if not res.ok or not pre.quad_found:
@@ -72,12 +79,12 @@ def read_with_fallback(
 
 
 def _read_something(res: OcrResult) -> bool:
-    """model อ่านอะไรออกมาได้บ้างไหม — ถ้าช่องสำคัญว่างหมด แปลว่าภาพที่ส่งไปใช้ไม่ได้"""
+    """Did the model read anything at all? All key fields empty means the image we sent is unusable."""
     return any((res.fields.get(f) or "") for f in ("name", "tel", "noplate"))
 
 
 def count_duplicates(conn: psycopg.Connection, fields: dict[str, Any]) -> int:
-    """นับใบที่ยังจอดอยู่และมีทะเบียนหรือเบอร์ตรงกัน — กันคีย์ซ้ำ/รถคันเดิมลงทะเบียนซ้ำ"""
+    """Count still-parked slips sharing a plate or phone — catches double entry and the same car re-registered"""
     plate, tel = norm_plate(fields.get("noplate")), norm_phone(fields.get("tel"))
     if not plate and not tel:
         return 0
@@ -98,17 +105,21 @@ def ingest(
     uploaded_by: str | None = None,
     photographer: str | None = None,
 ) -> dict[str, Any]:
-    """ประมวลผลรูป 1 ใบแล้วบันทึกเป็น pending คืนสรุปไว้แสดงผล"""
+    """Process one image, save it as pending, and return a summary for display"""
     pre = preprocess(raw)
     original_jpeg = encode_jpeg(pre.raw, quality=85)
 
-    # ด่านกันอัปซ้ำ — ต้องอยู่ "ก่อน" ยิง model สองเหตุผล: ไม่สร้างใบซ้ำให้คนตรวจต้องทำงานฟรี
-    # และไม่จ่ายค่า OCR ให้รูปที่อ่านไปแล้ว (ของจริงเคยได้ใบเกินมา 650 ใบจากการกดส่งซ้ำ)
+    # The duplicate-upload gate. It has to sit *before* the model call for two reasons: it
+    # avoids creating duplicate slips that reviewers then work through for nothing, and it
+    # avoids paying for OCR on an image already read. (In production this produced 650
+    # surplus slips from repeated submits.)
     #
-    # เทียบด้วย hash ของรูป "ต้นฉบับ" ไม่ใช่รูปที่ preprocess แล้ว เพราะไบต์ของรูป processed
-    # ขึ้นกับคำตอบของ model (มุมหมุน / ตัดสินใจ retry ด้วยภาพเต็ม) รูปเดิมยิงสองครั้งจึงได้
-    # ไบต์ไม่เท่ากันบ่อย — ด่านเดิมที่เทียบรูป processed จับใบซ้ำได้แค่ 200 จาก 650 ใบ
-    # ส่วนรูปต้นฉบับมาจาก encode_jpeg(pre.raw) ซึ่งคำนวณจากไฟล์ที่อัปมาล้วน ๆ ผลเท่าเดิมทุกครั้ง
+    # Compared on the hash of the *original* image, not the preprocessed one, because the
+    # bytes of the processed image depend on the model's answer (the rotation applied, the
+    # decision to retry with the full frame), so the same photo submitted twice often
+    # yields different bytes. The earlier gate, which compared processed images, caught
+    # only 200 of those 650. The original comes from encode_jpeg(pre.raw), computed purely
+    # from the uploaded file, and so is identical every time.
     if (twin := slip_with_image(conn, original_jpeg)) is not None:
         return {
             "ok": True, "duplicate_of": twin, "id": twin["id"],
@@ -120,15 +131,17 @@ def ingest(
     if not res.ok:
         return {"ok": False, "error": res.error}
 
-    # model อ่านใบกลับหัวได้อยู่แล้ว แต่คนตรวจอ่านไม่ได้ จึงเก็บรูปที่หมุนกลับมาตรงแล้ว
-    # หมุนหลัง OCR ไม่ใช่ก่อน จะได้ไม่ต้องยิง model ซ้ำ
+    # The model reads an upside-down slip fine, but a human reviewer cannot, so we store
+    # the image rotated upright. Rotating after OCR rather than before avoids a second
+    # model call.
     cropped = upright(used, res.orientation)
     processed_jpeg = encode_jpeg(cropped)
 
     fields = {k: v for k, v in res.fields.items()}
     reasons, problems = evaluate(fields, res.confidence, count_duplicates(conn, fields))
-    # รูปต้นฉบับไม่ซ้ำ แต่รูปที่ crop แล้วไปตรงกับใบอื่น = ถ่ายใบเดียวกันสองรูปคนละมุม
-    # เคสนี้กันแข็งไม่ได้ (ไฟล์ต่างกันจริง) จึงชู flag ให้คนตรวจตัดสินเหมือนเดิม
+    # The original is unique, but the cropped image matches another slip = the same slip
+    # photographed twice from different angles. This cannot be hard-blocked (the files
+    # genuinely differ), so it is flagged for a reviewer to decide, as before.
     if slip_with_image(conn, processed_jpeg) is not None:
         reasons = sorted({*reasons, "duplicate_image"})
 

@@ -1,22 +1,28 @@
-"""รายงานใบซ้ำ + ถอนใบซ้ำที่ยังค้างคิวออกจากคิวตรวจ
+"""Report duplicate slips and pull queued duplicates out of the review queue.
 
-ใบซ้ำเกิดจากการอัปรูปชุดเดิมเข้ามาสองรอบ (ช่องเลือกไฟล์ไม่ถูกล้างหลังอัปสำเร็จ
-คนที่คิดว่าเมื่อกี้ไม่ติดจึงกดอีกที) ผลคือคนตรวจได้ใบที่เพื่อนตรวจไปแล้วมาทำซ้ำ
-เหมือนงานที่ทำไปไม่ได้บันทึก ต้นเหตุถูกปิดที่ ingest แล้ว สคริปต์นี้ไว้เก็บของที่ค้างอยู่
+Duplicates came from uploading the same batch of photos twice (the file picker was not
+cleared after a successful upload, so anyone who thought it had not gone through
+pressed again). The effect was that reviewers were handed slips a colleague had already
+reviewed, as though the work had not been saved. The root cause is now closed at ingest;
+this script exists to clean up what was already in flight.
 
-จับซ้ำสองแบบ — แบบเดียวกับ db.same_slip() ที่ใช้ตอนอนุมัติ:
-  * รูปต้นฉบับ hash ตรงกัน = ไฟล์เดียวกันถูกยิงเข้ามาสองรอบ
-  * ทะเบียน + เบอร์ + วันที่ฝาก + ที่จอด ตรงกัน = ใบกระดาษใบเดียวกันถูกถ่ายสองรูป
-    (hash จึงต่าง) — ต้องยังไม่คืนรถทั้งคู่ด้วย ดูเหตุผลของแต่ละเงื่อนไขที่ db.same_slip()
+Two kinds of duplicate are detected — the same two that db.same_slip() uses at approval
+time:
+  * matching original-image hash = the same file was submitted twice
+  * matching plate + phone + deposit date + parking spot = one paper slip photographed
+    twice (so the hashes differ). Both must also be un-returned; see db.same_slip() for
+    the reasoning behind each condition.
 
---apply ทำแค่อย่างเดียว: ใบที่ยัง pending และมีพี่น้องที่ "อนุมัติไปแล้ว" จะถูกตีว่า
-เป็นของซ้ำ (superseded_by) แล้วหลุดออกจากคิว — ไม่ลบ ไม่แตะค่าข้อมูล ไม่แตะใบที่ตรวจแล้ว
-ใบซ้ำที่อนุมัติไปแล้วทั้งคู่ สคริปต์นี้จะรายงานไว้ให้เท่านั้น เพราะการเลือกว่าจะทิ้งใบไหน
-เป็นเรื่องที่คนต้องดูของจริง (ลบได้จากหน้าเว็บที่ /search -> เปิดใบ -> ลบใบนี้)
+--apply does exactly one thing: a slip that is still pending and has an already-approved
+sibling is marked as a duplicate (superseded_by) and drops out of the queue. Nothing is
+deleted, no field value is touched, and no reviewed slip is touched. Where both
+duplicates are already approved, this script only reports them, because choosing which
+one to discard means a person looking at the actual slips (deletable from the web UI at
+/search -> open the slip -> delete).
 
-    python -m ocrslip.dedup            # ดูรายงาน ไม่เขียนอะไร
-    python -m ocrslip.dedup --apply    # ถอนใบซ้ำที่ค้างคิวออกจากคิวจริง
-    python -m ocrslip.dedup --limit 20 # จำกัดจำนวนกลุ่มที่พิมพ์รายละเอียด
+    python -m ocrslip.dedup            # report only, writes nothing
+    python -m ocrslip.dedup --apply    # actually pull queued duplicates out of the queue
+    python -m ocrslip.dedup --limit 20 # cap how many groups are printed in detail
 """
 
 from __future__ import annotations
@@ -34,7 +40,7 @@ STATUS_LABEL = {"pending": "รอตรวจ", "approved": "อนุมัต
 
 
 def norm_location(value: str | None) -> str:
-    """ที่จอดแบบไม่ถือสาช่องว่าง/ตัวพิมพ์ — ฝั่ง Python ของ db.norm_loc() ต้องให้ผลเหมือนกัน"""
+    """Parking spot, whitespace- and case-insensitive. The Python side of db.norm_loc(); the two must agree."""
     return re.sub(r"\s+", " ", (value or "")).strip().lower()
 
 
@@ -43,12 +49,15 @@ SLIP_COLS = """s.id::text AS id, s.name, s.tel, s.plate_raw, s.plate_norm, s.tel
                    s.review_status, s.reviewed_by, s.superseded_by, s.uploaded_by,
                    s.car_status, s.returned_at, s.created_at"""
 
-# ตัวกรอง "ใบที่มีสิทธิ์ซ้ำกับใบอื่น" — คีย์หลวมกว่า group_duplicates โดยเจตนา
-# (ไม่ดูที่จอด/สถานะรถ) เพราะมันเป็นแค่ด่านตัดของที่ไม่เกี่ยวออกก่อนส่งให้ union-find
-# ตัวตัดสินจริงยังเป็น group_duplicates ตัวเดียว คีย์ที่หลวมกว่าครอบคีย์จริงอยู่แล้ว
-# จึงไม่มีใบไหนในกลุ่มจริงหลุดหายไป (ถ้าทำให้แคบกว่า กลุ่มจะขาดสมาชิกแบบเงียบ ๆ)
-# ต้องเป็น JOIN ไม่ใช่ "id IN (... OR ...)" — แบบหลังทำให้ planner ไล่ EXISTS กับ
-# row-comparison ทีละแถวของทั้งตาราง วัดได้ 11 วินาที ขณะที่ JOIN กับ UNION ใช้ไม่ถึงวินาที
+# Prefilter for "slips eligible to be a duplicate of something". Its key is deliberately
+# looser than group_duplicates' (it ignores parking spot and car status), because this is
+# only a gate that drops the irrelevant before handing the rest to union-find. The real
+# decision still lives in group_duplicates alone, and since the looser key is a superset
+# of the real one, no member of a real group can be lost here. (Making it narrower would
+# silently drop members from groups.)
+# This has to be a JOIN, not "id IN (... OR ...)": the latter makes the planner walk
+# EXISTS plus a row comparison over every row of the table — measured at 11 seconds,
+# against under a second for the JOIN with UNION.
 CANDIDATES = """
     WITH img AS (SELECT slip_id, sha256 FROM {s}.slip_images WHERE kind = 'original'),
          dup_sha AS (SELECT sha256 FROM img GROUP BY sha256
@@ -68,11 +77,12 @@ CANDIDATES = """
 def load_slips(
     conn: psycopg.Connection, *, only_candidates: bool = False
 ) -> list[dict[str, Any]]:
-    """ทุกใบ + hash ของรูปต้นฉบับ (ใบที่กรอกเองไม่มีรูป จึงเป็น NULL)
+    """Every slip plus its original image hash (self-service slips have no photo, so NULL).
 
-    only_candidates = เอาเฉพาะใบที่มีสิทธิ์ซ้ำ ใช้ตอนหน้าเว็บเรียก — ทั้งตาราง
-    (5,700 แถว) ใช้เวลา 1.7 วินาทีบนสายจริง ซึ่งช้าเกินไปสำหรับหน้าที่กดวนหลายร้อยครั้ง
-    สคริปต์ CLI ยังโหลดทั้งตารางตามเดิม เพราะรันทีเดียวจบและอยากให้เห็นภาพรวมจริง
+    only_candidates = restrict to slips eligible to be duplicates, used when the web UI
+    calls this. The whole table (5,700 rows) takes 1.7 seconds over a real connection,
+    too slow for a page that gets clicked through hundreds of times. The CLI script still
+    loads the whole table, because it runs once and the full picture is the point.
     """
     osha = f"""(SELECT i.sha256 FROM {DB_SCHEMA}.slip_images i
                      WHERE i.slip_id = s.id AND i.kind = 'original' LIMIT 1) AS osha"""
@@ -86,10 +96,11 @@ def load_slips(
 
 
 def group_duplicates(slips: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
-    """จัดใบที่เป็น "ใบเดียวกัน" ไว้กลุ่มเดียวกัน คืนเฉพาะกลุ่มที่มีมากกว่า 1 ใบ
+    """Collect slips that are "the same slip" into one group; returns only groups larger than 1.
 
-    ใช้ union-find เพราะใบสามใบอาจเกาะกันคนละทาง (A กับ B รูปเดียวกัน, B กับ C
-    ทะเบียนเดียวกัน) ถ้าจัดกลุ่มแยกตามคีย์ทีละแบบ กลุ่มเดียวกันจะถูกนับสองรอบ
+    Uses union-find because three slips can be linked along different edges (A and B share
+    an image, B and C share a plate). Grouping by one key at a time would count the same
+    group twice.
     """
     parent: dict[str, str] = {s["id"]: s["id"] for s in slips}
 
@@ -109,8 +120,10 @@ def group_duplicates(slips: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
         keys = []
         if s["osha"]:
             keys.append(("img", s["osha"]))
-        # คีย์ต้องตรงกับ db.same_slip() เป๊ะ ไม่งั้นรายงานจะบอกคนละเรื่องกับสิ่งที่ --apply ทำ
-        # (วันที่ + ที่จอด + ยังไม่คืนรถ = สามชั้นที่กันการฝากรอบใหม่ไม่ให้ถูกตีว่าซ้ำ)
+        # The key must match db.same_slip() exactly, otherwise the report describes
+        # something different from what --apply does. (Date + parking spot + not yet
+        # returned are the three layers that stop a fresh parking round being called a
+        # duplicate.)
         loc = norm_location(s["location"])
         if (s["plate_norm"] and s["tel_digits"] and s["deposit_date"] and loc
                 and s["car_status"] == "stored"):
@@ -128,10 +141,10 @@ def group_duplicates(slips: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
 
 
 def keeper_of(group: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """ใบที่ถือเป็นตัวจริงของกลุ่ม = ใบที่อนุมัติแล้วและเก่าสุด (None = ยังไม่มีใครตรวจ)
+    """The group's canonical slip = the oldest approved one (None = nobody has reviewed any).
 
-    ต้องเป็นใบที่อนุมัติแล้วเท่านั้น กลุ่มที่ยังไม่มีใครตรวจต้องปล่อยให้คนตรวจใบใดใบหนึ่ง
-    ตามปกติ — ตอนกดอนุมัติ ระบบจะถอนที่เหลือออกจากคิวให้เอง
+    It must be an approved slip. A group nobody has reviewed yet is left for a reviewer to
+    handle normally — on approval the system pulls the rest out of the queue by itself.
     """
     approved = [s for s in group if s["review_status"] == "approved"]
     return min(approved, key=lambda s: s["created_at"]) if approved else None
@@ -167,7 +180,7 @@ def main() -> None:
         print(f"กลุ่มใบซ้ำ {len(groups)} กลุ่ม — ใบเกินรวม {extra} ใบ "
               f"(มากสุด {max((len(g) for g in groups), default=0)} ใบต่อกลุ่ม)")
 
-        # สามกองที่ต้องจัดการต่างกัน
+        # Three piles, each handled differently
         clearable = [g for g in groups
                      if keeper_of(g) and any(s["review_status"] == "pending"
                                              and not s["superseded_by"] for s in g)]
@@ -204,9 +217,11 @@ def main() -> None:
 
         moved = 0
         for g in clearable:
-            # ต้องไล่ใบที่อนุมัติแล้ว "ทุกใบ" ในกลุ่ม ไม่ใช่แค่ตัวจริง — กลุ่มหนึ่งถูกเกาะไว้ด้วยกัน
-            # ด้วยคีย์คนละแบบ ใบที่ค้างคิวจึงอาจเป็นใบเดียวกับใบที่อนุมัติใบอื่นในกลุ่ม
-            # ไม่ใช่ใบที่เก่าสุด (mark_superseded ข้ามใบที่ถูกตีว่าซ้ำไปแล้ว จึงไม่นับซ้ำ)
+            # Every approved slip in the group has to be walked, not just the canonical
+            # one: a group is held together by different keys, so a queued slip may be the
+            # duplicate of some other approved slip in the group rather than the oldest
+            # one. (mark_superseded skips slips already marked, so nothing is double
+            # counted.)
             for k in sorted((s for s in g if s["review_status"] == "approved"),
                             key=lambda s: s["created_at"]):
                 moved += mark_superseded(conn, k["id"])

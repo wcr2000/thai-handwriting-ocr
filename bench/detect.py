@@ -1,7 +1,8 @@
-"""หากรอบใบฝากรถด้วย LLM แทนการใช้ OpenCV — ไว้เทียบว่าคุ้มกับการยิงเพิ่ม 1 ครั้งไหม
+"""Locate the slip's bounding quad with an LLM instead of OpenCV — to measure whether the extra
+API call pays for itself.
 
-สถาปัตยกรรมแบบเดียวกับงาน OCR บัตรประชาชนทั่วไป: จับกรอบก่อน แล้วค่อยอ่าน
-ต่างกันแค่ตัวจับกรอบเป็น LLM ไม่ใช่ detector ที่เทรนเอง
+The same architecture as conventional ID-card OCR: detect the document, then read it. The only
+difference is that the detector is an LLM rather than a model trained for the job.
 """
 
 from __future__ import annotations
@@ -44,7 +45,7 @@ SCHEMA = {
 def detect_quad(
     jpeg: bytes, size: tuple[int, int], model: str, client: httpx.Client | None = None
 ) -> tuple[np.ndarray | None, dict, float]:
-    """คืน (quad พิกัดพิกเซล, usage, latency) — quad = None ถ้าหาไม่เจอหรือตอบไม่เข้ารูป"""
+    """Return (quad in pixel coordinates, usage, latency). quad = None when nothing was found or the answer was malformed."""
     own = client is None
     client = client or httpx.Client(timeout=180)
     started = time.monotonic()

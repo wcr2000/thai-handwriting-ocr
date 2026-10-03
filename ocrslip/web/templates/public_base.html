@@ -1,5 +1,6 @@
-{# layout ของหน้าที่คนนอกเปิด — ห้ามใช้ base.html เพราะ header ของ base มีลิงก์เมนู
-   ของเจ้าหน้าที่ (อัปโหลด/คิวตรวจสอบ) ซึ่งไม่ควรโผล่ให้ผู้มาจอดเห็นหรือกดเข้าไปเจอหน้า login #}
+{# Layout for the publicly reachable pages. base.html must not be used here, because its header
+   carries the staff menu links (upload, review queue), which should neither be shown to a driver
+   nor lead them into a login page. #}
 <!doctype html>
 <html lang="th">
 <head>

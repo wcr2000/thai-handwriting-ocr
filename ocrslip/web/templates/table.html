@@ -78,7 +78,8 @@
       </td>
       <td>{% if r.car_status == 'returned' %}<span class="badge bad">รับกลับแล้ว</span>
           {% else %}<span class="badge ok">ยังจอด</span>{% endif %}</td>
-      {# ใบที่ตรวจไปแล้วก็ยังต้องแก้ได้ ข้อมูลผิดไม่ได้หายไปตอนอนุมัติ #}
+      {# An already-reviewed slip still has to be editable: wrong data does not stop being wrong at
+             the moment of approval #}
       <td><a href="/slips/{{ r.id }}">ดู</a>
           {% if r.review_status == 'pending' %} · <a href="/review/{{ r.id }}">ตรวจ</a>
           {% else %} · <a href="/review/{{ r.id }}?edit=1">แก้ไข</a>{% endif %}</td>

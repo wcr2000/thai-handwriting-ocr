@@ -45,7 +45,8 @@
   {% endif %}
 
   {% if identical_groups %}
-  {# ใช้ <details> ไม่ใช่ปุ่มเปล่า — ลบถาวรหลายสิบใบในคลิกเดียวต้องมีด่านที่เห็นด้วยตาก่อน #}
+  {# A <details> rather than a bare button: permanently deleting dozens of slips in one click needs
+     a barrier you can see first #}
   <details class="danger-zone" style="margin-top:.8rem">
     <summary>รวบกลุ่มที่ไม่มีอะไรให้ตัดสินทีเดียว ({{ identical_groups }} กลุ่ม /
       {{ identical_slips }} ใบ)</summary>
@@ -103,8 +104,9 @@
         <td class="f">เก็บใบนี้</td>
         {% for s in group %}
         <td>
-          {# ปุ่มละฟอร์ม ไม่ใช่ radio + ปุ่มเดียว — ปุ่มที่ลบถาวรต้องชี้ชัดว่ากดแล้วเก็บใบไหน
-             และต้องใช้ได้แม้ JS ไม่ทำงาน #}
+          {# One form per button rather than radios plus a single button: a button that deletes
+             permanently has to state unambiguously which slip pressing it keeps, and it has to work
+             with JS disabled. #}
           <form method="post" action="/dups/resolve"
                 onsubmit="return confirm('เก็บใบที่ {{ loop.index }} ({{ s.plate_raw or '—' }} {{ s.name or '' }}) แล้วลบอีก {{ group|length - 1 }} ใบถาวร?')">
             <input type="hidden" name="keep" value="{{ s.id }}">

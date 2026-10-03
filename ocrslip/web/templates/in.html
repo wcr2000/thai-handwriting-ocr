@@ -6,12 +6,15 @@
 
   {% if errors %}<div class="err">กรอกไม่ครบหรือไม่ถูกต้อง {{ errors|length }} จุด — ดูข้อความสีแดงใต้ช่องนั้น</div>{% endif %}
 
-  {# ไม่มี hx-post: หน้านี้ผู้มาจอดเปิดจากเน็ตมือถือกลางลาน ถ้า htmx โหลดไม่ขึ้น
-     ฟอร์มต้องยัง submit ได้เอง จึงใช้ POST ธรรมดาทั้งหน้า ไม่พึ่ง JavaScript เลย #}
+  {# No hx-post: a driver opens this page over mobile data in the middle of a car park. If htmx
+     fails to load, the form still has to submit on its own — so the whole page uses a plain
+     POST and depends on no JavaScript at all. #}
   <form method="post" action="/in" autocomplete="off">
     <label for="name">ชื่อ - นามสกุล</label>
-    {# autocorrect/autocapitalize: ชื่อคนไทยมักโดนคีย์บอร์ดมือถือแก้เป็นคำที่มันคุ้นกว่า
-       enterkeyhint=next ให้ปุ่มมุมขวาล่างของแป้นพาไปช่องถัดไป ไม่ใช่กดส่งฟอร์มกลางทาง #}
+    {# autocorrect/autocapitalize: a phone keyboard routinely "corrects" Thai personal names into
+       words it finds more familiar.
+       enterkeyhint=next makes the key in the keyboard's bottom-right move to the next field,
+       rather than submitting the form halfway through. #}
     <input type="text" id="name" name="name" value="{{ v.name or '' }}" required
            class="{{ 'bad' if errors.name }}" placeholder="สมชาย ใจดี"
            autocapitalize="words" autocorrect="off" spellcheck="false" enterkeyhint="next">
@@ -20,7 +23,7 @@
     <div class="row">
       <div class="col">
         <label for="tel">เบอร์โทร</label>
-        {# type=tel -> มือถือเด้งแป้นตัวเลขขึ้นมาให้ ไม่ต้องสลับแป้นเอง #}
+        {# type=tel brings up the numeric keypad, so nobody has to switch keyboards by hand #}
         <input type="tel" id="tel" name="tel" value="{{ v.tel or '' }}" required
                class="{{ 'bad' if errors.tel }}" placeholder="0812345678"
                inputmode="numeric" autocomplete="tel" enterkeyhint="next">
@@ -44,9 +47,12 @@
       </div>
       <div class="col">
         <label for="province">จังหวัดของทะเบียน</label>
-        {# ให้เลือกไม่ให้พิมพ์ เพราะ "ปทุม" / "ปทุมธานี " / "กรุงเทพฯ" ทำให้ขาออกค้นไม่เจอ #}
-        {# วงล้อเลือกของ iOS ต้องหมุนผ่านหลายสิบช่อง จึงยกจังหวัดที่พบบ่อยแถววัดขึ้นมาไว้กลุ่มแรก
-           กลุ่มล่างยังมีครบทุกจังหวัด (รวม "เบตง" ที่พิมพ์บนป้ายจริง) สำหรับคนที่มาจากที่ไกล #}
+        {# A dropdown rather than free text: "ปทุม" / "ปทุมธานี " / "กรุงเทพฯ" are the spellings that
+           leave the exit search finding nothing. #}
+        {# iOS's picker wheel means spinning past dozens of entries, so the provinces common around
+           the temple are promoted into the first group. The group below still holds every
+           province (including "เบตง", which is what real plates from there are printed with) for
+           people who came from further afield. #}
         <select id="province" name="province" required class="{{ 'bad' if errors.province }}">
           <option value="">— เลือกจังหวัด —</option>
           <optgroup label="พบบ่อย">
@@ -72,8 +78,9 @@
       </div>
       <div class="col">
         <label for="typecar">ชนิดรถ</label>
-        {# ใช้ select + ช่องพิมพ์ที่โผล่เมื่อเลือก "อื่นๆ" ตามแบบเดียวกับหน้าอัปโหลด
-           (iOS Safari ไม่รองรับ datalist ช่องจะกลายเป็นกล่องเปล่าไม่มีรายการให้เลือก) #}
+        {# A select plus a text box that appears on choosing "other", the same pattern as the upload
+           page. (iOS Safari does not support datalist: the field would become an empty box with
+           no list to pick from.) #}
         <select id="typecar" name="typecar" required class="{{ 'bad' if errors.typecar }}">
           <option value="">— เลือกชนิดรถ —</option>
           {% for t in car_types %}
@@ -115,8 +122,9 @@
     <p class="muted" style="margin:0"><b>ส่วนนี้สำหรับเจ้าหน้าที่</b><br>
        กรอกด้านบนครบแล้ว ยื่นเครื่องให้เจ้าหน้าที่พิมพ์รหัสและกดยืนยัน</p>
     <label for="entry_pw">รหัสเจ้าหน้าที่</label>
-    {# autocomplete=off + ล้างค่าทิ้งทุกครั้ง: หน้านี้ถูกเปิดบนเครื่องของผู้มาจอด
-       ห้ามให้เบราว์เซอร์ของเขาจำรหัสไว้ และห้าม render ค่าที่พิมพ์กลับลงไปในหน้า #}
+    {# autocomplete=off, and the value cleared every time: this page is opened on the driver's own
+       device, so their browser must never remember the passcode, and what they typed must never
+       be rendered back into the page. #}
     <input type="password" id="entry_pw" name="entry_pw" required autocomplete="off"
            class="{{ 'bad' if errors.entry_pw }}" inputmode="text">
     {% if errors.entry_pw %}<p class="field-err">{{ errors.entry_pw }}</p>{% endif %}

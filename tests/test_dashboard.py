@@ -1,11 +1,12 @@
-"""หน้าสรุปภาพรวมต้องไม่พังและต้องไม่โกหก
+"""The dashboard must neither break nor lie.
 
-สองอย่างที่หน้าสรุปพังบ่อยที่สุด และเป็นเหตุผลที่มีไฟล์นี้:
+The two ways dashboards break most often, which is why this file exists:
 
-1. หารด้วยศูนย์ตอน DB ยังว่าง — ทุกตัวเลขบนหน้านี้เป็น "กี่ % ของทั้งหมด"
-   วันแรกที่ deploy ยังไม่มีใบสักใบ หน้าจะ 500 ทั้งหน้า
-2. กราฟที่วาดข้อมูลบางส่วนแต่ดูเหมือนทั้งหมด — แกนวันครอบแค่ 30 วัน
-   ถ้าตัวเลขที่ตกขอบหายไปเงียบ ๆ คนอ่านจะสรุปผิดโดยไม่รู้ตัว
+1. Division by zero while the DB is still empty — every figure on this page is a percentage of a
+   total, and on deploy day there is not a single slip, so the whole page 500s.
+2. A chart drawing part of the data while looking like all of it — the day axis spans only 30
+   days, and if what falls outside it vanishes silently, the reader draws the wrong conclusion
+   without knowing.
 """
 
 import datetime as dt
@@ -33,14 +34,14 @@ def login(monkeypatch):
         c = TestClient(app)
         r = c.post("/login", data={"username": username, "password": TEST_PW, "next": "/"},
                    follow_redirects=False)
-        assert r.status_code == 303, f"ล็อกอิน {username} ไม่ผ่าน"
+        assert r.status_code == 303, f"login as {username} failed"
         return c
 
     return _login
 
 
 def stats(**over):
-    """ชุดข้อมูลปลอมรูปร่างเดียวกับที่ dashboard_stats คืน — เทสหน้าเว็บโดยไม่แตะ DB จริง"""
+    """A fake dataset shaped exactly like dashboard_stats' return value, so the page can be tested without a real DB"""
     base = {
         "kpi": {
             "total": 100, "approved": 40, "pending": 60, "needs_review": 55, "rejected": 3,
@@ -70,7 +71,7 @@ def render(login, monkeypatch, payload):
 
 
 class _NullConn:
-    """แทน connection จริง — dashboard_stats ถูก monkeypatch ไปแล้วจึงไม่มีใครใช้มัน"""
+    """Stands in for a real connection — dashboard_stats is monkeypatched, so nothing uses it"""
 
     def __enter__(self):
         return self
@@ -79,7 +80,7 @@ class _NullConn:
         return False
 
 
-# ---------- หน้าไม่พัง ----------
+# ---------- the page does not break ----------
 
 def test_dashboard_renders(login, monkeypatch):
     r = render(login, monkeypatch, stats())
@@ -88,7 +89,7 @@ def test_dashboard_renders(login, monkeypatch):
 
 
 def test_empty_database_does_not_crash(login, monkeypatch):
-    """DB ว่างเปล่าวันแรกที่ deploy — ทุกตัวหารเป็นศูนย์หมด ห้าม 500"""
+    """An empty DB on deploy day: every divisor is zero, and the page must not 500"""
     empty = stats(
         kpi={k: 0 for k in ("total", "approved", "pending", "needs_review", "rejected",
                             "stored", "returned", "cost_usd", "avg_cost_usd", "avg_latency")},
@@ -103,27 +104,28 @@ def test_empty_database_does_not_crash(login, monkeypatch):
 
 
 def test_no_slip_has_a_date_yet(login, monkeypatch):
-    """ทุกวันเป็นศูนย์ แกน Y ต้องยังวาดได้ (เพดานแกนห้ามเป็น 0 แล้วเอาไปหาร)"""
+    """With every day at zero, the Y axis must still render (the axis ceiling must not be 0 and then divided by)"""
     r = render(login, monkeypatch, stats())
     assert r.status_code == 200
     assert "ใบฝากรถต่อวัน" in r.text
 
 
-# ---------- หน้าไม่โกหก ----------
+# ---------- the page does not lie ----------
 
 def test_slips_outside_the_chart_window_are_reported(login, monkeypatch):
-    """ใบที่ตกขอบกราฟต้องถูกบอกจำนวนไว้บนหน้า ไม่ใช่หายไปเงียบ ๆ
+    """Slips falling outside the chart must be counted on the page, not vanish silently.
 
-    ของจริงตอนเขียนเทสนี้: 2,000 กว่าใบ แต่กราฟครอบแค่ 62% เพราะ OCR อ่านปีผิด
-    (เจอ deposit_date ปี 2083) ถ้าไม่บอก คนอ่านจะนึกว่ากราฟคือข้อมูลทั้งหมด
+    Production at the time this test was written: over 2,000 slips, of which the chart covered only
+    62%, because OCR misread the year (deposit_date values in 2083 were found). Unstated, a reader
+    assumes the chart is the whole dataset.
     """
     r = render(login, monkeypatch, stats(
         date_health={"no_date": 273, "odd_date": 480, "older": 7, "in_window": 1241},
     ))
     assert r.status_code == 200
-    assert "760" in r.text, "ต้องบอกยอดรวมที่ตกขอบกราฟ (273+480+7)"
+    assert "760" in r.text, "the total falling outside the chart must be stated (273+480+7)"
     for n in ("273", "480"):
-        assert n in r.text, f"ต้องแยกให้เห็นว่า {n} ใบตกขอบด้วยสาเหตุอะไร"
+        assert n in r.text, f"it must break out why {n} slips fall outside"
 
 
 def test_no_callout_when_every_slip_is_in_the_window(login, monkeypatch):
@@ -132,16 +134,17 @@ def test_no_callout_when_every_slip_is_in_the_window(login, monkeypatch):
 
 
 def test_every_chart_has_a_table_view(login, monkeypatch):
-    """ค่าที่อ่านได้จากความยาวแถบหรือ hover อย่างเดียว ถือว่าอ่านไม่ได้
+    """A value readable only from a bar's length or from hover counts as not readable.
 
-    บนมือถือไม่มี hover และแถบสั้น ๆ แยกกันไม่ออก — ตารางคือทางที่อ่านค่าได้เสมอ
+    On a phone there is no hover, and short bars cannot be told apart — the table is the way a
+    value can always be read.
     """
     r = render(login, monkeypatch, stats())
     assert r.text.count('class="tableview"') >= 8
 
 
 def test_peak_value_is_labelled_on_the_chart(login, monkeypatch):
-    """แท่งสูงสุดต้องมีตัวเลขติดไว้ (ติดทุกแท่งจะรกจนไม่มีใครอ่าน ติดแท่งเดียวพอ)"""
+    """The tallest bar must carry its number (labelling every bar is so cluttered nobody reads any; one is enough)"""
     days = [{"label": TODAY - dt.timedelta(days=i), "n": 0, "returned": 0} for i in range(29, -1, -1)]
     days[-1] = {"label": TODAY, "n": 1234, "returned": 30}
     r = render(login, monkeypatch, stats(by_day=days))
@@ -149,7 +152,7 @@ def test_peak_value_is_labelled_on_the_chart(login, monkeypatch):
 
 
 def test_reviewer_and_uploader_are_counted_separately(login, monkeypatch):
-    """คนอัปกับคนตรวจเป็นคนละบทบาท ลิงก์ที่กดจากแต่ละแถบต้องกรองคนละคอลัมน์"""
+    """Uploader and reviewer are separate roles, so each bar's link must filter on a different column"""
     r = render(login, monkeypatch, stats())
     assert "uploaded_by=krit" in r.text
     assert "reviewed_by=" in r.text and "review_status=approved" in r.text
@@ -160,47 +163,47 @@ def test_dashboard_is_admin_only(login):
         assert login(who).get("/dashboard", follow_redirects=False).status_code == 403
 
 
-# ---------- แกน Y ----------
+# ---------- the Y axis ----------
 
 @pytest.mark.parametrize("top", [0, 1, 7, 17, 99, 100, 1217, 5001, 999999])
 def test_axis_ticks_cover_the_tallest_bar(top):
-    """เพดานแกนต้องไม่ต่ำกว่าค่าสูงสุด ไม่งั้นแท่งจะทะลุออกนอกกรอบกราฟ"""
+    """The axis ceiling must not fall below the maximum, or bars punch out of the plot area"""
     ticks = axis_ticks(top)
     assert ticks[-1] >= top
     assert ticks[0] == 0
     assert ticks == sorted(ticks)
-    assert len(set(ticks)) == len(ticks), "ห้ามมีป้ายแกนซ้ำกัน"
+    assert len(set(ticks)) == len(ticks), "axis labels must not repeat"
 
 
 @pytest.mark.parametrize("top", [0, 1, 3, 7, 1217])
 def test_axis_top_is_never_zero(top):
-    """เพดานแกนถูกเอาไปหารเสมอ ถ้าเป็น 0 หน้าจะ 500 ทั้งหน้า"""
+    """The axis ceiling is always divided by, so a 0 takes the whole page down with a 500"""
     assert axis_ticks(top)[-1] > 0
 
 
 def test_axis_is_not_wastefully_tall():
-    """เพดานต้องกระชับพอ ไม่งั้นแท่งจริงจะเตี้ยจนดูเหมือนไม่มีข้อมูล"""
+    """The ceiling has to be tight enough, or the real bars are so short they read as no data"""
     for top in (17, 100, 1217, 8400):
         assert axis_ticks(top)[-1] <= top * 2
 
 
-# ---------- SQL จริง: ตัวเลขบนหน้าต้องบวกกันได้ลงตัว ----------
+# ---------- real SQL: the figures on the page have to reconcile ----------
 
 @pytest.fixture
 def conn():
     from ocrslip.config import DATABASE_URL
     if not DATABASE_URL:
-        pytest.skip("ไม่ได้ตั้ง DATABASE_URL")
+        pytest.skip("DATABASE_URL is not set")
     from ocrslip.db import connect
     with connect() as c:
         yield c
 
 
 def test_date_health_partitions_every_slip(conn):
-    """4 ช่องของ date_health ต้องแบ่งใบทุกใบพอดี ห้ามซ้ำ ห้ามตกหล่น
+    """date_health's 4 buckets must partition every slip exactly — none twice, none missed.
 
-    ถ้าช่วงวันที่ในเงื่อนไขเหลื่อมกันแม้แต่วันเดียว ใบจะถูกนับสองรอบ
-    แล้วแถบเตือน "ยังมีอีก N ใบ" จะรายงานเกินจริง
+    If the date ranges in those conditions overlap by even one day, slips get counted twice and the
+    "N more slips" callout overstates the figure.
     """
     from ocrslip.config import DB_SCHEMA
     from ocrslip.db import dashboard_stats
@@ -214,10 +217,10 @@ def test_date_health_partitions_every_slip(conn):
 
 
 def test_by_day_is_a_continuous_30_day_axis(conn):
-    """แกนวันต้องมีครบทุกวันเรียงจากเก่าไปใหม่ วันที่ไม่มีใบก็ต้องมีที่ของมัน
+    """The day axis must hold every day in order, oldest first; a day with no slips still gets its place.
 
-    ของเดิมหยิบเฉพาะวันที่บังเอิญมีใบมาเรียงติดกัน วันว่างจึงหายไปจากแกน
-    ทำให้แท่งที่ห่างกันเป็นเดือนดูเหมือนอยู่ติดกัน
+    The previous version strung together only the days that happened to have slips, so empty days
+    vanished from the axis and bars months apart appeared adjacent.
     """
     from ocrslip.db import dashboard_stats
 
@@ -228,7 +231,7 @@ def test_by_day_is_a_continuous_30_day_axis(conn):
 
 
 def test_by_day_only_counts_plausible_dates(conn):
-    """ใบที่ OCR อ่านปีผิด (เช่น 2083) ต้องไม่โผล่มาเป็นแท่งในกราฟ 30 วัน"""
+    """A slip whose year OCR misread (2083, say) must not appear as a bar in the 30-day chart"""
     from ocrslip.db import dashboard_stats
 
     d = dashboard_stats(conn)

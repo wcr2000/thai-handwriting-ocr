@@ -1,8 +1,9 @@
-"""ตั้งค่าตัวเลือกอาคาร/ชั้นของฟอร์มขาเข้า จากหน้าเว็บ
+"""Configuring the entry form's building and floor choices from the web UI.
 
-เหตุผลที่ย้ายมาไว้บนหน้าเว็บคือ "งานแต่ละครั้งเปิดอาคารไม่เหมือนกัน และคนที่รู้ว่า
-วันนี้เปิดอาคารไหนคือคนหน้างาน ไม่ใช่คนที่ถือ dashboard ของ Render" เทสต์ในไฟล์นี้
-จึงเน้นสองเรื่อง: แก้แล้วมีผลทันทีโดยไม่ต้องรีสตาร์ต และสิทธิ์ต้องเป็นของ admin เท่านั้น
+The reason this moved onto the web UI: each event opens a different set of buildings, and the
+people who know which ones are open today are the people on the ground, not whoever holds the
+Render dashboard. So these tests focus on two things: an edit takes effect immediately with no
+restart, and only an admin may make one.
 """
 
 import datetime as dt
@@ -30,7 +31,7 @@ GOOD = {
 
 @pytest.fixture
 def admin(pgenv, monkeypatch):
-    """ล้างค่าตั้งเดิมทุกครั้ง แล้วคืน client ที่ล็อกอินเป็น admin"""
+    """Clear any existing settings, then return a client logged in as admin"""
     from ocrslip.db import connect
 
     monkeypatch.setattr(main, "ENTRY_PASSWORD", ENTRY_PW)
@@ -58,27 +59,27 @@ def _login(username: str) -> TestClient:
 
 @pytest.mark.parametrize("username", ["staff", "approve"])
 def test_only_admin_can_open_or_save_settings(admin, username):
-    """หน้านี้เปลี่ยนสิ่งที่คนนอกเห็นในฟอร์มสาธารณะ จึงต้องเป็นของ admin เท่านั้น"""
+    """This page changes what the public sees on a public form, so it must be admin-only"""
     c = _login(username)
     assert c.get("/settings", follow_redirects=False).status_code == 403
     assert c.post("/settings", data={"buildings": "x", "floors": "y"}).status_code == 403
 
 
 def test_saved_buildings_show_up_in_the_public_form_right_away(admin):
-    """แก้แล้วต้องมีผลทันที — ถ้าต้องรีสตาร์ตถึงจะเห็น ก็ไม่ต่างจากการตั้งใน env"""
+    """An edit must take effect immediately — needing a restart to see it would be no better than setting it in env"""
     admin.post("/settings", data={"buildings": "อาคารบุญ\nอาคารธรรม", "floors": "ชั้น 1\nชั้น 2"})
 
     html = TestClient(app).get("/in").text
     assert "อาคารบุญ" in html and "อาคารธรรม" in html
-    # ค่าตั้งต้นจาก env ต้องหายไป ไม่ใช่ต่อท้ายกันจนมีทั้งสองชุด
+    # The env defaults must disappear rather than being appended, leaving both sets present
     assert "ลานจอดรอบนอก" not in html
 
 
 def test_clearing_the_boxes_falls_back_to_env_defaults(admin):
-    """ล้างช่อง = ถอยกลับไปใช้ค่าใน .env ไม่ใช่ตั้งรายการเป็น "ว่าง" ทับค่าตั้งต้น
+    """Clearing the field falls back to .env, rather than setting the list *to* empty over the default.
 
-    ถ้าเก็บสตริงว่างไว้แทนการลบแถว ฟอร์มขาเข้าจะเหลือ dropdown ที่ไม่มีตัวเลือกอะไรเลย
-    แล้วไม่มีใครลงทะเบียนได้ทั้งงาน
+    Storing an empty string instead of deleting the row would leave the entry form with a dropdown
+    holding no options at all, and nobody could register for the whole event.
     """
     admin.post("/settings", data={"buildings": "อาคารเดียว", "floors": "ชั้นเดียว"})
     admin.post("/settings", data={"buildings": "   \n  ", "floors": ""})
@@ -89,10 +90,11 @@ def test_clearing_the_boxes_falls_back_to_env_defaults(admin):
 
 
 def test_public_form_rejects_a_building_that_is_no_longer_offered(admin):
-    """ตรวจฝั่ง server กับรายการ "ปัจจุบัน" เสมอ ไม่ใช่รายการตอนที่หน้าถูก render
+    """Server-side validation always uses the *current* list, not the list as of when the page rendered.
 
-    คนเปิดหน้าค้างไว้ตั้งแต่เช้า แล้วผู้ดูแลปิดอาคารนั้นไปตอนบ่าย ค่าที่ส่งมาทีหลัง
-    ต้องไม่ผ่าน ไม่งั้นได้ใบที่ระบุที่จอดซึ่งวันนั้นไม่ได้เปิดใช้
+    Somebody leaves the page open from the morning, and an admin closes that building in the
+    afternoon. A value submitted afterwards must be rejected, or we get a slip naming a parking
+    spot that was not in use that day.
     """
     admin.post("/settings", data={"buildings": "อาคารบุญ", "floors": "ชั้น 1"})
 
@@ -105,8 +107,8 @@ def test_public_form_rejects_a_building_that_is_no_longer_offered(admin):
 
 
 def test_settings_page_never_offers_to_edit_the_entry_password(admin):
-    """รหัสเจ้าหน้าที่ต้องอยู่ใน .env เท่านั้น — แก้จากหน้าเว็บได้แปลว่าต้องเก็บ
-    แบบอ่านกลับได้ในฐานข้อมูล แล้วความลับจะติดไปกับ backup ทุกชุด
+    """The staff passcode belongs in .env alone. Being editable from the web UI would mean storing it
+    readably in the database, and the secret would then travel with every backup.
     """
     html = admin.get("/settings").text
     assert ENTRY_PW not in html
@@ -115,25 +117,27 @@ def test_settings_page_never_offers_to_edit_the_entry_password(admin):
 
 
 def test_saved_quotes_show_up_on_the_slip_right_away(admin):
-    """คำคมที่ทีมตั้งเอง ต้องขึ้นบนใบที่ผู้มาจอดแคปเก็บไว้ทันที
+    """A quote the team sets must appear immediately on the slip the driver screenshots.
 
-    28/09/2026 เป็นวันจันทร์ ใส่คำคมบรรทัดเดียวเพื่อให้รู้แน่ว่าจะได้บรรทัดไหน
-    ไม่ต้องคำนวณว่าวันนั้นวนไปถึงคำคมอันที่เท่าไหร่
+    28/09/2026 is a Monday. A single quote line is used so there is no doubt which line comes out,
+    with no need to work out where that date lands in the rotation.
     """
     admin.post("/settings", data={"buildings": "อาคารบุญ", "floors": "ชั้น 1",
                                   "quotes": "คำคมของทีมเราเอง"})
 
     r = TestClient(app).post("/in", data={**GOOD, "building": "อาคารบุญ", "floor": "ชั้น 1"})
     assert "คำคมของทีมเราเอง" in r.text
-    # แถบไม่มีชื่อวันเป็นตัวหนังสือแล้ว เหลือ "สี" เป็นตัวบอกวัน — ยืนยันที่สีแทน
-    # #a67c00 คือสีวันจันทร์ใน DAY_COLORS ถ้าแถบหลุดไปใช้สีของวันที่เปิดหน้า เทสต์นี้จะจับได้
+    # The band no longer prints the weekday as text, leaving the colour to convey the day — so
+    # assert on the colour instead. #a67c00 is Monday's colour in DAY_COLORS; if the band ever
+    # fell back to the colour of the day the page was opened, this test would catch it.
     assert "#a67c00" in r.text
 
 
 def test_clearing_the_quotes_falls_back_to_the_built_in_set(admin):
-    """ล้างคำคมจนหมดต้องกลับไปใช้ชุดที่มากับระบบ ไม่ใช่ได้แถบเปล่า ๆ หรือหน้าพัง
+    """Clearing the quotes entirely must fall back to the set shipped with the system, not give an empty band or a broken page.
 
-    หน้านี้คือหน้าสุดท้ายของการลงทะเบียน ถ้ามันพังคือรถเข้ามาจอดแล้วแต่ไม่มีใบให้แคป
+    This is the final page of registration: if it breaks, the car is already parked but there is
+    no slip to screenshot.
     """
     admin.post("/settings", data={"buildings": "อาคารบุญ", "floors": "ชั้น 1",
                                   "quotes": "คำคมของทีมเราเอง"})

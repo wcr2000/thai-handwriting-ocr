@@ -1,7 +1,8 @@
-"""ให้คะแนนผลจาก run_bench.py เทียบกับ example/label.json แล้วออกรายงาน bench/report.md
+"""Score run_bench.py's results against example/label.json and write bench/report.md.
 
-ทุก field ถูก normalize ก่อนเทียบเสมอ (เลขไทย, คำนำหน้าชื่อ, ยี่ห้อภาษาไทย/อังกฤษ, รูปแบบวันที่)
-จึงวัด "อ่านถูกไหม" ไม่ใช่ "พิมพ์เหมือนเป๊ะไหม"
+Every field is normalized before comparison (Thai numerals, name honorifics, brand names in
+Thai or English, date formats), so what is measured is "did it read correctly?" rather than
+"does it match character for character?"
 """
 
 from __future__ import annotations
@@ -23,12 +24,13 @@ ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "bench" / "out"
 
 SCORED_FIELDS = ["name", "tel", "date", "noplate", "brand", "typecar", "location", "province"]
-# field ที่ต้องถูกครบถึงจะนับว่า "ใบนี้ถูกทั้งใบ" — location/province ไม่นับเพราะหลายใบไม่ได้เขียน
+# The fields that must all be right for a slip to count as fully correct. location and province
+# are excluded, because many slips simply do not have them filled in.
 CORE_FIELDS = ["name", "tel", "date", "noplate", "brand", "typecar"]
 
 
 def cer(truth: str, got: str) -> float:
-    """character error rate: 0 = ตรงเป๊ะ, 1 = ผิดหมด"""
+    """Character error rate: 0 = exact, 1 = entirely wrong"""
     if not truth:
         return 0.0 if not got else 1.0
     return min(1.0, Levenshtein.distance(truth, got) / len(truth))
@@ -66,7 +68,7 @@ def score_run(labels: dict[str, dict], model: str, variant: str) -> dict | None:
             got = normalize_field(f, canonicalize(data.get("fields")).get(f))
             ok = want == got
             per_field[f].append(ok)
-            # "ใกล้เคียง" = ผิดไม่เกิน ~15% ของความยาว ซึ่ง fuzzy search ยังหาเจอ
+            # "near" = wrong by no more than ~15% of the length, which fuzzy search still finds
             near[f].append(ok or (bool(want) and cer(want, got) <= 0.2))
             cers[f].append(cer(want, got))
             if f in CORE_FIELDS and not ok:
@@ -109,17 +111,18 @@ def main() -> None:
         if (r := score_run(labels, model, variant))
     ]
     if not rows:
-        print("ยังไม่มีผลใน bench/out — รัน bench/run_bench.py ก่อน")
+        print("no results in bench/out yet — run bench/run_bench.py first")
         return
 
     rows.sort(key=lambda r: (-r["mean_acc"], r["cost_per_1000"]))
 
     lines = [
-        "# ผลวัด accuracy: model × preprocessing",
+        "# Accuracy benchmark: model x preprocessing",
         "",
-        f"ชุดทดสอบ: {rows[0]['n']} ใบ จาก `example/` เทียบกับ `example/label.json` (normalize ก่อนเทียบทุก field)",
+        f"Test set: {rows[0]['n']} slips from `example/`, scored against `example/label.json` "
+        f"(every field normalized before comparison)",
         "",
-        "| อันดับ | model | variant | เฉลี่ย core | ถูกทั้งใบ | ชื่อ | ชื่อ≈ | เบอร์ | วันที่ | ทะเบียน | ทะเบียน≈ | ยี่ห้อ | ประเภท | ที่จอด | CER ชื่อ | $/1000 ใบ | p50 | error |",
+        "| # | model | variant | mean core | whole slip | name | name≈ | phone | date | plate | plate≈ | brand | type | spot | name CER | $/1000 slips | p50 | errors |",
         "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for i, r in enumerate(rows, 1):
@@ -132,8 +135,9 @@ def main() -> None:
             f"{r['name_cer']:.2f} | ${r['cost_per_1000']:.2f} | {r['p50_latency']:.1f}s | {r['errors']} |"
         )
 
-    # สรุปว่า preprocessing ช่วยจริงไหม โดยเฉลี่ยข้าม model
-    lines += ["", "## preprocessing ช่วยไหม (เฉลี่ยทุก model)", "", "| variant | เฉลี่ย core | ถูกทั้งใบ |", "|---|---|---|"]
+    # Does preprocessing actually help? Averaged across every model.
+    lines += ["", "## Does preprocessing help? (averaged over all models)", "",
+              "| variant | mean core | whole slip |", "|---|---|---|"]
     for v in VARIANTS:
         vr = [r for r in rows if r["variant"] == v]
         if vr:
@@ -148,16 +152,17 @@ def main() -> None:
         [r["mean_acc"] for r in rows if r["variant"] == v] or [0]))
     lines += [
         "",
-        "## สรุปที่ควรใช้",
+        "## What to use",
         "",
-        f"- **ตัวที่แม่นที่สุด**: `{best['model']}` + `{best['variant']}` — เฉลี่ย {fmt_pct(best['mean_acc'])}, "
-        f"${best['cost_per_1000']:.2f}/1000 ใบ, {best['p50_latency']:.1f}s ต่อใบ",
-        f"- **คุ้มที่สุด (acc ต่อราคา)**: `{cheap['model']}` + `{cheap['variant']}` — "
-        f"เฉลี่ย {fmt_pct(cheap['mean_acc'])}, ${cheap['cost_per_1000']:.2f}/1000 ใบ",
-        f"- **preprocessing ที่ดีที่สุด**: `{best_variant}`",
+        f"- **Most accurate**: `{best['model']}` + `{best['variant']}` — {fmt_pct(best['mean_acc'])} mean, "
+        f"${best['cost_per_1000']:.2f} per 1000 slips, {best['p50_latency']:.1f}s per slip",
+        f"- **Best value (accuracy per cost)**: `{cheap['model']}` + `{cheap['variant']}` — "
+        f"{fmt_pct(cheap['mean_acc'])} mean, ${cheap['cost_per_1000']:.2f} per 1000 slips",
+        f"- **Best preprocessing**: `{best_variant}`",
         "",
-        "หมายเหตุ: คอลัมน์ `ชื่อ≈` / `ทะเบียน≈` คือกรณีที่อ่านผิดไม่เกิน ~1-2 ตัวอักษร "
-        "ซึ่งยังค้นเจอได้ด้วย fuzzy search และคนตรวจแก้ได้ง่าย — เป็นตัวเลขที่สะท้อนการใช้งานจริงมากกว่า exact match",
+        "Note: the `name≈` and `plate≈` columns count reads that are wrong by no more than ~1-2 "
+        "characters, which fuzzy search still finds and a reviewer corrects easily. They reflect "
+        "real-world usability better than exact match does.",
     ]
 
     report = "\n".join(lines) + "\n"

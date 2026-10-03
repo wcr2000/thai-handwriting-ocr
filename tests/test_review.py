@@ -1,6 +1,6 @@
-"""ทดสอบเกณฑ์คัดใบเข้าคิวตรวจ — ใบที่ข้อมูลไม่ครบต้องไม่หลุดเข้าระบบเงียบ ๆ
+"""Tests for the criteria routing slips into the review queue — an incomplete slip must never slip through silently.
 
-ข้อมูลในไฟล์นี้เป็นค่าสมมติทั้งหมด (repo เปิดสาธารณะ)
+Every value in this file is fabricated (this repository is public).
 """
 
 from ocrslip.review import evaluate, field_problems
@@ -36,32 +36,32 @@ def test_duplicate_flagged():
 
 
 def test_plate_without_letters_is_only_a_warning():
-    """ของจริงมีใบที่เขียนแต่ตัวเลข — ต้องเตือน แต่ไม่ถือว่าช่องนั้นว่าง"""
+    """Real slips exist with digits only in that field — warn, but do not treat the field as empty"""
     problems = field_problems({**GOOD, "noplate": "1234"})
     assert "noplate" in problems
 
 
 def test_conflicts_flags_only_when_every_view_agrees_and_contradicts_stored():
-    """หยิบใบมาให้คนดูซ้ำเฉพาะตอนที่ภาพคนละมุมอ่านได้ตรงกันและขัดกับที่เก็บไว้
+    """Only pull a slip back for a second look when the two views agree with each other and conflict with what is stored.
 
-    ถ้าสองมุมอ่านได้ไม่ตรงกัน แปลว่าลายมือกำกวม ไม่ใช่หลักฐานว่าค่าที่คนยืนยันผิด
-    — กรณีนั้นห้ามไปรบกวนคนตรวจซ้ำ
+    Two views disagreeing means the handwriting is ambiguous, not that the human-confirmed value
+    is wrong — and in that case a reviewer must not be bothered again.
     """
     from ocrslip.recheck import conflicts
 
     stored = {"name": "สมชาย ใจดี", "tel": "0812345678", "noplate": "กก1234"}
 
-    # ทั้งสองมุมอ่านได้ทะเบียนเดียวกัน และคนละคันกับที่เก็บไว้ -> ควรดึงกลับ
+    # Both views read the same plate, and a different car from the stored one -> pull it back
     same = {"name": "สมชาย ใจดี", "tel": "0812345678", "noplate": "5ขค9999"}
     assert conflicts(stored, [same, dict(same)]) == ["noplate"]
 
-    # สองมุมอ่านได้ไม่ตรงกัน -> ลายมือกำกวม ไม่ใช่หลักฐานว่าค่าที่เก็บไว้ผิด
+    # The two views disagree -> ambiguous handwriting, not evidence the stored value is wrong
     a = {**stored, "noplate": "5ขค9999"}
     b = {**stored, "noplate": "2งจ1111"}
     assert conflicts(stored, [a, b]) == []
 
-    # อ่านได้ตรงกับที่เก็บไว้อยู่แล้ว -> ไม่มีอะไรต้องทำ
+    # The reads match what is already stored -> nothing to do
     assert conflicts(stored, [dict(stored), dict(stored)]) == []
 
-    # ช่องที่ยังว่างในระบบ ไม่ถือว่าขัดแย้ง
+    # A field still empty in the system does not count as a conflict
     assert conflicts({**stored, "noplate": None}, [same, dict(same)]) == []

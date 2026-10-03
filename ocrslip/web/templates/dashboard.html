@@ -1,8 +1,9 @@
 {% extends "base.html" %}
 {% block head %}<link rel="stylesheet" href="/static/dashboard.css">{% endblock %}
 
-{# แถบเทียบสัดส่วน: ความยาวแถบเทียบกับแถวที่มากที่สุด ส่วนตัวเลข % เทียบกับฐานที่บอกไว้ใต้การ์ด
-   ทุกการ์ดมี "ดูเป็นตาราง" ต่อท้ายเสมอ เพราะค่าที่อ่านได้จากความยาวแถบอย่างเดียวถือว่าอ่านไม่ได้ #}
+{# Proportional bars: a bar's length is relative to the largest row, while the percentage is
+   relative to the base stated under the card. Every card ends with a "view as table", because a
+   value readable only from a bar's length counts as not readable. #}
 {% macro bars(title, rows, denom, hint='', link_key=None, tone='', foot='', empty='ยังไม่มีข้อมูล') %}
 <div class="panel">
   <h4>{{ title }}</h4>
@@ -46,7 +47,7 @@
     <a href="/export.xlsx" class="btn ghost">⬇ Excel</a></div>
 </div>
 
-{# ---------- สถานะรถ + งานตรวจ: ตัวเลขที่ต้องดูทุกวัน ---------- #}
+{# ---------- car status + review workload: the figures looked at daily ---------- #}
 <section class="block">
   <h3>สถานะปัจจุบัน</h3>
   <p class="hint">กดตัวเลขเพื่อเปิดรายการใบที่นับอยู่ในช่องนั้น</p>
@@ -77,7 +78,7 @@
   </div>
 </section>
 
-{# ---------- กราฟรายวัน ---------- #}
+{# ---------- the per-day chart ---------- #}
 <section class="block">
   <h3>ใบฝากรถต่อวัน</h3>
   <p class="hint">30 วันล่าสุด นับตามวันที่บนใบ · ชี้ที่แท่งเพื่อดูตัวเลขของวันนั้น</p>
@@ -117,7 +118,7 @@
       </div>
     </div>
 
-    {# ใบที่ตกขอบกราฟต้องบอกจำนวนไว้ ไม่งั้นกราฟจะดูเหมือนข้อมูลทั้งหมด #}
+    {# Slips falling off the chart have to be counted somewhere, or the chart reads as the whole dataset #}
     {% set out = date_health.no_date + date_health.odd_date + date_health.older %}
     {% if out %}
     <div class="callout">
@@ -144,7 +145,7 @@
   </div>
 </section>
 
-{# ---------- ค่าใช้จ่าย AI ---------- #}
+{# ---------- AI spend ---------- #}
 <section class="block">
   <h3>ค่าใช้จ่าย AI</h3>
   <p class="hint">คิดจากค่าที่ OpenRouter เรียกเก็บจริงต่อใบ (เก็บลง DB ทุกครั้งที่อ่าน)
@@ -165,7 +166,7 @@
   </div>
 </section>
 
-{# ---------- องค์ประกอบของรถ ---------- #}
+{# ---------- vehicle breakdown ---------- #}
 <section class="block">
   <h3>รถที่รับฝาก</h3>
   <p class="hint">8 อันดับแรกของแต่ละหมวด · สัดส่วนเทียบกับใบทั้งหมด {{ '{:,}'.format(kpi.total) }} ใบ</p>
@@ -176,7 +177,7 @@
   </div>
 </section>
 
-{# ---------- ทีมงาน ---------- #}
+{# ---------- the team ---------- #}
 <section class="block">
   <h3>ทีมงาน</h3>
   <p class="hint">คนอัปโหลดกับคนตรวจเป็นคนละบทบาท จึงนับแยกกัน</p>
@@ -214,7 +215,7 @@
   </div>
 </section>
 
-{# ---------- คุณภาพการอ่านของ AI ---------- #}
+{# ---------- how well the AI read ---------- #}
 <section class="block">
   <h3>คุณภาพการอ่านของ AI</h3>
   <p class="hint">ใช้ตัดสินใจว่าควรแก้ prompt หรือเปลี่ยน model ตรงไหน</p>

@@ -5,7 +5,8 @@
   <p class="muted">พบ {{ rows|length }} ใบที่ใกล้เคียง เรียงจากคะแนนความเหมือนมากไปน้อย</p>
   {% for r in rows %}
   <div class="row" style="border-bottom:1px solid var(--line); padding:.6rem 0">
-    {# ใบที่ผู้มาจอดกรอกเอง ไม่มีรูปใบจอดรถ ถ้ายัด <img> ไปจะได้กรอบรูปแตกทุกแถว #}
+    {# Self-service slips have no photo of a parking slip; forcing an <img> in gives a broken image
+       frame on every row #}
     <div style="flex:0 0 140px">
       {% if r.entry_source == 'typed' %}<div class="no-img">กรอกเอง<br>ไม่มีรูปใบ</div>
       {% else %}<img class="slip-img" src="/image/{{ r.id }}" loading="lazy" alt="">{% endif %}
@@ -16,17 +17,20 @@
            {% if r.car_status == 'returned' %}<span class="badge bad">รับรถกลับแล้ว</span>
            {% else %}<span class="badge ok">ยังจอดอยู่</span>{% endif %}
            {% if r.review_status != 'approved' %}<span class="badge warn">ยังไม่ผ่านการตรวจ</span>{% endif %}
-           {# ทะเบียนที่เอามาฝากหลายรอบ ต้องบอกว่าแถวนี้คือรอบไหน ไม่งั้นทุกแถวหน้าตาเหมือนกัน #}
+           {# For a plate parked over several rounds, each row has to say which round it is, or every row
+              looks the same #}
            {% set n = rounds.get(r.id|string) %}
            {% if n and n.total > 1 %}<span class="badge">ฝากรอบที่ {{ n.round }} จาก {{ n.total }}</span>{% endif %}
-           {# วันเดียวกันมีหลายใบ = ใบเดียวกันถูกถ่าย/อัปซ้ำ ที่ตัวจับซ้ำตอนอนุมัติไม่ได้จับไว้
-              ต้องบอกตรง ๆ ว่าเป็นใบซ้ำ ไม่ใช่ปล่อยให้อ่านเป็นการมาฝากคนละหน #}
+           {# Several slips on one day = the same slip photographed or uploaded twice, and missed by
+              the duplicate check at approval time. Say so plainly rather than letting it read as
+              two separate visits. #}
            {% if n and n.dup > 1 %}<span class="badge warn">อาจเป็นใบซ้ำ · วันนี้มี {{ n.dup }} ใบ</span>{% endif %}
       </div>
       <div><strong>{{ r.name or '—' }}</strong> · {{ r.tel or '—' }}</div>
       <div>ทะเบียน {{ r.plate_raw or '—' }} {{ r.province or '' }} · {{ r.brand or '—' }} ({{ r.car_type or '—' }})</div>
       <div class="muted">ที่จอด: {{ r.location or '—' }} · เข้าจอดเมื่อ {{ r.deposit_date or '—' }}</div>
-      {# เบอร์ผิดมักโผล่ตอนขาออก (โทรตามไม่ติด) ซึ่งคือหน้านี้ ไม่ใช่หน้าคิวตรวจ #}
+      {# A wrong phone number usually surfaces on the way out (the call does not connect), which
+         happens on this page, not in the review queue #}
       <div><a href="/slips/{{ r.id }}">เปิดดูใบจริง / รับรถกลับ →</a>
            <a href="/review/{{ r.id }}?edit=1" style="margin-left:.8rem">✎ แก้ไขข้อมูล</a></div>
     </div>

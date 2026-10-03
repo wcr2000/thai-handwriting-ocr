@@ -1,6 +1,6 @@
-"""ทดสอบการให้คะแนนความใกล้เคียง (ไม่แตะฐานข้อมูล)
+"""Tests for the similarity scoring (no database involved).
 
-ข้อมูลในไฟล์นี้เป็นค่าสมมติทั้งหมด (repo เปิดสาธารณะ)
+Every value in this file is fabricated (this repository is public).
 """
 
 import pytest
@@ -21,7 +21,7 @@ def test_classify(q, kind):
 
 def test_exact_phone_is_full_score():
     score, why = _score(ROW, "tel", "", "0800000000", "0800000000")
-    assert score == 100.0 and why == "เบอร์โทร"
+    assert score == 100.0 and why == "เบอร์โทร"  # "phone"
 
 
 def test_one_digit_off_still_high():
@@ -31,7 +31,7 @@ def test_one_digit_off_still_high():
 
 def test_swapped_name_order_matches():
     score, why = _score(ROW, "name", "ใจดี สมชาย", "", "")
-    assert score >= 95 and why == "ชื่อ"
+    assert score >= 95 and why == "ชื่อ"  # "name"
 
 
 def test_partial_name_matches():

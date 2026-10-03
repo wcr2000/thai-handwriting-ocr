@@ -14,7 +14,8 @@
         <td>{{ r.fields.tel or '—' }}</td>
         <td>{{ r.fields.noplate or '—' }}</td>
         <td>
-          {# รูปนี้เคยอัปแล้ว จึงไม่สร้างใบใหม่และไม่เสียค่า OCR ซ้ำ — ชี้ไปใบเดิมแทน #}
+          {# This photo was uploaded before, so no new slip is created and no OCR is paid for twice —
+       it points at the existing slip instead #}
           {% if r.duplicate_of %}
             <span class="badge">อัปซ้ำ — ใบเดิมมีอยู่แล้ว</span>
             <span class="muted">{{ 'ตรวจแล้ว' if r.duplicate_of.review_status == 'approved'

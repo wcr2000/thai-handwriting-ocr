@@ -1,4 +1,4 @@
-"""ค่า config ทั้งหมดอ่านจาก .env"""
+"""Every config value is read from .env"""
 
 from __future__ import annotations
 
@@ -8,7 +8,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent.parent
-# override=True: ถ้า shell มี OPENROUTER_API_KEY ตัวเก่าค้างอยู่ ให้ .env ของโปรเจกต์ชนะเสมอ
+# override=True: if the shell still carries a stale OPENROUTER_API_KEY, the
+# project's own .env must always win.
 load_dotenv(ROOT / ".env", override=True)
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
@@ -16,36 +17,41 @@ OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/ap
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 DB_SCHEMA = os.getenv("DB_SCHEMA", "ocr_dhammakaya")
 
-# model ที่ใช้ตอน production — เลือกจาก bench/report.md (ชนะที่ 78% $1.55/1000 ใบ)
+# Production model — picked from bench/report.md (winner at 78%, $1.55 per 1000 slips)
 OCR_MODEL = os.getenv("OCR_MODEL", "google/gemini-3-flash-preview")
-# เกณฑ์ confidence ที่ต่ำกว่านี้จะถูกส่งเข้าคิวตรวจสอบ
+# Fields scoring below this confidence are routed into the review queue
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.85"))
-# อายุการจองใบในคิวตรวจ — คนตรวจถือใบไว้ได้นานเท่านี้ก่อนใบหลุดกลับเข้าคิว
-# ตั้งไว้ยาวไว้ก่อนโดยตั้งใจ: ใบค้างสิบนาทีไม่มีผลอะไรเมื่อคิวมีเป็นพันใบ
-# แต่ถ้าสั้นไปคนตรวจที่ติดใบยาก ๆ จะโดนแย่งใบกลางคัน ซึ่งคือปัญหาเดิมที่กำลังแก้
+# How long a reviewer may hold a claimed slip before it falls back into the queue.
+# Deliberately generous: a slip parked for ten minutes costs nothing when the queue
+# holds thousands, but too short a lease means reviewers working a hard slip get it
+# yanked mid-edit — which is the very problem this lease was added to fix.
 REVIEW_CLAIM_MINUTES = int(os.getenv("REVIEW_CLAIM_MINUTES", "10"))
-# ใช้แปลงค่าใช้จ่าย AI (OpenRouter คิดเป็น USD) ให้แสดงผลเป็นบาท
+# Converts AI spend (OpenRouter bills in USD) for display in Thai baht
 USD_THB = float(os.getenv("USD_THB", "33"))
-# เขตเวลาที่ทุก connection ใช้ — DB เก็บเป็น timestamptz (UTC) ซึ่งถูกแล้ว แต่ server
-# ที่ Render ตั้ง TimeZone=UTC ทำให้เวลาที่แสดงบนหน้าเว็บช้ากว่าเวลาไทย 7 ชั่วโมง
-# ตั้งที่ connection ทีเดียวจบ ไม่ต้องไล่ +7 ทุก template (และทำให้การนับ "รายวัน"
-# ที่หน้าสรุปตัดวันตามเที่ยงคืนของไทย ไม่ใช่เที่ยงคืน UTC ซึ่งคือ 7 โมงเช้าบ้านเรา)
+# Timezone applied to every connection. The DB stores timestamptz (UTC), which is
+# correct, but the Render server runs with TimeZone=UTC, so rendered times would sit
+# 7 hours behind Thai local time. Setting it once per connection beats sprinkling +7
+# through every template — and it makes the dashboard's "per day" buckets break at
+# Thai midnight rather than UTC midnight, which locally is 7am.
 APP_TIMEZONE = os.getenv("APP_TIMEZONE", "Asia/Bangkok")
 
-# กุญแจสำหรับเซ็น session cookie — ถ้าไม่ตั้ง จะสุ่มใหม่ทุกครั้งที่รีสตาร์ต
-# (ปลอดภัย แต่ผู้ใช้ทุกคนจะหลุดล็อกอิน) บน production ต้องตั้งค่านี้เสมอ
+# Key used to sign the session cookie. Unset means a fresh random key on every
+# restart — safe, but it logs every user out. Production must always set this.
 SECRET_KEY = os.getenv("SECRET_KEY", "")
-# ตั้ง true เมื่อรันหลัง HTTPS (Render เป็น HTTPS อยู่แล้ว) เพื่อบังคับ Secure cookie
+# Set true when served behind HTTPS (Render already is) to force a Secure cookie
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "").lower() in ("1", "true", "yes")
 
-# --- ฟอร์มขาเข้าที่ผู้มาจอดกรอกเอง (/in) ---
-# รหัสที่เจ้าหน้าที่พิมพ์ปิดท้ายฟอร์ม = คำรับรองว่า "เห็นรถคันนี้จอดจริง"
-# ตรวจฝั่ง server เท่านั้น ห้ามย้ายไปเช็คใน JavaScript เด็ดขาด — ถ้าเช็คในหน้าเว็บ
-# รหัสจะโผล่ใน view-source ของทุกเครื่องที่เปิดหน้านี้ แล้วการหวงรหัสก็ไม่มีความหมาย
-# ไม่มี default โดยเจตนา: ไม่ตั้งค่านี้ = ปิดหน้า /in ไปเลย ดีกว่าเปิดด้วยรหัสที่ใครก็เดาได้
+# --- Self-service entry form filled in by the driver (/in) ---
+# The code a staff member types to close out the form is their attestation that
+# "I saw this car parked here". Verified server-side only — never move this check
+# into JavaScript: in the page, the code would show up in view-source on every
+# device that opens it, and guarding the code at all would become meaningless.
+# No default on purpose: leaving this unset disables /in entirely, which beats
+# opening it behind a code anyone could guess.
 ENTRY_PASSWORD = os.getenv("ENTRY_PASSWORD", "")
-# ตัวเลือกอาคาร/ชั้นในฟอร์ม คั่นด้วย comma — เป็น dropdown ไม่ใช่ช่องพิมพ์ เพราะพิมพ์เอง
-# จะได้ "อาคาร3ชั้น5" / "ตึก 3 ช.5" / "3-5" ซึ่งเรียงไม่ได้และสรุปที่หน้า dashboard ไม่ได้
+# Comma-separated building/floor choices. A dropdown rather than a free-text box,
+# because hand-typed values arrive as "อาคาร3ชั้น5" / "ตึก 3 ช.5" / "3-5", which
+# cannot be sorted and cannot be aggregated on the dashboard.
 ENTRY_BUILDINGS = tuple(
     s.strip() for s in os.getenv("ENTRY_BUILDINGS", "อาคาร 1,อาคาร 2,อาคาร 3,อาคาร 4,ลานจอดรอบนอก").split(",") if s.strip()
 )

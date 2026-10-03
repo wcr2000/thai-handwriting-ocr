@@ -1,14 +1,16 @@
-"""กันสองคนตรวจใบเดียวกันแล้วเขียนทับกัน (ทีมนั่งตรวจพร้อมกัน 3 คน)
+"""Stop two people reviewing the same slip from overwriting each other (the team reviews three at a time).
 
-ถึงจะมีการจองใบแล้ว (tests/test_review_claim.py) การชนก็ยังเกิดได้อยู่ดี — การจอง
-หมดอายุได้ คนเปิดหน้าค้างไว้นาน ๆ ได้ และคลิกเข้าใบที่คนอื่นถืออยู่ได้ตรง ๆ
-การจองแค่ทำให้ "ไม่ค่อยเจอกัน" ชุดนี้คุมอีกครึ่งคือ "เจอกันแล้วไม่พัง"
+Even with claiming in place (tests/test_review_claim.py), collisions still happen: a claim can
+expire, somebody can leave a page open for a long time, and anybody can click straight into a
+slip somebody else holds. Claiming only makes collisions *rare*; this suite covers the other
+half, making a collision harmless.
 
-อาการที่หน้างานเจอคือช่อง "ผู้ตรวจ" เด้งเป็นชื่อคนอื่น (เทมเพลตให้ค่าใน DB ชนะ
-ค่าที่จำไว้ในเครื่อง) แล้วถ้ากดอนุมัติต่อ งานของคนแรกก็ถูกทับเงียบ ๆ
+The symptom seen on the ground was the reviewer field flipping to somebody else's name (the
+template lets the DB value beat the locally remembered one) — and pressing approve from there
+silently overwrote the first person's work.
 
-ต้องใช้ Postgres จริง เพราะของที่ทดสอบคือ rowcount ของ UPDATE ที่มีเงื่อนไข
-ดูวิธีรันที่ tests/conftest.py
+Needs a real Postgres, because what is under test is the rowcount of a conditional UPDATE.
+See tests/conftest.py for how to run it.
 """
 
 import threading
@@ -35,7 +37,7 @@ def fetch(slip_id: str) -> dict:
 
 
 def test_second_approve_does_not_overwrite_the_first(make_slips, worker):
-    """คนที่สองกดอนุมัติใบที่เพื่อนตรวจไปแล้ว ต้องไม่ทับทั้งชื่อ เวลา และข้อมูล"""
+    """A second person approving a slip a colleague already reviewed must overwrite neither the name, the time, nor the data"""
     slips = make_slips(3)
     a, b = worker("admin"), worker("staff")
     x = slips[0]
@@ -49,7 +51,7 @@ def test_second_approve_does_not_overwrite_the_first(make_slips, worker):
                follow_redirects=False)
     after = fetch(x)
 
-    assert r.status_code == 200, "ต้องไม่ redirect ไปใบถัดไปเหมือนอนุมัติสำเร็จ"
+    assert r.status_code == 200, "must not redirect to the next slip as though the approval succeeded"
     assert after["reviewed_by"] == "krit"
     assert after["reviewed_at"] == first["reviewed_at"]
     assert after["name"] == first["name"]
@@ -57,7 +59,7 @@ def test_second_approve_does_not_overwrite_the_first(make_slips, worker):
 
 
 def test_blocked_approve_writes_no_audit_row(make_slips, worker):
-    """ยิงซ้ำกี่ครั้ง slip_edits ต้องไม่งอก ไม่งั้นสถิติ "ใครแก้ field ไหนบ่อย" เพี้ยน"""
+    """However many times it is resubmitted, slip_edits must not grow, or the "which fields get corrected most" stats are skewed"""
     from ocrslip.db import connect
 
     slips = make_slips(3)
@@ -78,9 +80,9 @@ def test_blocked_approve_writes_no_audit_row(make_slips, worker):
 
 
 def test_reviewed_slip_shows_banner_instead_of_approve_button(make_slips, worker):
-    """เดินตาม next_id เก่าไปเจอใบที่เพื่อนตรวจแล้ว ต้องรู้ตัว ไม่ใช่เห็นฟอร์มปกติ
+    """Following a stale next_id onto a slip a colleague has reviewed must be made obvious, not render as a normal form.
 
-    นี่คืออาการ "ชื่อผู้ตรวจเด้งไปเป็นของคนอื่น" ที่หน้างานเจอ
+    This is the "reviewer name flips to somebody else's" symptom seen on the ground.
     """
     slips = make_slips(3)
     a, b = worker("admin"), worker("staff")
@@ -89,17 +91,18 @@ def test_reviewed_slip_shows_banner_instead_of_approve_button(make_slips, worker
 
     page = b.get(f"/review/{x}").text
     assert "ใบนี้ตรวจไปแล้ว" in page
-    assert 'class="actbar" hidden' in page, "แถบปุ่มอนุมัติต้องถูกซ่อน"
-    # .actbar ตั้ง display:flex ไว้ ซึ่งชนะ [hidden] ของเบราว์เซอร์
-    # ถ้าไม่มีกฎนี้ attribute hidden จะไม่มีผลจริง ปุ่มยังโผล่อยู่
-    assert ".actbar[hidden] { display:none; }" in page, "ต้องมีกฎ CSS ที่ซ่อนได้จริง"
-    # ไม่ลิงก์ไป id ตรง ๆ แล้ว — /review/next จองใบสด ๆ ให้ตอนกด จะได้ไม่ไปชนกับเพื่อนอีก
-    assert "/review/next" in page, "ต้องมีทางไปใบถัดไปที่ยังไม่มีใครตรวจ"
-    assert f"/review/{x}?edit=1" in page, "ต้องมีทางแก้ถ้าตั้งใจจริง"
+    assert 'class="actbar" hidden' in page, "the approve button bar must be hidden"
+    # .actbar sets display:flex, which beats the browser's own [hidden] rule. Without this rule
+    # the hidden attribute has no real effect and the buttons still show.
+    assert ".actbar[hidden] { display:none; }" in page, "a CSS rule that actually hides it is required"
+    # No longer links to an id directly: /review/next claims a slip live at press time, so there
+    # is no fresh collision with a colleague.
+    assert "/review/next" in page, "there must be a route to a next slip nobody has reviewed"
+    assert f"/review/{x}?edit=1" in page, "there must be a route to edit it for somebody who really means to"
 
 
 def test_pending_slip_is_untouched(make_slips, worker):
-    """ใบที่ยังไม่มีใครตรวจต้องทำงานเหมือนเดิมทุกอย่าง"""
+    """A slip nobody has reviewed must behave exactly as before"""
     slips = make_slips(3)
     b = worker("staff")
     y, z = slips[1], slips[2]
@@ -108,7 +111,7 @@ def test_pending_slip_is_untouched(make_slips, worker):
     assert "ใบนี้ตรวจไปแล้ว" not in page
     assert 'class="actbar" hidden' not in page
     select = page.split('id="reviewed_by"')[1].split("</select>")[0]
-    assert "selected" not in select, "ใบที่ยังไม่มีใครตรวจต้องไม่ preselect ชื่อใคร"
+    assert "selected" not in select, "an unreviewed slip must not preselect anybody's name"
 
     r = b.post(f"/review/{y}/approve", data=form("somchai"), follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"] == "/review/next"
@@ -116,7 +119,7 @@ def test_pending_slip_is_untouched(make_slips, worker):
 
 
 def test_edit_query_param_allows_deliberate_fix(make_slips, worker):
-    """เจ้าของใบตั้งใจกลับมาแก้เอง (?edit=1) ต้องยังแก้ได้ — ไม่ใช่ล็อกตายถาวร"""
+    """A deliberate return to edit one's own slip (?edit=1) must still work — not be locked out permanently"""
     slips = make_slips(3)
     a = worker("admin")
     x = slips[0]
@@ -133,7 +136,7 @@ def test_edit_query_param_allows_deliberate_fix(make_slips, worker):
 
 
 def test_parallel_approve_has_exactly_one_winner(make_slips, worker):
-    """ยิงพร้อมกันจริง ๆ สองเธรด ใบเดียวกัน ต้องผ่านคนเดียว"""
+    """Genuinely simultaneous: two threads, one slip, exactly one must succeed"""
     from ocrslip.db import connect
 
     z = make_slips(3)[2]
@@ -151,11 +154,11 @@ def test_parallel_approve_has_exactly_one_winner(make_slips, worker):
     for t in threads:
         t.join()
 
-    assert sorted(results.values()) == [200, 303], f"ต้องผ่านคนเดียว ได้ {results}"
+    assert sorted(results.values()) == [200, 303], f"exactly one must succeed; got {results}"
     assert fetch(z)["review_status"] == "approved"
     with connect() as conn:
         editors = conn.execute(
             f"SELECT count(DISTINCT edited_by) c FROM {TEST_SCHEMA}.slip_edits WHERE slip_id = %s",
             (z,),
         ).fetchone()["c"]
-    assert editors <= 1, "audit log ต้องมีคนแก้คนเดียว"
+    assert editors <= 1, "the audit log must record exactly one editor"

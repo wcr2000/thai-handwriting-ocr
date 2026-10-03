@@ -1,11 +1,11 @@
-"""ทดลอง: หมุนแก้เอียงหลัง crop ช่วยให้อ่านแม่นขึ้นไหม
+"""Experiment: does deskewing after the crop improve reading accuracy?
 
-ผลคือ **ไม่ช่วย** — ดู bench/crop_report.md
-ใบถ่ายใกล้ดีขึ้นนิดเดียว (CER 0.122 -> 0.120 ซึ่งอยู่ในช่วง noise)
-แต่ใบถ่ายไกลแย่ลงชัดเจน (0.132 -> 0.161) เพราะการหมุนต้อง interpolate ใหม่
-แล้วตัวหนังสือที่เล็กอยู่แล้วยิ่งเบลอ ส่วนตัว model เองทนความเอียงระดับนี้ได้อยู่แล้ว
+The answer is **no** — see bench/crop_report.md.
+Close-up shots improve marginally (CER 0.122 -> 0.120, within the noise), but distant shots
+get clearly worse (0.132 -> 0.161), because rotating means interpolating afresh and text that
+was already small blurs further. The model itself tolerates this much skew anyway.
 
-เก็บโค้ดไว้เป็นหลักฐานว่าลองแล้ว จะได้ไม่มีใครมาลองซ้ำ
+The code is kept as evidence that this was tried, so nobody tries it again.
 """
 
 from __future__ import annotations
@@ -15,14 +15,14 @@ import numpy as np
 
 from ocrslip.preprocess import ink_mask
 
-MAX_DESKEW = 25   # องศาสูงสุดที่ยอมนับว่าเป็น "เส้นบรรทัดที่เอียง" ไม่ใช่เส้นแนวตั้ง
+MAX_DESKEW = 25   # the largest angle still counted as "a tilted text line" rather than a vertical rule
 
 
 def text_skew(bgr: np.ndarray) -> float:
-    """มุมเอียงของเส้นบรรทัดในใบ (องศา) — 0 ถ้าวัดไม่ได้
+    """The tilt of the slip's text lines, in degrees — 0 when it cannot be measured.
 
-    วัดจากเส้นยาวแนวนอน ซึ่งในใบคือเส้นบรรทัดพิมพ์กับแนวตัวหนังสือ
-    ใช้ค่ามัธยฐานเพื่อไม่ให้เส้นแปลกปลอมเส้นเดียวลากผลลัพธ์
+    Measured from the long horizontal lines, which on a slip are the printed rules and the run
+    of the handwriting. The median is used so one stray line cannot drag the result.
     """
     ink = ink_mask(bgr) * 255
     w = bgr.shape[1]
@@ -40,7 +40,7 @@ def text_skew(bgr: np.ndarray) -> float:
 
 
 def deskew(bgr: np.ndarray) -> np.ndarray:
-    """หมุนภาพที่ crop แล้วให้เส้นบรรทัดอยู่ในแนวนอน"""
+    """Rotate the cropped image so its text lines run horizontally"""
     angle = text_skew(bgr)
     if abs(angle) < 1.0:
         return bgr

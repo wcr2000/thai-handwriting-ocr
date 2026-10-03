@@ -1,10 +1,12 @@
-"""ทดสอบการจับขอบกระดาษ — regression ของบั๊กที่ crop ไปโดนพื้นหลังแทนใบฝากรถ
+"""Paper-edge detection tests — a regression suite for the bug that cropped onto the background instead of the slip.
 
-บั๊กเดิม: paper_mask หากระดาษจาก "สว่าง + ไม่มีสี" ซึ่งใช้ได้เฉพาะตอนวางบนโต๊ะไม้สีส้ม
-พอถ่ายบนโต๊ะ/ผนังสีขาว พื้นหลังเข้าเกณฑ์เดียวกับกระดาษ ระบบจึง crop ทั้งเฟรม
-แล้ว landscape() หมุน 90 องศาให้อีก โดยที่ quad_found ยังรายงานว่า true
+The original bug: paper_mask found paper by "bright and colourless", which only works on an
+orange wooden table. Photographed on a white table or wall, the background met the same criteria
+as the paper, so the system cropped the entire frame — and then landscape() rotated it 90
+degrees as well, all while quad_found still reported true.
 
-ภาพในไฟล์นี้สร้างขึ้นเองทั้งหมด ห้ามใช้ใบฝากรถจริงมาเป็น fixture เพราะ repo นี้เปิดสาธารณะ
+Every image in this file is synthesised. Never use a real parking slip as a fixture: this
+repository is public.
 """
 
 import cv2
@@ -15,22 +17,22 @@ from ocrslip.imageio import encode_jpeg, to_pil
 import ocrslip.preprocess as P
 from ocrslip.preprocess import find_paper_quad, preprocess
 
-FRAME = (2000, 1500)          # (สูง, กว้าง) เลียนแบบรูปถ่ายมือถือแนวตั้ง
-SLIP = (540, 1150)            # (สูง, กว้าง) ของใบ สัดส่วน ~2.1 และกินพื้นที่ ~21% ของเฟรม เท่าของจริง
+FRAME = (2000, 1500)          # (height, width), imitating a portrait phone photo
+SLIP = (540, 1150)            # (height, width) of the slip: ~2.1 aspect ratio, ~21% of the frame, as in reality
 
-WOOD = (40, 110, 190)         # BGR โต๊ะไม้สีส้ม — พื้นหลังแบบที่โค้ดเดิมรองรับ
-WHITE_DESK = (205, 207, 208)  # BGR โต๊ะ/ผนังขาวเทา — พื้นหลังที่ทำให้โค้ดเดิมพัง
+WOOD = (40, 110, 190)         # BGR orange wooden table — the background the original code handled
+WHITE_DESK = (205, 207, 208)  # BGR off-white table or wall — the background that broke the original code
 
 
 def fake_photo(bg: tuple[int, int, int], angle: float = 0.0) -> np.ndarray:
-    """รูปถ่ายจำลอง: ใบสีขาวมีเส้นพิมพ์ + ลายมือ วางเอียงบนพื้นหลังสีที่กำหนด"""
+    """A synthetic photo: a white slip with printed rules and handwriting, tilted on the given background colour"""
     img = np.full((*FRAME, 3), bg, np.uint8)
 
     slip = np.full((*SLIP, 3), 250, np.uint8)
-    for i in range(1, 5):                       # เส้นบรรทัดพิมพ์
+    for i in range(1, 5):                       # printed rules
         y = i * SLIP[0] // 5
         cv2.line(slip, (60, y), (SLIP[1] - 60, y), (120, 120, 120), 3)
-    for i in range(1, 5):                       # ลายมือปากกาน้ำเงิน
+    for i in range(1, 5):                       # blue ballpoint handwriting
         y = i * SLIP[0] // 5
         cv2.putText(slip, "0812345678", (120, y - 14), 0, 1.6, (150, 60, 30), 4)
 
@@ -38,7 +40,7 @@ def fake_photo(bg: tuple[int, int, int], angle: float = 0.0) -> np.ndarray:
 
 
 def _paste(img: np.ndarray, slip: np.ndarray, angle: float) -> np.ndarray:
-    """วาง slip ลงกลางภาพโดยหมุน angle องศา"""
+    """Place the slip at the centre of the frame, rotated by angle degrees"""
     h, w = slip.shape[:2]
     canvas = np.zeros((*FRAME, 3), np.uint8)
     alpha = np.zeros(FRAME, np.uint8)
@@ -56,27 +58,28 @@ def run(bgr: np.ndarray):
     return preprocess(encode_jpeg(to_pil(bgr), quality=95))
 
 
-@pytest.mark.parametrize("bg,label", [(WOOD, "โต๊ะไม้"), (WHITE_DESK, "โต๊ะขาว")])
+@pytest.mark.parametrize("bg,label", [(WOOD, "wooden table"), (WHITE_DESK, "white table")])
 @pytest.mark.parametrize("angle", [0.0, 8.0, -12.0])
 def test_crop_finds_slip_on_any_background(bg, label, angle):
-    """ต้อง crop ได้เฉพาะตัวใบ ไม่ว่าพื้นหลังจะเป็นสีอะไร — นี่คือ regression ของบั๊กเดิม"""
+    """The crop must land on the slip alone whatever the background colour — this is the original bug's regression"""
     r = run(fake_photo(bg, angle))
-    assert r.quad_found, f"หาขอบกระดาษไม่เจอบน{label} ที่ {angle} องศา"
+    assert r.quad_found, f"paper edges not found on a {label} at {angle} degrees"
 
     w, h = r.cropped.size
-    assert w > h, "ผลลัพธ์ต้องเป็นแนวนอนเสมอ"
+    assert w > h, "the result must always be landscape"
 
     ar = w / h
-    assert 1.6 <= ar <= 3.0, f"สัดส่วนเพี้ยน ({ar:.2f}) แปลว่า crop ไม่ได้ลงบนตัวใบ"
+    assert 1.6 <= ar <= 3.0, f"distorted aspect ratio ({ar:.2f}) means the crop did not land on the slip"
 
     coverage = (w * h) / (FRAME[0] * FRAME[1])
-    assert 0.1 < coverage < 0.45, f"crop กินพื้นที่ {coverage:.0%} ของเฟรม — ไม่ใช่ขนาดของตัวใบ"
+    assert 0.1 < coverage < 0.45, f"the crop covers {coverage:.0%} of the frame — not the size of the slip"
 
 
 def test_plain_background_is_not_mistaken_for_paper():
-    """พื้นหลังขาวล้วนไม่มีใบ ต้องรายงานว่าหาไม่เจอ แล้วคืนภาพเต็มแทนการ crop มั่ว
+    """A plain white background with no slip must report "not found" and return the full frame rather than crop blindly.
 
-    ยอมให้ OCR อ่านภาพเต็มดีกว่าปล่อยภาพที่ถูกบิด/หมุน/ตัดขอบไปโดยไม่มีใครรู้
+    Letting OCR read the whole frame beats passing on an image that was skewed, rotated or
+    clipped with nobody the wiser.
     """
     img = np.full((*FRAME, 3), WHITE_DESK, np.uint8)
     assert find_paper_quad(img) is None
@@ -87,34 +90,35 @@ def test_plain_background_is_not_mistaken_for_paper():
 
 
 def test_giant_bright_blob_is_rejected():
-    """ก้อนสว่างที่ใหญ่เกือบเต็มเฟรม (ผนัง/โต๊ะ) ต้องไม่ถูกนับเป็นกระดาษ"""
+    """A bright blob filling nearly the whole frame (a wall, a table) must not be counted as paper"""
     img = np.full((*FRAME, 3), (60, 60, 60), np.uint8)
     cv2.rectangle(img, (20, 20), (FRAME[1] - 20, FRAME[0] - 20), (230, 232, 233), -1)
     assert find_paper_quad(img) is None
 
 
 def test_blank_paper_nearby_does_not_beat_the_slip():
-    """ปึกกระดาษเปล่าข้าง ๆ ที่บังเอิญมีสัดส่วนใกล้ใบ ต้องไม่ชนะตัวใบจริง
+    """A stack of blank paper nearby that happens to have a slip-like aspect ratio must not beat the real slip.
 
-    regression: เคยมีมุมของปึกกระดาษเปล่าขนาด 3% ของเฟรม ได้คะแนนสัดส่วนดีกว่าตัวใบ
-    ที่วางเอียงนิดหน่อย ระบบเลย crop ไปโดนกระดาษเปล่า แล้ว OCR อ่านได้ null ทุกช่อง
+    Regression: the corner of a blank paper stack covering 3% of the frame once scored better on
+    aspect ratio than the slightly tilted slip, so the system cropped onto the blank paper and
+    OCR returned null for every field.
     """
     img = fake_photo(WOOD, angle=6.0)
-    # กระดาษเปล่าสัดส่วน 2:1 วางมุมล่างซ้าย เล็กกว่าใบจริงมาก
+    # Blank paper at 2:1, bottom-left corner, much smaller than the real slip
     cv2.rectangle(img, (60, FRAME[0] - 380), (60 + 360, FRAME[0] - 200), (248, 248, 248), -1)
 
     r = run(img)
     assert r.quad_found
     w, h = r.cropped.size
     coverage = (w * h) / (FRAME[0] * FRAME[1])
-    assert coverage > 0.1, f"crop ได้แค่ {coverage:.1%} ของเฟรม — ไปจับกระดาษเปล่าแทนตัวใบ"
+    assert coverage > 0.1, f"the crop covers only {coverage:.1%} of the frame — it landed on the blank paper, not the slip"
 
 
 @pytest.mark.parametrize("orientation,rotated", [
     ("upside_down", True), ("upright", False), ("", False),
 ])
 def test_upright_rotates_only_when_model_says_upside_down(orientation, rotated):
-    """landscape() แก้ได้แค่ 90 องศา ส่วน 0 vs 180 ต้องเชื่อสิ่งที่ model อ่านได้"""
+    """landscape() only resolves the 90-degree case; 0 vs 180 has to be taken from what the model read"""
     img = to_pil(fake_photo(WOOD))
     out = P.upright(img, orientation)
     assert (out is not img) == rotated
@@ -123,10 +127,11 @@ def test_upright_rotates_only_when_model_says_upside_down(orientation, rotated):
 
 
 def test_raw_ocr_always_records_orientation():
-    """raw_ocr ต้องมี orientation เสมอ
+    """raw_ocr must always carry orientation.
 
-    reprocess ใช้ฟิลด์นี้ตัดสินว่าใบไหน "ยังไม่เคยเช็คว่ากลับหัว" ถ้าไม่บันทึกไว้
-    ใบที่เพิ่งอัปโหลดจะถูกหยิบไปยิง model ซ้ำทุกครั้งที่รัน reprocess
+    reprocess uses this field to decide which slips have "never been checked for being upside
+    down". Omit it and every freshly uploaded slip gets sent back to the model on every reprocess
+    run.
     """
     from ocrslip.ocr import OcrResult
     from ocrslip.web.pipeline import build_raw_ocr
@@ -140,18 +145,19 @@ def test_raw_ocr_always_records_orientation():
 
 
 def test_order_quad_keeps_all_four_corners_when_tilted():
-    """เรียงมุมต้องไม่ทำให้เหลือ 3 มุม
+    """Ordering the corners must not leave only 3 of them.
 
-    regression: วิธีเดิมเรียงตาม min/max ของ x+y และ x-y ซึ่งเลือกจุดเดิมซ้ำได้เมื่อ
-    สี่เหลี่ยมเอียงมาก quad ที่ได้จึงเสียรูปแล้ว warp ออกมาเป็นภาพเบลอไม่มีอะไรเลย
+    Regression: the old method ordered by the min/max of x+y and x-y, which can pick the same
+    point twice when the quadrilateral is steeply tilted. The resulting quad was malformed and
+    warped into a blurred image with nothing in it.
     """
     for angle in range(0, 90, 7):
         rect = cv2.boxPoints(((500.0, 400.0), (600.0, 280.0), float(angle)))
         ordered = P._order_quad(rect.astype(np.float32))
-        assert len({tuple(np.round(p, 3)) for p in ordered}) == 4, f"มุมซ้ำที่ {angle} องศา"
+        assert len({tuple(np.round(p, 3)) for p in ordered}) == 4, f"duplicate corner at {angle} degrees"
 
         tl, tr, br, bl = ordered
-        assert tl[0] < tr[0] or tl[1] < bl[1]          # เรียงตามเข็ม เริ่มจากซ้ายบน
+        assert tl[0] < tr[0] or tl[1] < bl[1]          # clockwise, starting from top-left
         assert cv2.contourArea(ordered) > 0.9 * 600 * 280
 
 
@@ -169,26 +175,27 @@ def _fake_preprocess(quad_found: bool):
 
 
 @pytest.mark.parametrize("quad_found,reads,want_full,want_calls", [
-    # crop ดี อ่านได้ตั้งแต่ครั้งแรก — ห้ามยิงซ้ำ
+    # Good crop, read correctly first time — must not call again
     (True, [_ocr(name="ก", tel="0812345678", noplate="กก1234")], False, 1),
-    # อ่านออก แต่ model บอกว่าตัวใบไม่ได้กินพื้นที่เกือบทั้งภาพ = crop ไปโดนพื้นโต๊ะ
-    # ต้องลองภาพเต็ม แม้จะอ่านได้ครบแล้วก็ตาม
+    # Readable, but the model reports the slip does not fill most of the frame = the crop caught
+    # the table top. Try the full frame, even though every field was read.
     (True, [_ocr(fills_frame=False, name="ก", tel="0812345678"),
             _ocr(name="ข", tel="0899999999")], True, 2),
-    # crop พัง อ่านไม่ได้เลย แล้วภาพเต็มอ่านได้ — ต้องใช้ผลจากภาพเต็ม
+    # Bad crop, nothing read, and the full frame reads fine — use the full-frame result
     (True, [_ocr(), _ocr(name="ก", tel="0812345678")], True, 2),
-    # หาขอบไม่เจอตั้งแต่แรก ภาพที่ส่งไปคือภาพเต็มอยู่แล้ว — ยิงซ้ำไปก็ได้ผลเดิม
+    # Edges not found at all, so the image sent was already the full frame — a retry would read the same
     (False, [_ocr()], False, 1),
-    # ลองภาพเต็มแล้วก็ยังอ่านไม่ได้ — คืนผลแรกไป ไม่ใช่ทำให้แย่ลง
+    # The full frame reads nothing either — return the first result rather than making it worse
     (True, [_ocr(), _ocr()], False, 2),
 ])
 def test_read_with_fallback_retries_full_frame_only_when_crop_reads_nothing(
     monkeypatch, quad_found, reads, want_full, want_calls
 ):
-    """ตาข่ายกันตกเวลา crop ไปจับของผิด
+    """The safety net for when the crop lands on the wrong thing.
 
-    มีสองสัญญาณ: อ่านไม่ได้สักช่อง (ไปจับของที่ไม่มีตัวหนังสือ) และ model บอกว่า
-    ตัวใบไม่ได้กินพื้นที่เกือบทั้งภาพ (จับติดพื้นหลังมาเยอะจนตัวใบเล็กและเอียง)
+    There are two signals: nothing read at all (we caught something with no text on it), and the
+    model reporting that the slip does not fill most of the frame (so much background was taken
+    in that the slip sits small and tilted).
     """
     from ocrslip.web import pipeline
 

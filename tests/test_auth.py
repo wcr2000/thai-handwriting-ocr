@@ -1,4 +1,4 @@
-"""ทดสอบระบบล็อกอิน — จุดที่พังแล้วเสียหายที่สุดของทั้งระบบ"""
+"""Login tests — the part of the system whose failure does the most damage"""
 
 import time
 
@@ -33,10 +33,10 @@ def test_token_roundtrip():
 
 
 @pytest.mark.parametrize("mutate", [
-    lambda t: t[:-2] + "xx",          # แก้ลายเซ็น
-    lambda t: "x" + t[1:],            # แก้ payload
-    lambda t: t.replace(".", ""),     # รูปแบบผิด
-    lambda t: "",                     # ว่าง
+    lambda t: t[:-2] + "xx",          # tampered signature
+    lambda t: "x" + t[1:],            # tampered payload
+    lambda t: t.replace(".", ""),     # malformed
+    lambda t: "",                     # empty
 ])
 def test_tampered_token_is_rejected(mutate):
     tok = auth.make_token(auth.User("admin", "admin"), "secret-key")
@@ -55,7 +55,7 @@ def test_expired_token_is_rejected(monkeypatch):
 
 
 def test_role_cannot_be_forged_by_editing_payload():
-    """เปลี่ยน role ใน payload แล้วลายเซ็นต้องไม่ผ่าน"""
+    """Changing the role in the payload must invalidate the signature"""
     import base64, json
     tok = auth.make_token(auth.User("staff", "user"), "k")
     payload_b64, sig = tok.split(".")
@@ -68,14 +68,14 @@ def test_role_cannot_be_forged_by_editing_payload():
 def test_lockout_escalates_then_caps():
     t = auth.Throttle()
     locks = [t.record_failure("ip:test", auth.MAX_LOCK_IP) for _ in range(12)]
-    assert locks[:4] == [0, 0, 0, 0]          # ยังไม่ล็อกใน 4 ครั้งแรก
-    assert locks[4] == auth.BASE_LOCK          # ครั้งที่ 5 เริ่มล็อก
-    assert locks[5] > locks[4]                 # เพิ่มเป็นเท่าตัว
-    assert max(locks) == auth.MAX_LOCK_IP      # แต่ไม่เกินเพดาน
+    assert locks[:4] == [0, 0, 0, 0]          # no lock within the first 4 attempts
+    assert locks[4] == auth.BASE_LOCK          # the 5th starts the lock
+    assert locks[5] > locks[4]                 # and it doubles
+    assert max(locks) == auth.MAX_LOCK_IP      # but never past the ceiling
 
 
 def test_username_lockout_is_capped_lower_than_ip():
-    """กันไม่ให้คนร้ายยิงชื่อ admin เพื่อล็อกเจ้าหน้าที่ตัวจริงออกจากระบบนาน ๆ"""
+    """Stops an attacker hammering the admin name to lock real staff out for a long stretch"""
     t = auth.Throttle()
     user_locks = [t.record_failure("user:admin", auth.MAX_LOCK_USER) for _ in range(12)]
     assert max(user_locks) == auth.MAX_LOCK_USER < auth.MAX_LOCK_IP
@@ -98,7 +98,7 @@ def test_cleanup_bounds_memory():
 
 
 def test_unknown_user_and_wrong_password_give_same_message(monkeypatch):
-    """ข้อความต้องเหมือนกัน ไม่งั้นเดาได้ว่าบัญชีไหนมีอยู่จริง"""
+    """The messages must be identical, or which accounts exist becomes guessable"""
     h = auth.hash_password("pw")
     monkeypatch.setenv("ADMIN_USERNAME", "admin")
     monkeypatch.setenv("ADMIN_PASSWORD_HASH", h)

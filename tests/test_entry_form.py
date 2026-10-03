@@ -1,8 +1,9 @@
-"""ฟอร์มขาเข้าที่ผู้มาจอดกรอกเอง (/in)
+"""The self-service entry form (/in).
 
-หน้านี้เปิดให้คนนอกเข้าได้ ด่านเดียวของมันคือรหัสที่เจ้าหน้าที่พิมพ์ปิดท้าย
-เทสต์ที่สำคัญที่สุดในไฟล์นี้จึงเป็น "รหัสต้องไม่โผล่ออกไปกับหน้าเว็บ" —
-ถ้าหลุดไปอยู่ใน HTML ที่ส่งให้เครื่องของผู้มาจอด ใครก็สร้างใบจอดปลอมได้จากที่บ้าน
+This page is open to the public, and its only gate is the passcode a staff member types to close
+it out. So the most important test in this file is that the passcode never leaves with the page:
+leaked into the HTML sent to a driver's device, anybody could fabricate parking slips from
+home.
 """
 
 import pytest
@@ -25,38 +26,39 @@ GOOD = {
 
 @pytest.fixture
 def pw(pgenv, monkeypatch):
-    """ตั้งรหัส + ชี้ฐานข้อมูลไปที่ฐานทดสอบ
+    """Set the passcode and point the database at the test database.
 
-    ต้องพ่วง pgenv ด้วยตั้งแต่ /in เริ่มอ่านตัวเลือกอาคาร/ชั้นจากตาราง app_settings —
-    ก่อนหน้านี้เทสต์กลุ่มนี้ไม่แตะฐานข้อมูลเลยจึงไม่ต้องใช้ แต่ตอนนี้ถ้าไม่พ่วง
-    มันจะไปเปิด connection ตาม DATABASE_URL ใน .env ซึ่งชี้ production
+    pgenv has to be pulled in as well, ever since /in began reading its building and floor choices
+    from the app_settings table. This group of tests previously touched no database and so did not
+    need it, but without it now they would open a connection to the DATABASE_URL in .env, which
+    points at production.
     """
     monkeypatch.setattr(main, "ENTRY_PASSWORD", PW)
 
 
 def test_page_is_off_when_no_password_configured(monkeypatch):
-    """ไม่ได้ตั้งรหัส = ปิดหน้าไปเลย ดีกว่าเปิดรับข้อมูลโดยไม่มีด่านอะไรเลย"""
+    """No passcode set means the page is disabled, which beats accepting data behind no gate at all"""
     monkeypatch.setattr(main, "ENTRY_PASSWORD", "")
     assert TestClient(app).get("/in").status_code == 503
     assert TestClient(app).post("/in", data=GOOD).status_code == 503
 
 
 def test_open_to_public_without_login(pw):
-    """ผู้มาจอดไม่มีบัญชี ต้องเปิดได้ตรง ๆ ไม่ใช่ถูกเด้งไปหน้า login"""
+    """A driver has no account, so the page must open directly rather than bouncing to login"""
     r = TestClient(app).get("/in", follow_redirects=False)
     assert r.status_code == 200
 
 
 def test_password_never_reaches_the_browser(pw):
-    """รหัสห้ามอยู่ใน HTML ทั้งตอนเปิดหน้าและตอนตอบกลับว่ากรอกผิด
+    """The passcode must not appear in the HTML, neither on page load nor in the wrong-passcode response.
 
-    นี่คือเหตุผลที่การตรวจรหัสต้องอยู่ฝั่ง server เท่านั้น ถ้าย้ายไปเช็คใน JavaScript
-    เทสต์นี้จะพังทันที — ซึ่งเป็นสิ่งที่ต้องการ
+    This is why the passcode check has to live server-side only. Move it into JavaScript and this
+    test fails immediately — which is exactly the point.
     """
     c = TestClient(app)
     assert PW not in c.get("/in").text
-    # กรอกรหัสผิด: หน้าที่ตอบกลับต้องไม่มีทั้งรหัสจริงและรหัสที่เพิ่งพิมพ์ไป
-    typed = "ที่พิมพ์ผิดไป"
+    # Wrong passcode: the response must contain neither the real passcode nor the one just typed
+    typed = "ที่พิมพ์ผิดไป"  # "the wrong thing that was typed"
     r = c.post("/in", data={**GOOD, "entry_pw": typed})
     assert r.status_code == 200
     assert PW not in r.text
@@ -73,7 +75,7 @@ def test_password_never_reaches_the_browser(pw):
     ({"floor": "ชั้นลอย"}, "floor", "เลือกชั้น"),
 ])
 def test_rejects_bad_input_and_keeps_what_was_typed(pw, bad, field, msg):
-    """ตีกลับแล้วต้องคืนค่าที่กรอกไว้ให้ด้วย ไม่ใช่ล้างฟอร์มให้พิมพ์ใหม่ทั้งหน้าบนมือถือ"""
+    """A rejection must return what was already entered, not clear the form and demand it all be retyped on a phone"""
     r = TestClient(app).post("/in", data={**GOOD, **bad})
     assert r.status_code == 200
     assert msg in r.text
@@ -81,26 +83,27 @@ def test_rejects_bad_input_and_keeps_what_was_typed(pw, bad, field, msg):
 
 
 def test_province_and_building_must_come_from_the_list(pw):
-    """ค่าที่ไม่อยู่ใน dropdown ต้องถูกปฏิเสธ ไม่ใช่เชื่อเพราะ <select> ไม่มีให้เลือก
+    """A value outside the dropdown must be rejected, not trusted because the <select> did not offer it.
 
-    <select> กันได้แค่คนที่ใช้หน้าเว็บตามปกติ ใครยิง POST ตรงก็ส่งอะไรมาก็ได้
-    ถ้าไม่ตรวจซ้ำฝั่ง server ที่จอดจะกลายเป็นข้อความอะไรก็ได้ แล้วสรุปยอดไม่ได้
+    A <select> only constrains people using the page normally; anybody posting directly can send
+    whatever they like. Without re-validating server-side, the parking spot becomes arbitrary text
+    and cannot be aggregated.
     """
     r = TestClient(app).post("/in", data={**GOOD, "province": "<script>"})
     assert "เลือกจังหวัด" in r.text
 
 
-# ---------- ส่วนที่ต้องใช้ Postgres จริง ----------
+# ---------- the part that needs a real Postgres ----------
 
 @pytest.fixture
 def clean(pgenv):
-    """ฐานข้อมูลว่าง + ตัวเลือกอาคาร/ชั้นกลับไปเป็นค่าตั้งต้นของโค้ด
+    """An empty database, with the building and floor choices back to the code defaults.
 
-    ต้องล้าง app_settings ด้วย ไม่ใช่แค่ slips: GOOD ส่ง "อาคาร 1 / ชั้น 2" ซึ่งเป็น
-    ค่าตั้งต้นในโค้ด แต่ /in ตรวจกับลิสต์ที่อ่านจาก app_settings ถ้าตารางนั้นมีลิสต์ของ
-    test_entry_settings ค้างอยู่ (ฐานข้อมูลทดสอบไม่ได้ถูกสร้างใหม่ทุกรอบ) /in จะตีกลับว่า
-    "เลือกอาคารที่จอด" แล้วเทสต์กลุ่มนี้ล้มทั้งแถบ — ล้มเฉพาะการรันรอบที่สองบนฐานเดิม
-    ซึ่งเป็นความล้มแบบที่ไล่หาสาเหตุยากที่สุด
+    app_settings has to be cleared too, not just slips: GOOD submits "อาคาร 1 / ชั้น 2", which are
+    the code defaults, but /in validates against the list read from app_settings. If that table
+    still holds test_entry_settings' list (the test database is not recreated every run), /in
+    rejects with "choose a parking building" and this whole group fails — and only on the second
+    run against the same database, which is the hardest kind of failure to track down.
     """
     from ocrslip.db import connect
     with connect() as conn:
@@ -111,10 +114,10 @@ def clean(pgenv):
 
 @needs_db
 def test_accepted_entry_is_searchable_immediately(pw, clean):
-    """กรอกเองแล้วเจ้าหน้าที่ยืนยัน = ไม่มีอะไรให้ตรวจ ต้องค้นเจอทันที
+    """Typed by the driver and attested by staff = nothing to review, so it must be searchable immediately.
 
-    ถ้าใบพวกนี้ยังเข้าคิวตรวจ คอขวด labeling จะไม่หายไปไหน และขาออกจะหาใบไม่เจอ
-    เพราะหน้าค้นหาแสดงเฉพาะใบที่ approved
+    If these slips still entered the review queue, the labelling bottleneck would not go anywhere,
+    and the exit flow would fail to find them, because the search page shows only approved slips.
     """
     r = TestClient(app).post("/in", data=GOOD)
     assert r.status_code == 200
@@ -127,19 +130,19 @@ def test_accepted_entry_is_searchable_immediately(pw, clean):
     assert row["needs_review"] is False
     assert row["entry_source"] == "typed"
     assert row["car_status"] == "stored"
-    # ที่จอดต้องประกอบจาก dropdown ทั้งสองช่อง ไม่ใช่เก็บแค่ช่องเดียว
+    # The parking spot has to be composed from both dropdowns, not just one of them
     assert row["location"] == "อาคาร 1 ชั้น 2"
     assert row["tel_digits"] == "0812345678"
-    # ไม่มีค่าใช้จ่าย AI ในเส้นทางนี้ — ถ้าเลขนี้ขึ้นแปลว่ามีใครพา OCR กลับมา
+    # There is no AI cost on this route — a non-zero figure here means somebody reintroduced OCR
     assert row["ocr_cost_usd"] == 0
 
 
 @needs_db
 def test_submitting_twice_does_not_create_a_second_slip(pw, clean):
-    """กด submit ซ้ำ / refresh หน้า ต้องได้ใบเดิม ไม่ใช่รถคันเดียวมีสองใบ
+    """A repeated submit or a page refresh must return the same slip, not give one car two slips.
 
-    ใบซ้ำเจ็บที่ขาออก: เจ้าหน้าที่เห็นสองแถวเหมือนกันแล้วไม่รู้ว่าต้องปิดใบไหน
-    ปิดผิดใบก็เหลือใบค้างที่ไม่มีใครมารับตลอดไป
+    A duplicate hurts on the way out: staff see two identical rows and cannot tell which to close.
+    Close the wrong one and a slip is stranded that nobody will ever come to collect.
     """
     c = TestClient(app)
     c.post("/in", data=GOOD)
@@ -154,7 +157,7 @@ def test_submitting_twice_does_not_create_a_second_slip(pw, clean):
 
 @needs_db
 def test_same_plate_can_register_again_after_it_left(pw, clean):
-    """รถคันเดิมกลับมาจอดใหม่หลังรับรถกลับไปแล้ว ต้องลงทะเบียนได้ ไม่ใช่ติดกันซ้ำ"""
+    """The same car returning to park after collection must be registrable, not blocked as a duplicate"""
     from ocrslip.db import connect, mark_returned
     c = TestClient(app)
     c.post("/in", data=GOOD)
@@ -171,10 +174,11 @@ def test_same_plate_can_register_again_after_it_left(pw, clean):
 
 @needs_db
 def test_second_release_does_not_overwrite_the_first(pw, clean):
-    """สองเจ้าหน้าที่กดปล่อยรถใบเดียวกัน คนที่กดทีหลังต้องไม่ทับร่องรอยของคนแรก
+    """Two staff releasing the same car: whoever presses second must not overwrite the first one's record.
 
-    ที่จุด checkout มีหลายเครื่องหันจอคนละทาง เรื่องนี้เกิดขึ้นจริง
-    ถ้าทับได้ ชื่อผู้ส่งมอบกับเวลาจะกลายเป็นของคนที่กดทีหลัง = ลบร่องรอยคนที่ปล่อยรถจริง
+    At the checkout point several devices face different ways, and this genuinely happens. Allowed
+    to overwrite, the handover name and time become those of whoever pressed last, erasing the
+    record of the person who actually released the car.
     """
     from ocrslip.db import connect, mark_returned
     TestClient(app).post("/in", data=GOOD)
@@ -190,14 +194,15 @@ def test_second_release_does_not_overwrite_the_first(pw, clean):
     assert row["released_to"] == "ญาติ ก"
 
 
-# ---------- มือถือ ----------
+# ---------- mobile ----------
 
 def test_mobile_touch_rule_covers_every_input_type_we_use():
-    """ชนิด input ทุกตัวที่ฟอร์มใช้จริง ต้องอยู่ในกฎ 44px ของ media query มือถือ
+    """Every input type the form actually uses must be covered by the mobile media query's 44px rule.
 
-    กฎนี้เคยตก input[type=tel] กับ input[type=date] ไป — ซึ่งดันเป็นช่องเบอร์โทร
-    กับช่องวันที่ในฟอร์มขาเข้าพอดี ช่องสองช่องนั้นจึงเตี้ยกว่า 44px บนมือถือ
-    บั๊กแบบนี้ไม่มีใครเห็นบนเดสก์ท็อป และคนกรอกจริงคือคนที่ยืนอยู่ข้างรถใช้นิ้วโป้งข้างเดียว
+    That rule once omitted input[type=tel] and input[type=date] — which happen to be exactly the
+    phone and date fields on the entry form, leaving those two under 44px tall on a phone. Nobody
+    sees a bug like this on a desktop, and the people filling the form in are standing beside a car
+    using one thumb.
     """
     import re
     from pathlib import Path
@@ -207,10 +212,11 @@ def test_mobile_touch_rule_covers_every_input_type_we_use():
         Path(f"ocrslip/web/templates/{n}").read_text(encoding="utf-8")
         for n in ("in.html", "out.html", "out_pick.html", "slip.html", "index.html")
     )
-    # radio ไม่อยู่ในกฎนี้โดยเจตนา: ปุ่มวิทยุในหน้าเลือกใบขาออกมี .pick-row เป็นเป้ากด
-    # ทั้งแถว (สูงกว่า 44px อยู่แล้ว) การขยายตัววงกลมให้สูง 44px จะดันแถวเตี้ย ๆ บวมเกินจอ
+    # radio is deliberately outside this rule: the radios on the exit slip-picker have .pick-row as
+    # a whole-row tap target (already taller than 44px), and growing the circle itself to 44px would
+    # bloat those short rows past the screen.
     used = set(re.findall(r'<input[^>]*type="(\w+)"', forms)) - {"hidden", "checkbox", "file", "radio"}
 
     block = css.split("@media (max-width: 820px)", 1)[1].split("}", 1)[0]
     covered = set(re.findall(r"input\[type=(\w+)\]", block))
-    assert used <= covered, f"media query มือถือยังไม่ครอบ: {sorted(used - covered)}"
+    assert used <= covered, f"the mobile media query does not yet cover: {sorted(used - covered)}"

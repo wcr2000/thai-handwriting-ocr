@@ -1,7 +1,7 @@
-"""Normalize ข้อมูลไทยให้อยู่ในรูปมาตรฐาน ใช้ทั้งตอนวัด accuracy และตอนค้นหา
+"""Normalize Thai data into a canonical form, used both for accuracy scoring and for search.
 
-เป้าหมายคือทำให้ "ค่าที่มนุษย์เห็นว่าเหมือนกัน" กลายเป็น string เดียวกัน
-เช่น '080-000-0000' กับ '0800000000', 'นายสมชาย' กับ 'สมชาย'
+The goal is to collapse "values a human reads as the same" into one identical string:
+'080-000-0000' and '0800000000', or 'นายสมชาย' ("Mr. Somchai") and 'สมชาย' ("Somchai").
 """
 
 from __future__ import annotations
@@ -18,9 +18,11 @@ PROVINCES = ("กรุงเทพมหานคร", "กรุงเทพ�
              "พระนครศรีอยุธยา", "นนทบุรี", "ปทุมธานี", "สมุทรปราการ", "ชลบุรี",
              "เบตง")
 
-# ตัวเลือกจังหวัดของทะเบียน สำหรับ dropdown ในฟอร์มขาเข้า — ต่างจาก PROVINCES ข้างบนที่เป็นรายการ
-# "คำที่อาจโผล่ติดมากับทะเบียน" ไว้ให้ split_province ตัดออก ไม่ใช่รายการจังหวัดจริง
-# ให้เลือกไม่ให้พิมพ์ เพราะพิมพ์เองจะได้ "ปทุม" / "ปทุมธานี " / "กรุงเทพฯ" แล้วค้นไม่เจอ
+# Plate province choices for the entry form dropdown. Distinct from PROVINCES above,
+# which is a list of "words that may come attached to a plate" for split_province to
+# strip off, not a list of actual provinces.
+# A dropdown rather than free text, because hand-typing yields "ปทุม" / "ปทุมธานี " /
+# "กรุงเทพฯ" — three spellings of two provinces, none of which find each other on search.
 PROVINCE_CHOICES = (
     "กรุงเทพมหานคร", "กระบี่", "กาญจนบุรี", "กาฬสินธุ์", "กำแพงเพชร", "ขอนแก่น",
     "จันทบุรี", "ฉะเชิงเทรา", "ชลบุรี", "ชัยนาท", "ชัยภูมิ", "ชุมพร", "เชียงราย",
@@ -36,9 +38,11 @@ PROVINCE_CHOICES = (
     "หนองบัวลำภู", "อ่างทอง", "อำนาจเจริญ", "อุดรธานี", "อุตรดิตถ์", "อุทัยธานี",
     "อุบลราชธานี",
 )
-# "เบตง" อยู่ในลิสต์ข้างบนทั้งที่ไม่ใช่จังหวัด: ป้ายทะเบียนที่ออกจากสาขาอำเภอเบตง
-# พิมพ์คำว่า "เบตง" ไม่ใช่ "ยะลา" เป็นที่เดียวในประเทศที่เป็นแบบนี้ ลิสต์นี้คือ
-# "ข้อความที่อยู่บนป้าย" ไม่ใช่ "ชื่อเขตการปกครอง" จึงต้องมี ห้ามตัดออกตอนเทียบกับ 77 จังหวัด
+# "เบตง" (Betong) appears in the list above even though it is not a province: plates
+# issued by the Betong district branch are printed "เบตง", not "ยะลา" (Yala), the only
+# place in the country that works this way. This list holds "text that appears on the
+# plate", not "names of administrative divisions" — so it belongs here, and must not be
+# dropped when reconciling against the 77 provinces.
 
 BRAND_ALIASES = {
     "toyota": ("toyota", "โตโยต้า", "โตโยตา", "toyata"),
@@ -74,7 +78,7 @@ def _base(text: str | None) -> str:
 
 
 def norm_name(text: str | None) -> str:
-    """ตัดคำนำหน้า + ช่องว่างส่วนเกิน เหลือแค่ชื่อ-นามสกุล ตัวพิมพ์เล็ก"""
+    """Strip the honorific and surplus whitespace, leaving a lowercased given + family name"""
     s = _base(text).lower()
     for t in TITLES:
         if s.startswith(t):
@@ -84,7 +88,7 @@ def norm_name(text: str | None) -> str:
 
 
 def norm_phone(text: str | None) -> str:
-    """เหลือเฉพาะตัวเลข และแปลง +66xxxxxxxxx ให้เป็น 0xxxxxxxxx"""
+    """Keep digits only, and rewrite +66xxxxxxxxx as 0xxxxxxxxx"""
     d = re.sub(r"\D", "", _base(text))
     if d.startswith("66") and len(d) == 11:
         d = "0" + d[2:]
@@ -92,7 +96,7 @@ def norm_phone(text: str | None) -> str:
 
 
 def split_province(text: str | None) -> tuple[str, str | None]:
-    """แยกชื่อจังหวัดออกจากทะเบียน คืน (ทะเบียน, จังหวัด|None)"""
+    """Split the province off a plate. Returns (plate, province|None)."""
     s = _base(text)
     for p in sorted(PROVINCES, key=len, reverse=True):
         if p in s:
@@ -101,13 +105,13 @@ def split_province(text: str | None) -> tuple[str, str | None]:
 
 
 def norm_plate(text: str | None) -> str:
-    """ตัดช่องว่าง/ขีด/จุด/ชื่อจังหวัด ออกจากทะเบียน เหลือหมวดอักษร+ตัวเลขติดกัน"""
+    """Strip spaces, dashes, dots and the province off a plate, leaving letters+digits joined"""
     s, _ = split_province(text)
     return re.sub(r"[\s\-\.]", "", s).lower()
 
 
 def norm_province(text: str | None) -> str:
-    """จังหวัดที่เขียนได้หลายแบบ (กทม. / กรุงเทพ / กรุงเทพมหานคร) ให้เป็นตัวเดียวกัน"""
+    """Collapse the many spellings of a province (กทม. / กรุงเทพ / กรุงเทพมหานคร) into one"""
     s = _base(text).lower().rstrip(".")
     if s in {"กทม", "กรุงเทพ", "กรุงเทพฯ", "กรุงเทพมหานคร", "bangkok", "bkk"}:
         return "กรุงเทพ"
@@ -117,7 +121,7 @@ def norm_province(text: str | None) -> str:
 
 
 def norm_brand(text: str | None) -> str:
-    """map ยี่ห้อเข้า canonical (โตโยต้า -> toyota) และตัดรุ่น/สีออก"""
+    """Map a brand onto its canonical form (โตโยต้า -> toyota) and drop model and colour"""
     s = _base(text).lower()
     for canonical, aliases in BRAND_ALIASES.items():
         if any(a in s for a in aliases):
@@ -131,7 +135,7 @@ def norm_cartype(text: str | None) -> str:
 
 
 def parse_date(text: str | None) -> dt.date | None:
-    """รองรับ 26/9/69, 26/09/2569, 26 ก.ย. 69, 26 กันยายน 2569, 2026-09-26"""
+    """Accepts 26/9/69, 26/09/2569, 26 ก.ย. 69, 26 กันยายน 2569, 2026-09-26"""
     s = _base(text)
     if not s:
         return None
@@ -156,21 +160,24 @@ def parse_date(text: str | None) -> dt.date | None:
 
 
 def _mk(year: int, month: int, day: int) -> dt.date | None:
-    """แปลงปีให้เป็น ค.ศ. เสมอ โดยเลือกความหมายที่ "ใกล้วันนี้ที่สุด": 69 -> 2026
+    """Always resolve the year to Gregorian by picking the reading *closest to today*: 69 -> 2026.
 
-    ใบจอดรถเขียนวันที่วันนี้เสมอ ปีที่ห่างจากวันนี้หลายสิบปีจึงไม่ใช่สิ่งที่คนเขียน
-    กติกาเดิม (ปี 2 หลัก < 50 ให้บวก 2600 แล้วถือเป็น พ.ศ. ลบ 543) แปลง "26"
-    ที่คนเขียนแทน ค.ศ. 2026 ไปเป็น 2083 — เจอในฐานข้อมูลจริงกว่า 300 ใบ
-    ผลคือใบเดียวกันที่ถ่ายซ้ำถูกนับเป็นการฝากคนละรอบ เพราะวันที่ไม่ตรงกัน
+    A parking slip is always dated the day it was written, so a year decades away from
+    today is not something a person wrote. The previous rule (two-digit year < 50 gets
+    +2600, then treat as Buddhist Era and subtract 543) turned the "26" people wrote for
+    2026 CE into 2083 — found on more than 300 slips in the real database. The effect was
+    that re-photographing one slip counted as a separate parking round, because the dates
+    disagreed.
 
-    เลือกแค่ปีที่ใกล้ที่สุดใบเดียว ไม่ถอยไปลองปีถัด ๆ ไปเมื่อวันนั้นไม่มีจริง
-    (29 ก.พ. ที่ไม่ใช่ปีอธิกสุรทิน) — ถอยแล้วจะได้ปีที่ห่างออกไปหลายสิบปีซึ่งแย่กว่า
-    การยอมรับว่าอ่านวันที่ไม่ออก คนตรวจแก้ใบที่ว่างได้ แต่ไม่มีใครจับได้ว่าปี 2068 ผิด
+    Only the single closest year is chosen; we deliberately do not walk to the next
+    candidate when that date does not exist (29 Feb in a non-leap year). Walking on
+    yields a year decades away, which is worse than admitting the date was unreadable:
+    a reviewer can fix an empty field, but nobody will ever catch that 2068 is wrong.
     """
     if year < 100:
         cands = [2000 + year, 1900 + year, 2500 + year - 543, 2600 + year - 543]
     else:
-        cands = [year, year - 543]  # > 2400 คือ พ.ศ. แต่ให้ความใกล้วันนี้ตัดสิน
+        cands = [year, year - 543]  # > 2400 means Buddhist Era, but let closeness to today decide
     year = min(cands, key=lambda y: abs(y - dt.date.today().year))
     try:
         return dt.date(year, month, day)

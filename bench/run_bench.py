@@ -1,7 +1,9 @@
-"""ยิงรูปตัวอย่างเข้า model หลายตัว × preprocessing หลายแบบ แล้วเก็บผลดิบไว้ให้ score.py
+"""Send the sample images through several models x several preprocessing variants, storing the
+raw results for score.py.
 
-ผลถูก cache ลงดิสก์ต่อ (model, variant, ไฟล์) — รันซ้ำจะข้ามของที่มีแล้ว ไม่เสียเงินซ้ำ
-    python bench/run_bench.py                 # รันทั้ง matrix
+Results are cached on disk per (model, variant, file), so a re-run skips what already exists
+and nothing is paid for twice.
+    python bench/run_bench.py                 # run the whole matrix
     python bench/run_bench.py --models google/gemini-3.8-flash --variants v2
 """
 
@@ -25,7 +27,7 @@ ROOT = Path(__file__).resolve().parent.parent
 EXAMPLES = ROOT / "example"
 OUT = ROOT / "bench" / "out"
 
-# ราคา USD ต่อ 1M tokens (prompt/completion) ดึงจาก OpenRouter — ใช้คำนวณต้นทุนต่อ 1000 ใบ
+# USD per 1M tokens (prompt/completion), taken from OpenRouter — used to compute cost per 1000 slips
 MODELS: dict[str, tuple[float, float]] = {
     "google/gemini-3.8-flash": (0.75, 3.75),
     "google/gemini-3.7-flash": (0.75, 3.75),
@@ -48,7 +50,7 @@ def slug(model: str) -> str:
 
 
 def build_variants(path: Path) -> dict[str, bytes]:
-    """preprocess รูป 1 ใบ ให้ได้ JPEG ของทุก variant (ทำครั้งเดียว ใช้กับทุก model)"""
+    """Preprocess one image into a JPEG per variant (done once, reused across every model)"""
     r = preprocess(path)
     return {
         "v0_raw": encode_jpeg(r.raw),
@@ -58,7 +60,7 @@ def build_variants(path: Path) -> dict[str, bytes]:
 
 
 def _needs_run(cached: Path) -> bool:
-    """รันใหม่ถ้ายังไม่มีผล หรือผลที่ cache ไว้เป็น error (จะได้ไม่ติด error ค้างถาวร)"""
+    """Re-run when there is no result yet, or the cached result is an error (so an error cannot stick forever)"""
     if not cached.exists():
         return True
     try:
@@ -72,11 +74,11 @@ def main() -> None:
     ap.add_argument("--models", nargs="*", default=list(MODELS))
     ap.add_argument("--variants", nargs="*", default=list(VARIANTS))
     ap.add_argument("--workers", type=int, default=6)
-    ap.add_argument("--force", action="store_true", help="ยิงใหม่แม้มี cache แล้ว")
+    ap.add_argument("--force", action="store_true", help="re-run even when a cached result exists")
     args = ap.parse_args()
 
     images = sorted(p for p in EXAMPLES.iterdir() if p.name.startswith("IMG_"))
-    print(f"เตรียมรูป {len(images)} ใบ ...", flush=True)
+    print(f"preparing {len(images)} images ...", flush=True)
     variants_by_image = {p: build_variants(p) for p in images}
 
     jobs = [
@@ -87,7 +89,7 @@ def main() -> None:
         if args.force or _needs_run(OUT / slug(model) / variant / f"{path.stem}.json")
     ]
     done = len(args.models) * len(args.variants) * len(images) - len(jobs)
-    print(f"ต้องยิง {len(jobs)} calls (ข้ามจาก cache {done})", flush=True)
+    print(f"{len(jobs)} calls to make ({done} skipped from cache)", flush=True)
 
     client = httpx.Client(timeout=180)
 

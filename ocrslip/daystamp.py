@@ -1,32 +1,41 @@
-"""สติกเกอร์ประจำวัน — สีตามวันในสัปดาห์ + คำคมที่เปลี่ยนไปทุกวัน
+"""Day stamp — a colour keyed to the weekday plus a quote that changes daily.
 
-ทำไมต้องมี: ตอนขาออก ผู้มาจอดมักยื่นภาพที่แคปไว้ให้เจ้าหน้าที่ดู เจ้าหน้าที่จะดูด้วยตา
-ว่า "ภาพนี้ของวันที่เขาบอกจริงไหม" ได้ยากถ้ามีแต่ตัวเลขวันที่ตัวเล็ก ๆ — แถบสีเต็มบรรทัด
-เห็นแต่ไกลและเทียบกับสติกเกอร์ที่ทีมติดไว้หน้าจุดจอดของวันนั้นได้ทันที
+Why it exists: on the way out, drivers typically hold up the screenshot they saved for a
+staff member to look at. Judging by eye whether "this screenshot really is from the day
+they claim" is hard when all there is to go on is a small date in digits. A full-width
+colour band is visible from a distance and can be checked instantly against the sticker
+the team posted at that day's parking point.
 
-สีมาจาก "วันในสัปดาห์ของวันที่ฝาก" ตามสีประจำวันแบบไทย ส่วนคำคมมาจากตัววันที่เต็ม ๆ
-จำนวนคำคมเป็น 13 ซึ่งไม่หารกับ 7 ลงตัว คู่ (สี, คำคม) จึงไม่ซ้ำกันเลยตลอด 91 วัน —
-ภาพเก่าที่เอามาอ้างว่าเป็นของวันนี้จะสีถูกแต่คำคมผิด ถ้าห่างกันไม่ถึงหนึ่งไตรมาส
+The colour comes from the weekday of the deposit date, following the traditional Thai
+day colours, while the quote comes from the full date. There are 13 quotes, which does
+not divide evenly into 7, so the (colour, quote) pair never repeats across 91 days — an
+old screenshot passed off as today's will have the right colour but the wrong quote,
+provided the two days are less than a quarter apart.
 
-จำนวนคำคมจึงเป็นเรื่องใหญ่กว่าที่เห็น: ถ้าทีมแก้คำคมจากหน้าตั้งค่าแล้วเหลือ 7 หรือ 14 อัน
-(หารกับ 7 ลงตัว) คำคมจะกลับมาซ้ำที่สีเดิมทุกสัปดาห์ ภาพของสัปดาห์ก่อนจะกลายเป็นภาพที่
-"ถูกต้องทุกอย่าง" ทันที — หน้าตั้งค่าจึงต้องเตือนเรื่องนี้ ดู quote_cycle_days()
+That makes the *number* of quotes a bigger deal than it looks: if the team edits the
+quotes from the settings page down to 7 or 14 (both divisible by 7), the quotes line up
+with the same colour every week, and last week's screenshot instantly becomes one where
+everything checks out. The settings page therefore has to warn about this; see
+quote_cycle_days().
 
-ข้อจำกัดที่ต้องรู้ไว้: นี่เป็นแค่ด่านสายตา ไม่ใช่ด่านจริง ภาพหน้าจอแก้ด้วยแอปแต่งรูปได้เสมอ
-ด่านจริงยังเป็นการค้นใบจากเลขอ้างอิง/ทะเบียนในระบบเหมือนเดิม
+A limitation worth stating plainly: this is an eyeball check, not a real gate. A
+screenshot can always be doctored in a photo editor. The real check is still looking the
+slip up in the system by reference number or plate.
 
-คีย์ "day" ยังคืนมาอยู่แม้ใบที่ผู้มาจอดแคปจะไม่แสดงชื่อวันเป็นตัวหนังสือแล้ว — มันคือ
-ตัวที่ทำให้เทสต์ยืนยันได้ว่าสีมาจาก "วันในสัปดาห์ของวันที่ระบุ" จริง ไม่ใช่วันที่เปิดหน้า
+The "day" key is still returned even though the driver's screenshot no longer prints the
+weekday as text — it is what lets the tests confirm the colour really derives from the
+weekday of the given date rather than from the day the page was opened.
 """
 
 import datetime as dt
 import math
 from collections.abc import Sequence
 
-# สีประจำวันแบบไทย — เก็บคู่กัน: สีพื้นอ่อนไว้ทำแถบ สีเข้มไว้ทำกรอบและตัวอักษร
-# ให้ตัวอักษรบนแถบยังอ่านออกบนจอที่ปรับความสว่างต่ำ ๆ กลางลานจอดรถ
+# Traditional Thai day colours, stored as pairs: the pale tint makes the band, the dark
+# shade makes the border and the text. This keeps the text on the band legible on a screen
+# dimmed right down in the middle of a car park.
 DAY_COLORS: list[tuple[str, str, str]] = [
-    # (ชื่อวัน, สีเข้ม, สีพื้นอ่อน) เรียงตาม weekday() ของ Python คือจันทร์ = 0
+    # (day name, dark shade, pale tint), ordered by Python's weekday(), i.e. Monday = 0
     ("จันทร์", "#a67c00", "#fdf3d0"),
     ("อังคาร", "#c2185b", "#fde3ee"),
     ("พุธ", "#2e7d32", "#e2f5e6"),
@@ -55,13 +64,15 @@ QUOTES: list[str] = [
 
 def day_stamp(d: dt.date | dt.datetime | None,
               quotes: Sequence[str] = QUOTES) -> dict[str, str] | None:
-    """คืนสติกเกอร์ของวันนั้น — ไม่มีวันที่ก็ไม่มีสติกเกอร์ (อย่าเดาเป็นวันนี้)
+    """Return that day's stamp. No date means no stamp — never fall back to today.
 
-    ถ้าเดาเป็นวันนี้เมื่อวันที่หาย ภาพที่แคปไว้จะโกหกเจ้าหน้าที่ว่าฝากวันนี้
-    ซึ่งแย่กว่าการไม่มีแถบสีเลย
+    Falling back to today when the date is missing would make the saved screenshot lie to
+    staff about the slip being deposited today, which is worse than having no colour band
+    at all.
 
-    quotes รับเข้ามาได้เพื่อให้ทีมแก้คำคมเองจากหน้าตั้งค่าโดยไม่ต้องแก้โค้ด —
-    ฟังก์ชันนี้จึงไม่รู้จักฐานข้อมูล คนเรียกเป็นคนหาคำคมมาให้
+    quotes is injectable so the team can edit the quotes from the settings page without a
+    code change — hence this function knows nothing about the database, and the caller is
+    responsible for supplying the quotes.
     """
     if d is None:
         return None
@@ -72,15 +83,16 @@ def day_stamp(d: dt.date | dt.datetime | None,
         "day": name,
         "ink": ink,
         "wash": wash,
-        # toordinal() เดินทีละ 1 ต่อวัน คำคมจึงไม่ซ้ำวันติดกันแน่นอน
+        # toordinal() advances by 1 per day, so consecutive days can never share a quote
         "quote": (quotes or QUOTES)[d.toordinal() % len(quotes or QUOTES)],
     }
 
 
 def quote_cycle_days(quotes: Sequence[str]) -> int:
-    """กี่วันกว่าคู่ (สี, คำคม) จะวนกลับมาซ้ำ — คือ ครน. ของ 7 กับจำนวนคำคม
+    """How many days before the (colour, quote) pair repeats — the LCM of 7 and the quote count.
 
-    ตัวเลขนี้คือ "อายุของภาพเก่าที่ยังจับได้" ทั้งหมดที่แถบสีนี้ให้ได้ เอาไว้โชว์ใน
-    หน้าตั้งค่าให้คนแก้คำคมเห็นผลของสิ่งที่ตัวเองเพิ่งทำ ก่อนกดบันทึก
+    This number is the entire detection window the colour band buys you: the maximum age
+    of an old screenshot it can still catch. Shown on the settings page so whoever is
+    editing the quotes sees the consequence of what they just did before they save.
     """
     return math.lcm(7, len(quotes)) if quotes else 0

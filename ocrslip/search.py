@@ -1,7 +1,7 @@
-"""ค้นหาแบบ fuzzy: ชื่อสะกดผิด เบอร์เพี้ยน ทะเบียนอ่านผิด ก็ยังเจอใบที่ใกล้ที่สุด
+"""Fuzzy search: a misspelled name, a mistyped phone number or a misread plate still finds the closest slip.
 
-ทำสองชั้น: ดึง candidate จาก Postgres ด้วย trigram/levenshtein (เร็ว ใช้ index)
-แล้ว rerank ใน Python ด้วย rapidfuzz เพื่อให้จัดอันดับดีกว่า similarity ดิบ ๆ
+Two layers: pull candidates out of Postgres with trigram/levenshtein (fast, index-backed),
+then rerank in Python with rapidfuzz, which ranks better than raw similarity does.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ CANDIDATE_LIMIT = 150
 
 
 def classify(query: str) -> str:
-    """เดาว่าผู้ใช้พิมพ์อะไรมา: เบอร์โทร / ทะเบียน / ชื่อ"""
+    """Guess what the user typed: a phone number, a plate, or a name"""
     q = _base(query)
     digits = re.sub(r"\D", "", q)
     if len(digits) >= 6 and len(digits) >= len(q.replace(" ", "")) - 2:
@@ -36,11 +36,11 @@ def search(conn: psycopg.Connection, query: str, *, include_pending: bool = Fals
         return []
 
     name_q, tel_q, plate_q = norm_name(q), norm_phone(q), norm_plate(q)
-    # ยี่ห้อต้อง normalize คนละแบบ (โตโยต้า -> toyota) ไม่งั้นค้นภาษาไทยจะไม่เจอ
+    # Brand needs its own normalizer (โตโยต้า -> toyota), or a Thai-language query finds nothing
     brand_q = norm_brand(q)
     status_clause = "" if include_pending else "AND review_status = 'approved'"
 
-    # similarity threshold ต่ำ ๆ เพราะเราจะไป rerank เองอีกที — ตรงนี้เอาแค่ candidate กว้าง ๆ
+    # A low similarity threshold, because we rerank afterwards — this stage only needs a wide candidate net
     sql = f"""
         SELECT *,
                similarity(name_norm, %(name)s)   AS sim_name,
@@ -70,21 +70,23 @@ def search(conn: psycopg.Connection, query: str, *, include_pending: bool = Fals
     for r in rows:
         score, why = _score(r, kind, name_q, tel_q, plate_q, brand_q)
         scored.append({**r, "score": score, "match_on": why})
-    # เรียงสามชั้น: คะแนนก่อน แล้วใบที่รถยังจอดอยู่ แล้วรอบล่าสุด
-    # รถคันเดิมที่เอามาฝากหลายรอบได้คะแนนเท่ากันทุกใบ (ทะเบียน/ชื่อ/เบอร์ชุดเดียวกัน)
-    # ถ้าไม่มีชั้นที่สอง ลำดับของใบที่ยังจอดอยู่กับใบที่รับรถไปแล้วขึ้นกับว่า Postgres
-    # คืนแถวมาทางไหน เจ้าหน้าที่ขาออกจึงอาจเปิดใบรอบที่ปิดไปแล้วเป็นใบแรก
+    # Three sort layers: score first, then still-parked slips, then the most recent round.
+    # The same car parked over several rounds scores identically on every slip (one set of
+    # plate, name and phone). Without the second layer, the order of a parked slip against
+    # an already-returned one depends on how Postgres happens to return rows, so exit staff
+    # could open an already-closed round first.
     scored.sort(key=lambda r: r["created_at"], reverse=True)
     scored.sort(key=lambda r: (-r["score"], r["car_status"] != "stored"))
     return scored[:limit]
 
 
 def _score(row: dict, kind: str, name_q: str, tel_q: str, plate_q: str, brand_q: str = "") -> tuple[float, str]:
-    """คะแนน 0-100 = ความเหมือนของ "ช่องที่แมตช์ดีที่สุด" ไม่ใช่ค่าเฉลี่ยรวมทุกช่อง
+    """Score 0-100 = similarity of the *best matching field*, not an average across fields.
 
-    ถัวเฉลี่ยทุกช่องจะทำให้เบอร์ที่ตรงเป๊ะได้แค่ ~70% ซึ่งอ่านแล้วเข้าใจผิด
-    ที่นี่จึงใช้ค่าสูงสุด แล้วคูณตัวถ่วงเล็กน้อยตามว่าผู้ใช้น่าจะค้นด้วยอะไร
-    เพื่อให้ช่องที่ตรงกับเจตนาของ query ชนะช่องที่บังเอิญคล้าย
+    Averaging every field would score an exact phone-number match at only ~70%, which
+    reads as a much weaker match than it is. So this takes the maximum, then applies a
+    small weight based on what the user probably searched by, so the field matching the
+    query's intent beats a field that merely happens to look similar.
     """
     tel = row.get("tel_digits") or ""
     plate = row.get("plate_norm") or ""
@@ -93,11 +95,11 @@ def _score(row: dict, kind: str, name_q: str, tel_q: str, plate_q: str, brand_q:
 
     s_tel = 100.0 if (tel_q and tel and tel_q in tel) else (fuzz.ratio(tel_q, tel) if tel_q and tel else 0)
     s_plate = fuzz.ratio(plate_q, plate) if plate_q and plate else 0
-    # token_set_ratio: สลับชื่อ-นามสกุลก็ยังแมตช์ / partial_ratio: พิมพ์ชื่อไม่จบก็ยังแมตช์
+    # token_set_ratio: still matches with given and family name swapped. partial_ratio: still matches a half-typed name.
     s_name = max(fuzz.token_set_ratio(name_q, name), fuzz.partial_ratio(name_q, name)) if name_q and name else 0
     s_brand = fuzz.partial_ratio(brand_q, brand) if brand_q and brand else 0
 
-    # ตัวถ่วง: ช่องที่ตรงกับชนิดของ query ได้น้ำหนักเต็ม ช่องอื่นถูกลดทอนเล็กน้อย
+    # Weights: the field matching the query type gets full weight, the others are discounted slightly
     prefer = {
         "tel": {"เบอร์โทร": 1.0, "ทะเบียน": 0.85, "ชื่อ": 0.80, "ยี่ห้อ": 0.60},
         "plate": {"เบอร์โทร": 0.85, "ทะเบียน": 1.0, "ชื่อ": 0.80, "ยี่ห้อ": 0.60},

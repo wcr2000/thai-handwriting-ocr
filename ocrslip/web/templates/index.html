@@ -3,8 +3,8 @@
 <div class="card">
   <h2>อัปโหลดใบจอดรถ</h2>
   <p class="muted">ถ่ายจากมือถือหรือเลือกจากคลังรูปได้ อัปโหลดหลายใบพร้อมกันได้ · รองรับ HEIC จาก iPhone · ทุกใบจะเข้าคิวรอคนตรวจก่อนเสมอ</p>
-  {# action/method/enctype ไว้เป็นทางสำรอง ถ้า htmx โหลดไม่ขึ้นฟอร์มจะยัง submit ได้จริง
-     ไม่ใช่ยิง GET เปล่า ๆ แล้วไฟล์หายไปเฉย ๆ #}
+  {# action/method/enctype are the fallback: if htmx fails to load, the form still really submits
+     rather than firing an empty GET and silently losing the files #}
   <form method="post" action="/api/ocr" enctype="multipart/form-data"
         hx-post="/api/ocr" hx-target="#result" hx-encoding="multipart/form-data"
         hx-indicator="#ai-loading" hx-disabled-elt="button">
@@ -12,8 +12,8 @@
     <div class="row">
       <div class="col">
         <label for="uploaded_by">ชื่อคุณ (คนอัปโหลด)</label>
-        {# ใช้ <select> ไม่ใช่ <datalist> เพราะ Safari บน iOS ไม่รองรับ datalist
-           ช่องจะกลายเป็นกล่องพิมพ์เปล่า ๆ ไม่มีรายการให้เลือกเลย #}
+        {# A <select> rather than a <datalist>, because iOS Safari does not support datalist: the field
+           becomes an empty text box with no list to pick from at all. #}
         <select id="uploaded_by" name="uploaded_by" required>
           <option value="">— เลือกชื่อ —</option>
           {% for person in people %}<option value="{{ person }}">{{ person }}</option>{% endfor %}
