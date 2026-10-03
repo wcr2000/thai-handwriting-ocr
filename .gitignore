@@ -221,14 +221,14 @@ bench/out/
 out/
 
 # ============================================================================
-# SECURITY / PRIVACY — เพิ่มโดย security audit ก่อน push ขึ้น public repo
-# repo นี้เป็น PUBLIC — ไฟล์ด้านล่างมีทั้ง credential จริงและข้อมูลส่วนบุคคล
-# ของประชาชนจริง (ชื่อ-นามสกุล / เบอร์โทร / ทะเบียนรถ) ที่เก็บตอนน้ำท่วม
-# ห้าม commit เด็ดขาด
+# SECURITY / PRIVACY — added by a security audit before pushing to a public repo.
+# THIS REPOSITORY IS PUBLIC. The files below hold both real credentials and the personal data
+# of real people (names, phone numbers, licence plates) collected during the floods.
+# They must never be committed.
 # ============================================================================
 
 # --- Credentials -----------------------------------------------------------
-# .env มี OPENROUTER_API_KEY จริง + Postgres connection string จริง (มี password)
+# .env holds the real OPENROUTER_API_KEY and the real Postgres connection string (with password)
 .env
 .env.*
 !.env.example
@@ -240,22 +240,24 @@ secrets.json
 *.p12
 *.pfx
 
-# --- PII: รูปใบฝากรถจริง + ground truth -----------------------------------
-# example/ = ภาพถ่ายใบฝากรถลายมือของเจ้าของรถจริง + label.json (ชื่อ/เบอร์/ทะเบียน)
+# --- PII: photos of real slips, plus ground truth --------------------------
+# example/ = photographs of real owners' hand-written slips, plus label.json
+# (names, phone numbers, plates)
 example/
-# บรรทัดล่างไม่มี / ท้าย เพื่อกัน symlink ชื่อ example ด้วย
-# ("example/" แมตช์เฉพาะโฟลเดอร์จริง ไม่แมตช์ symlink ซึ่ง git นับเป็นไฟล์)
+# The line below has no trailing slash, so it also blocks a symlink named example
+# ("example/" matches only a real directory, not a symlink, which git counts as a file)
 example
 
-# --- PII: ผลลัพธ์ LLM (มีข้อมูลเดียวกับ example/ + usage/cost data) --------
+# --- PII: LLM output (the same data as example/, plus usage and cost figures) ---
 bench/out/
-# ชุดทดสอบเทียบวิธี crop: รูปใบจริง + cases.json ที่มีชื่อ/เบอร์/ทะเบียนเป็น ground truth
+# The crop-strategy test set: real slip photos, plus cases.json holding names, phone numbers
+# and plates as ground truth
 bench/crop_cases/
 bench/crop_out/
 out/
 **/out/
 
-# --- รูปภาพ/ไฟล์สแกนทุกชนิด (กันรูปใบฝากรถหลุดโดยไม่ตั้งใจ) --------------
+# --- images and scans of every kind (to stop a slip photo escaping by accident) ---
 *.HEIC
 *.heic
 *.HEIF
@@ -271,7 +273,7 @@ out/
 *.tiff
 *.pdf
 
-# --- ข้อมูล export / dump ที่อาจมี PII ------------------------------------
+# --- exports and dumps that may contain PII --------------------------------
 *.xlsx
 *.xls
 *.csv

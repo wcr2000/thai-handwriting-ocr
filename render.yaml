@@ -1,24 +1,26 @@
 # Render Blueprint — https://render.com/docs/blueprint-spec
-# ค่าลับทุกตัวเป็น sync: false คือ "ให้ไปกรอกใน Render Dashboard" ไม่เก็บลง git
+# Every secret is sync: false, meaning "fill this in via the Render Dashboard" — never stored in git
 services:
   - type: web
     name: ocr-dhammakaya
     runtime: docker
-    # standard = 1 CPU / 2 GB ตรงกับที่ใช้จริง — ห้ามลดกลับเป็น starter (0.5 CPU / 512 MB)
-    # เพราะ upload 6 ไฟล์พร้อมกันใช้แรมพีค ~576 MB จะโดน OOM kill
+    # standard = 1 CPU / 2 GB, matching real usage. Do not drop back to starter
+    # (0.5 CPU / 512 MB): uploading 6 files at once peaks at ~576 MB and gets OOM-killed.
     plan: standard
     region: singapore
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    # /static/app.css ตอบ 200 โดยไม่ต้องต่อ DB และไม่ติด login
+    # /static/app.css answers 200 without a DB connection and without a login
     healthCheckPath: /static/app.css
     autoDeployTrigger: commit
-    # รัน migration ก่อนสลับ traffic ทุกครั้ง — schema.sql เขียนแบบรันซ้ำได้ทั้งไฟล์
-    # (IF NOT EXISTS / CREATE OR REPLACE) จึงรันทุก deploy ได้ไม่มีผลข้างเคียง
+    # Run the migration before switching traffic every time. The whole of schema.sql is written to
+    # be re-runnable (IF NOT EXISTS / CREATE OR REPLACE), so running it on every deploy is free of
+    # side effects.
     #
-    # เคยเกิดขึ้นจริง: deploy โค้ดที่ต้องใช้ตาราง app_settings ขึ้นไปแล้ว แต่ยังไม่มีใคร
-    # รัน db init ผลคือหน้า /in ที่ผู้มาจอดใช้ตอบ 500 ทั้งหน้า ทั้งที่เป็นแค่ขั้นตอน
-    # ที่ลืมทำ ถ้า migration พัง deploy จะไม่ขึ้นเลย ซึ่งดีกว่าขึ้นไปแล้วหน้าแตก
+    # This happened for real: code requiring the app_settings table was deployed before anybody
+    # had run db init, so /in — the page drivers use — 500ed entirely, over nothing but a
+    # forgotten step. With the migration here, a failing migration means the deploy never goes
+    # live at all, which beats going live broken.
     preDeployCommand: python -m ocrslip.db init
     envVars:
       # --- OpenRouter ---
@@ -36,7 +38,7 @@ services:
         sync: false
       - key: USD_THB
         sync: false
-      # --- ระบบล็อกอิน ---
+      # --- login ---
       - key: SECRET_KEY
         sync: false
       - key: ADMIN_USERNAME
@@ -51,15 +53,16 @@ services:
         sync: false
       - key: APPROVE_PASSWORD_HASH
         sync: false
-      # Render เป็น HTTPS อยู่แล้ว — ตั้ง true เพื่อบังคับ Secure cookie
+      # Render is already HTTPS, so set true to force a Secure cookie
       - key: COOKIE_SECURE
         sync: false
-      # --- ฟอร์มขาเข้าที่ผู้มาจอดกรอกเอง (/in) ---
-      # รหัสที่เจ้าหน้าที่พิมพ์ปิดท้ายฟอร์ม ไม่ตั้ง = ปิดหน้า /in ไปเลย
+      # --- the self-service entry form (/in) ---
+      # The passcode a staff member types to close the form. Unset disables /in entirely.
       - key: ENTRY_PASSWORD
         sync: false
-      # ตัวเลือกอาคาร/ชั้น เป็นแค่ "ค่าตั้งต้น" — ค่าที่ใช้จริงแก้ได้ที่หน้า /settings
-      # และมีผลทันทีโดยไม่ต้องรีสตาร์ต สองตัวนี้จึงแทบไม่ต้องแตะหลังตั้งครั้งแรก
+      # The building and floor choices are only defaults. What is actually in use is editable on
+      # the /settings page and takes effect immediately with no restart, so these two rarely need
+      # touching after the initial setup.
       - key: ENTRY_BUILDINGS
         sync: false
       - key: ENTRY_FLOORS

@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # ─────────────────────────────────────────────────────────────────────────────
-# stage 1: builder — ติดตั้ง dependency ลง venv แยก (ไม่เอา toolchain ติดไป image จริง)
+# stage 1: builder — install dependencies into a separate venv, keeping the toolchain out of the runtime image
 # ─────────────────────────────────────────────────────────────────────────────
 FROM python:3.12-slim AS builder
 
@@ -9,7 +9,7 @@ ENV PIP_NO_CACHE_DIR=1 \
 
 WORKDIR /app
 
-# copy requirements.txt ก่อน source — layer นี้จะถูก cache ไว้จนกว่า dependency จะเปลี่ยน
+# Copy requirements.txt before the source, so this layer stays cached until a dependency changes
 COPY requirements.txt ./
 RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
@@ -19,10 +19,10 @@ RUN python -m venv /opt/venv \
 # ─────────────────────────────────────────────────────────────────────────────
 FROM python:3.12-slim AS runtime
 
-# ทดสอบแล้วว่า wheel ที่ใช้ไม่ต้องพึ่ง OS lib เพิ่มเลย:
-#   opencv-python-headless ไม่ต้องมี libgl1 (ไม่มี GUI backend) และ 5.x bundle libglib มาให้เอง
-#   pillow-heif bundle libheif / psycopg[binary] bundle libpq มาในตัว wheel
-# เลยลงแค่ curl ไว้ให้ HEALTHCHECK ใช้
+# Verified that the wheels in use need no additional OS libraries:
+#   opencv-python-headless needs no libgl1 (it has no GUI backend), and 5.x bundles libglib itself
+#   pillow-heif bundles libheif, and psycopg[binary] bundles libpq, both inside the wheel
+# So only curl is installed, for the HEALTHCHECK to use.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
@@ -35,19 +35,20 @@ ENV PYTHONUNBUFFERED=1 \
 COPY --from=builder /opt/venv /opt/venv
 
 WORKDIR /app
-# เอาเฉพาะของที่ต้องใช้ตอนรัน: โค้ด + template + static + schema.sql (ใช้ตอน db init)
+# Only what runtime needs: the code, templates, static files, and schema.sql (used by db init)
 COPY ocrslip ./ocrslip
 COPY db ./db
 
-# รันด้วย non-root
+# Run as a non-root user
 RUN useradd --create-home --uid 10001 ocrslip && chown -R ocrslip:ocrslip /app
 USER ocrslip
 
 EXPOSE 8000
 
-# /static/app.css ตอบ 200 ได้โดยไม่ต้องต่อ DB และไม่ติด login — ใช้เช็คว่า process ยังรับ request อยู่
+# /static/app.css answers 200 without a DB connection and without a login, so it checks whether
+# the process is still serving requests
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -fsS "http://127.0.0.1:${PORT}/static/app.css" > /dev/null || exit 1
 
-# Render ยิง $PORT มาให้ตอน runtime — ต้องอ่านผ่าน shell form ไม่ใช่ exec form
+# Render supplies $PORT at runtime, so this has to be the shell form rather than the exec form
 CMD ["sh", "-c", "exec uvicorn ocrslip.web.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='*'"]

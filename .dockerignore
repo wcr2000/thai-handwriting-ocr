@@ -1,4 +1,4 @@
-# --- ความลับ / ค่าเฉพาะเครื่อง ---
+# --- secrets and machine-local values ---
 .env
 .env.*
 !.env.example
@@ -10,13 +10,13 @@ venv
 .gitignore
 .github
 
-# --- ข้อมูลจริง ห้ามติดไปใน image ---
+# --- real data: must never end up in the image ---
 example/
 bench/out/
 *.heic
 *.HEIC
 
-# --- ของที่ไม่ต้องใช้ตอนรัน ---
+# --- not needed at runtime ---
 bench/
 tests/
 db/*.md
@@ -48,7 +48,7 @@ dist/
 .DS_Store
 *.swp
 
-# --- ไฟล์ชั่วคราว ---
+# --- temporary files ---
 scratch/
 scratch*
 tmp/

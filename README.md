@@ -1,492 +1,273 @@
-# ระบบเอื้อเฟื้อที่จอดรถ (วัดพระธรรมกาย) — OCR ใบจอดรถ
+> **English** · [ภาษาไทย](README.th.md)
 
-> เรียกว่า "เอื้อเฟื้อที่จอดรถ" ไม่ใช่ "รับฝากรถ" โดยเจตนา — วัดเปิดที่ให้จอดฟรี
-> ไม่ได้รับฝากทรัพย์ คำว่า "รับฝาก" มีผลผูกพันทางกฎหมายที่เราไม่ได้ตั้งใจให้เกิด
+# Courtesy Parking OCR — Wat Phra Dhammakaya flood response
 
-ถ่ายรูปใบจอดรถที่เขียนด้วยลายมือ → ให้ LLM อ่าน → คนตรวจยืนยัน → เก็บลง Postgres พร้อมรูปหลักฐาน
-→ ตอนเจ้าของมารับรถกลับ ค้นแบบ fuzzy ได้แม้สะกดชื่อผิดหรือจำเบอร์ผิดไปบ้าง
+A handwriting-OCR and human-review system built during the 2026 Thailand floods, so that a
+temple offering free parking to flood victims could find any car's owner again — out of
+thousands of hand-written paper slips, with a volunteer team that was far too small to type
+them all in.
 
-## เริ่มใช้งาน
+It went from empty repository to running in production in a little over two hours, and the
+most useful thing it eventually did was make its own OCR pipeline unnecessary.
 
-```bash
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-cp .env.example .env          # ใส่ OPENROUTER_API_KEY และ DATABASE_URL
-.venv/bin/python -m ocrslip.db init     # สร้าง schema ocr_dhammakaya
-.venv/bin/uvicorn ocrslip.web.main:app --reload
-```
+---
 
-> ถ้า shell ของเครื่องมี `OPENROUTER_API_KEY` ตัวเก่าค้างอยู่ ไม่ต้องกังวล — `config.py` ตั้ง
-> `override=True` ให้ค่าใน `.env` ของโปรเจกต์ชนะเสมอ
+## Why this exists
 
-## หน้าจอ
+My house flooded. I drove my car to Wat Phra Dhammakaya, which had opened its grounds as free
+parking for people in the same situation, and I could not go home — I slept at the temple for
+a couple of nights.
 
-| หน้า | ทำอะไร |
+While I was there I saw what the volunteers were actually up against. Every car that came in
+got a hand-written paper slip: owner's name, phone number, licence plate, vehicle type, and
+where it was parked. On the way out, someone had to find that slip again.
+
+The slips were piling into the thousands. The plan was to key them into a spreadsheet by hand,
+which needed volunteers who could type Thai quickly and accurately — and there were nowhere
+near enough of them. Meanwhile every hour that the data was not searchable was an hour in which
+an owner arriving to collect their car might simply not be findable.
+
+I had a laptop and nothing else to do, so I built this.
+
+## Timeline
+
+Commit timestamps, not reconstruction:
+
+| When | What |
 |---|---|
-| `/in` | **ฟอร์มขาเข้าที่ผู้มาจอดกรอกเอง** (เปิดสาธารณะ ปิดท้ายด้วยรหัสเจ้าหน้าที่) |
-| `/out` | **ฟอร์มขาออกที่ผู้มาจอดกรอกเอง** (เปิดสาธารณะ ปิดท้ายด้วยรหัสเจ้าหน้าที่เดียวกัน) |
-| `/` | อัปโหลด/ถ่ายรูปใบจอดรถ (หลายใบพร้อมกันได้ รองรับ HEIC จาก iPhone) |
-| `/review` | คิวตรวจสอบ แยกกองเป็น ต้องตรวจ / ผ่านเร็ว / อนุมัติแล้ว / ตีกลับ + ค้น/เรียง/แบ่งหน้าในกอง |
-| `/search` | ค้นหาแบบ fuzzy ด้วยชื่อ เบอร์ หรือทะเบียน |
-| `/table` | ตารางข้อมูลทั้งหมด กรอง/เรียง/แบ่งหน้า + ปุ่มโหลด Excel ตามที่กรอง |
-| `/dashboard` | สรุปภาพรวม: KPI, ใบต่อวัน, แยกตามประเภท/ยี่ห้อ/ที่จอด/คนอัปโหลด, คุณภาพการอ่านของ AI |
-| `/dups` | admin เทียบใบซ้ำที่อนุมัติไปแล้ว — รูปกับข้อมูลทุกใบวางข้างกัน เลือกใบที่ถูกแล้วลบที่เหลือ |
-| `/staff` | admin จัดการรายชื่อเจ้าหน้าที่/อาสาสมัครที่ขึ้นให้เลือกตอนอัปโหลด |
-| `/settings` | admin แก้ตัวเลือก อาคาร/ชั้น ของฟอร์มขาเข้า (มีผลทันที ไม่ต้องรีสตาร์ต) |
-| `/slips/{id}` | ดูใบจริง + กดรับรถกลับ + **แก้ไขข้อมูล** + ประวัติการแก้ไข |
-| `/export.xlsx` | ดาวน์โหลด Excel (รับ query string ชุดเดียวกับ `/table`) |
+| **Day 1, 15:55** | Empty repository |
+| **Day 1, 18:07** | Working end to end: preprocessing, LLM OCR, review queue, fuzzy search, roles, deploy config |
+| **Day 1, 18:24** | Deployed, and already being fixed from real tablet and phone testing |
+| **Day 1, evening** | iOS Safari `datalist` doesn't exist; cropping fails on white tables; mobile nav collapses — all found by people actually using it |
+| **Day 2** | Benchmarked 11 vision models × 3 preprocessing variants on real handwriting; recruited photographers and a back-office labelling team; added per-person attribution |
+| **Days 3-4** | The problems of a system in real use: duplicate uploads, two reviewers overwriting each other, a date parser that turned 2026 into 2083 |
+| **Days 5-6** | Self-service entry and exit forms — the path that needs no OCR at all |
 
-### แก้ใบที่อนุมัติไปแล้ว
+The first two hours produced something usable. Everything after that was the actual work:
+finding out how it broke in the hands of tired volunteers on their own phones, in a car park,
+in the rain.
 
-คนกรอกเบอร์ตัวเองผิดเป็นส่วนน้อย แต่เกิดขึ้นจริง และรู้ตัวตอนขาออก (โทรตามไม่ติด)
-ปุ่ม **"แก้ไขข้อมูลใบนี้"** อยู่ที่หน้า `/slips/{id}` พาไป `/review/{id}?edit=1`
-ซึ่งเป็นฟอร์มเดียวกับคิวตรวจ แก้แล้วกด "บันทึกทับ" — สถานะยังเป็น `approved` เหมือนเดิม
-และระบบบันทึกว่าใครแก้ช่องไหนจากอะไรเป็นอะไร ลิงก์เดียวกันมีในผลค้นหาและในแถวของ `/table` ด้วย
+## What it does
 
-เจตนาคือ**ไม่**เปิดให้ผู้มาจอดแก้เองจากหน้าที่แคปไว้ — หน้านั้นต้องอ่านว่า "จบแล้ว"
-และมันเป็นหน้าสาธารณะ ส่วนคนที่แก้ได้คือเจ้าหน้าที่ที่ล็อกอินแล้ว ซึ่งมีชื่อติดไปกับประวัติการแก้เสมอ
-
-หน้าตารางและ dashboard render จากฝั่ง server ทั้งหมด — ไม่มี chart library, ไม่โหลดรูปในตาราง,
-สรุปตัวเลขทั้งหน้า dashboard ใช้ query รวมไม่กี่ครั้ง จึงเปิดบนมือถือกลางสนามได้
-
-## ขาเข้ามีสองเส้นทาง
-
-**เส้นทางหลัก — ผู้มาจอดกรอกเอง (`/in`)** เปิดหน้าบนมือถือตัวเอง กรอกตามบัตรจอดรถสีขาว
-แล้วยื่นเครื่องให้เจ้าหน้าที่พิมพ์รหัสปิดท้าย หน้าจอเปลี่ยนเป็นเทาให้แคปเก็บไว้เป็นความสะดวก
-(ไม่ใช่เงื่อนไข — ตอนมารับรถค้นจากชื่อ/เบอร์/ทะเบียนได้)
-
-เส้นทางนี้ **ไม่มี OCR และไม่เข้าคิวตรวจ** เพราะคนที่รู้ข้อมูลคือคนที่พิมพ์ข้อมูลเอง
-ไม่มีอะไรให้ถามว่า "อ่านออกไหม" อีกแล้ว ใบจึงเข้าสถานะ `approved` ทันทีและค้นเจอเลย
-ต้นทุน AI ของเส้นทางนี้เป็นศูนย์ และคอขวดที่คิวตรวจก็หายไปพร้อมกัน
-
-**เส้นทางสำรอง — ถ่ายรูปใบเขียนมือ (`/`)** สำหรับคนที่ไม่มีสมาร์ตโฟน สัญญาณใช้ไม่ได้
-หรือรถเข้าพร้อมกันจนต้องคว้าปากกา เส้นทางนี้ยังเป็น OCR + คิวตรวจตามเดิมทุกอย่าง
-ต่างกันแค่มันรับปริมาณส่วนน้อยแล้ว ไม่ใช่ทั้งหมด
-
-### ตัวเลือกอาคาร/ชั้น
-
-`ENTRY_BUILDINGS` / `ENTRY_FLOORS` ใน `.env` เป็นแค่**ค่าตั้งต้น** — ค่าที่ใช้จริงแก้ได้ที่
-หน้า `/settings` (admin) และมีผลทันทีโดยไม่ต้องรีสตาร์ต เพราะงานแต่ละครั้งเปิดอาคารไม่เหมือนกัน
-และคนที่รู้ว่าวันนี้เปิดอาคารไหนคือคนหน้างาน ไม่ใช่คนที่ถือ dashboard ของ Render
-
-ล้างช่องให้ว่างแล้วบันทึก = ถอยกลับไปใช้ค่าใน `.env` (ระบบลบแถวทิ้ง ไม่ได้เก็บค่าว่างทับ —
-ไม่งั้นฟอร์มจะเหลือ dropdown ที่ไม่มีตัวเลือกอะไรเลย แล้วทั้งงานลงทะเบียนไม่ได้)
-
-แก้รายการนี้ไม่กระทบใบเก่า เพราะที่จอดถูกเก็บเป็นข้อความไปแล้วตอนบันทึก
-
-### แถบสีประจำวันบนใบที่ผู้มาจอดแคปเก็บไว้
-
-ใบที่กรอกเสร็จมีแถบสีของ "วันที่ฝาก" อยู่ด้วย — สีตามสีประจำวันแบบไทย (จ.ทอง อ.ชมพู พ.เขียว
-พฤ.ส้ม ศ.ฟ้า ส.ม่วง อา.แดง) พร้อมคำคมที่เปลี่ยนไปทุกวัน มีไว้ให้เจ้าหน้าที่กวาดตาเทียบกับ
-สติกเกอร์ที่ทีมติดไว้ของวันนั้นตอนผู้มาจอดยื่นภาพที่แคปไว้ให้ดู โดยไม่ต้องรับมือถือมาเพ่งวันที่ตัวเล็ก ๆ
-
-คำคมแก้ได้ที่หน้า `/settings` (admin) บรรทัดละหนึ่งคำคม มีผลทันที ล้างจนว่าง = กลับไปใช้ชุดที่มากับระบบ
-
-**จำนวนคำคมสำคัญกว่าที่เห็น**: สีวนทุก 7 วัน ถ้าจำนวนคำคมหารกับ 7 ลงตัว (7, 14, 21) คู่
-(สี, คำคม) จะกลับมาซ้ำทุกสัปดาห์ แล้วภาพของสัปดาห์ก่อนจะดู "ถูกต้องทุกอย่าง" ทันที
-ชุดที่มากับระบบมี 13 อันจึงไม่ซ้ำคู่เดิมเลยตลอด 91 วัน — หน้า `/settings` คำนวณตัวเลขนี้
-ให้ดูก่อนกดบันทึก และเตือนเมื่อสั้นเกินไป
-
-ข้อจำกัดที่ต้องรู้: นี่เป็นด่านสายตา **ไม่ใช่ด่านจริง** ภาพหน้าจอแก้ด้วยแอปแต่งรูปได้เสมอ
-และสี/คำคมคำนวณจากวันที่แบบเปิดเผย ใครลงทะเบียนวันนี้ก็เดาของพรุ่งนี้ได้ ด่านจริงยังเป็น
-การค้นใบจากเลขอ้างอิง/ทะเบียนในระบบเหมือนเดิม
-
-### รหัสเจ้าหน้าที่ของ `/in`
-
-ตั้งที่ `ENTRY_PASSWORD` ใน `.env` — ไม่ตั้ง = ปิดหน้านี้ไปเลย รหัสนี้แทนคำรับรองว่า
-"เจ้าหน้าที่เห็นรถคันนี้จอดจริง" วิธีใช้คือ**เจ้าหน้าที่ขอเครื่องจากผู้มาจอดมาพิมพ์เอง**
-ไม่บอกรหัสให้ใคร และเปลี่ยนรหัสเมื่อสงสัยว่าหลุด
-
-รหัสนี้ **แก้จากหน้าเว็บไม่ได้โดยตั้งใจ** — รหัสที่แก้จากหน้าเว็บได้ต้องเก็บแบบอ่านกลับได้
-(ไม่ใช่ hash) เพราะผู้ดูแลต้องเปิดดูเพื่อบอกทีม แล้วความลับก็จะติดไปกับ backup ทุกชุด
-อยู่ใน `.env` มันอยู่ที่เดียว หน้า `/settings` แค่บอกว่าตอนนี้ `/in` เปิดหรือปิดอยู่
-
-ข้อบังคับของโค้ด: **ตรวจรหัสฝั่ง server เท่านั้น** ห้ามย้ายไปเช็คใน JavaScript เด็ดขาด
-เพราะรหัสจะโผล่ใน view-source ของทุกเครื่องที่เปิดหน้านี้ — มีเทสต์
-`test_password_never_reaches_the_browser` เฝ้าไว้ให้พังทันทีถ้ามีใครเผลอ
-
-หน้านี้ตั้งใจไม่ใส่ rate limit และไม่เก็บ IP เพื่อให้ระบบเล็กเท่าที่จำเป็น
-ด่านจริงคือขั้นตอนหน้างานที่เจ้าหน้าที่ถือเครื่องพิมพ์เอง ไม่ใช่กลไกในโค้ด
-
-## ขาออก
-
-### เส้นทางหลัก — ผู้มาจอดกรอกเอง (`/out`)
-
-สมมาตรกับ `/in`: ผู้มาจอดสแกน QR เปิดหน้าบนมือถือตัวเอง กรอก **เบอร์โทร + ทะเบียนรถ**
-แล้วยื่นเครื่องให้เจ้าหน้าที่ขอดูบัตรประชาชนเทียบชื่อบนใบ (ด้วยตา ไม่ถ่ายเก็บ) และพิมพ์รหัส
-ปิดท้าย → ได้ใบสรุป "นำรถออกแล้ว" พร้อมเวลาที่ออกและแถบสีของ **วันที่นำรถออก** ให้แคปเก็บไว้
-
-สองช่องที่กรอกเป็นเงื่อนไข **และ** ทั้งคู่ แต่ไม่เทียบข้อความดิบ — เทียบจากคอลัมน์ที่
-normalize ไว้แล้วตอนลงทะเบียน (`plate_norm` ตัดช่องว่าง/ขีด/จุด/ชื่อจังหวัดออกและ lowercase,
-`tel_digits` เหลือแต่ตัวเลขและแปลง `+66` เป็น `0`) ดังนั้น `"1กก 1234"`, `"1กก-1234"`,
-`"1กก1234 ปทุมธานี"` และ `"081-234-5678"` ค้นเจอใบเดียวกันหมด หน้านี้จึงไม่ถามจังหวัดซ้ำ:
-ถามไปก็มีแต่จะพลาดตรงที่คนเลือกจังหวัดคนละอันกับที่เลือกไว้ตอนขาเข้า
-
-กฎที่ไม่ตรงไปตรงมาแต่จำเป็น:
-
-* **ตรวจรหัสเจ้าหน้าที่ก่อนค้นฐานข้อมูลเสมอ** ถ้าค้นก่อน ข้อความ "ไม่พบใบ" กับ
-  "เบอร์โทรไม่ตรง" จะกลายเป็นเครื่องมือให้คนนอกยิงถามว่าทะเบียนไหนจอดอยู่ที่นี่บ้าง
-  โดยไม่ต้องรู้รหัสเลย — ซึ่งเป็นข้อมูลที่ใช้ตามรอยคนได้
-* **เบอร์โทรเป็นตัวยืนยัน ไม่ใช่กุญแจ** ใบที่มาจากรูปบางใบ OCR อ่านเบอร์ไม่ออก ใบพวกนั้น
-  ปล่อยรถได้ด้วยทะเบียน + รหัสเจ้าหน้าที่ ส่วนใบที่ *มี* เบอร์เก็บไว้ต้องตรงเท่านั้น
-  ถ้าบังคับให้ตรงทุกใบ คนที่มารับรถจริงจะถูกบล็อกด้วยข้อมูลที่เราเองอ่านไม่ได้
-  แล้วเจ้าหน้าที่จะปล่อยรถโดยไม่บันทึกอะไรเลย ซึ่งแย่กว่า
-* **"ไม่พบใบ" กับ "รับรถกลับไปแล้วเมื่อ..." ต้องเป็นข้อความคนละแบบ** วิธีแก้คนละเรื่องกัน
-  อันแรกให้ตรวจตัวอักษรที่พิมพ์ อันหลังคือรถออกไปแล้วจริง ถ้าข้อความเหมือนกัน
-  คนที่รถออกไปแล้วจะยืนกรอกซ้ำอยู่อย่างนั้นโดยไม่รู้ว่าเกิดอะไรขึ้น
-* **ทะเบียนเดียวมีใบที่ยังจอดอยู่หลายใบ ต้องถามว่าใบไหน ไม่ใช่เดา** (เกิดจากฝากซ้ำ
-  หรือใบซ้ำที่หลุดตัวจับซ้ำ) หน้าเลือกใบบอกวันที่ฝาก ที่จอด เลขอ้างอิง และเลขรอบให้ด้วย
-  ปิดผิดใบเมื่อไหร่จะเหลือใบค้างที่ไม่มีใครมารับตลอดไป — เงียบและหาไม่เจอ
-  หน้านี้ขอรหัสเจ้าหน้าที่ใหม่อีกครั้ง เพราะรหัสที่พิมพ์รอบแรกห้าม render กลับลงมาในหน้า
-* **`slip_id` ที่หน้าเลือกใบส่งมา ไม่เชื่อตรง ๆ** ต้องอยู่ในผลค้นของทะเบียน+เบอร์ที่กรอก
-  มาในคำขอเดียวกันเท่านั้น ไม่งั้นคนที่รู้รหัสยิง id ใบของคนอื่นมาปิดได้ทั้งที่กรอกคนละคัน
-
-ใบที่ปิดผ่าน `/out` บันทึก `returned_by = "ฟอร์มขาออก"` ไม่ใช่ชื่อคน — หน้านี้ไม่มีล็อกอิน
-มีแต่รหัสที่ใช้ร่วมกัน มาร์กที่มาไว้ตรง ๆ จึงซื่อกว่าเดาชื่อ และยังแยกออกจากใบที่ปิดจาก
-หน้าเจ้าหน้าที่ได้ตอนสอบย้อน ส่วน `released_to` ปล่อยว่างไว้เสมอ เพราะช่องนั้นหมายถึง
-"คนมารับที่ไม่ใช่เจ้าของ" ถ้าเติมชื่อบนใบลงไปจะกลายเป็นการบันทึกว่าเราตรวจบัตรใครมาแล้ว
-
-### เส้นทางสำรอง — เจ้าหน้าที่ปิดใบเอง
-
-เจ้าหน้าที่ค้นที่ `/search` ด้วยชื่อ เบอร์ หรือทะเบียน (สะกดเพี้ยนได้) → เปิดใบ →
-ขอดูบัตรประชาชนเทียบชื่อ **ด้วยตา ไม่ถ่ายเก็บ** → กดยืนยันรับรถกลับ พร้อมบันทึก
-ชื่อเจ้าหน้าที่ผู้ส่งมอบ และชื่อ "ผู้มารับรถ" เมื่อไม่ใช่เจ้าของ (เคสให้ญาติมารับ)
-
-การปล่อยรถเป็นสิทธิ์ของ staff แล้ว ไม่ใช่ admin เท่านั้น — คนที่ยืนอยู่จุด checkout คือ staff
-ถ้าเขาปล่อยรถในระบบไม่ได้ เขาจะปล่อยรถโดยไม่บันทึกอะไรเลย ซึ่งแย่กว่าการให้สิทธิ์
-(`approver` ยังทำไม่ได้ เพราะเขาไม่เคยเห็นรถและไม่เคยเจอเจ้าของ)
-
-คำสั่งปิดใบมีเงื่อนไข `car_status = 'stored'` อยู่ใน `UPDATE` คนที่กดทีหลังจึงเขียนทับ
-ร่องรอยของคนแรกไม่ได้ และหน้าใบจะขึ้นเตือนว่ามีคนปิดไปก่อนแล้ว ไม่ใช่เงียบเหมือนสำเร็จ
-
-## การ deploy
-
-`render.yaml` ตั้ง `preDeployCommand: python -m ocrslip.db init` ไว้ — Render จะรัน
-migration ให้ก่อนสลับ traffic ทุกครั้ง ไม่ต้องจำไปรันเอง และถ้า migration พัง
-deploy จะไม่ขึ้นเลย ซึ่งดีกว่าขึ้นไปแล้วหน้าแตก
-
-`db/schema.sql` ทุกคำสั่งเขียนแบบรันซ้ำได้ (`IF NOT EXISTS` / `CREATE OR REPLACE`)
-จึงรันทุก deploy ได้โดยไม่มีผลข้างเคียง และ `init_schema()` commit ทีละคำสั่ง
-พร้อมต่อสายใหม่ให้เองถ้า Postgres ฝั่ง Render ตัดสายกลางทาง
-
-## ทำไมต้องมีคิวตรวจสอบ
-
-OCR ลายมือไทยไม่มีทางแม่น 100% — ทุกใบจึงเข้าสถานะ `pending` ก่อนเสมอ และถูกชู flag อัตโนมัติเมื่อ
-model ไม่มั่นใจ, ช่องบังคับว่าง, รูปแบบผิด (เบอร์ไม่ครบ 10 หลัก / วันที่อ่านไม่ออก) หรือซ้ำกับใบที่ยังจอดอยู่
-หน้า search จะเห็นเฉพาะใบที่ `approved` แล้วเท่านั้น และทุกการแก้ถูกบันทึกใน `slip_edits`
-
-ตอนทดสอบกับรูปจริง 10 ใบ flag จับได้ว่า AI อ่านตัวเลขทะเบียนใบหนึ่งผิดไปหนึ่งหลัก จนไปซ้ำกับอีกใบ
-
-### กันใบซ้ำ
-
-ใบกระดาษใบเดียวกันเคยกลายเป็นหลายเรคอร์ดได้ เพราะหน้าอัปโหลดไม่ล้างช่องไฟล์หลังอัปสำเร็จ
-(htmx เปลี่ยนแค่กล่องผลลัพธ์ ฟอร์มอยู่เดิม) คนที่คิดว่า "เมื่อกี้ไม่ติด" จึงกดอีกที = ส่งไฟล์ชุดเดิมซ้ำทั้งชุด
-ผลคือคนตรวจเจอใบที่เพื่อนตรวจไปแล้ววนกลับมาให้ทำซ้ำ **เหมือนงานที่ทำไปไม่ได้บันทึก** และคลังข้อมูล
-มีสองแถวของรถคันเดียว ซึ่งเจ็บที่สุดตอนขาออก (เจ้าหน้าที่ไม่รู้ว่าต้องปิดใบไหน)
-ตอนเจอปัญหามีใบเกินอยู่ 650 ใบ จาก 548 กลุ่ม (มากสุด 9 ใบต่อกลุ่ม)
-
-ด่านที่มีตอนนี้ ไล่จากต้นน้ำไปปลายน้ำ:
-
-1. **หน้าอัปโหลด** ล้างช่องไฟล์ทันทีที่อัปสำเร็จ และปิดปุ่มไว้ถ้าไม่มีไฟล์เลือกอยู่
-2. **ในคำขอเดียวกัน** ไฟล์ที่ไบต์ตรงกันถูกตัดออกก่อนประมวลผล (ทุกใบใน batch ทำขนานกันและ
-   commit ตอนจบ จึงมองไม่เห็นกันเองในฐานข้อมูล)
-3. **ตอน ingest** ถ้า hash ของรูป **ต้นฉบับ** ตรงกับใบที่มีอยู่แล้ว จะไม่สร้างใบใหม่และ
-   **ไม่ยิง model** — ชี้กลับไปใบเดิมพร้อมบอกสถานะของใบนั้น
-   ต้องเทียบรูปต้นฉบับ ไม่ใช่รูปที่ preprocess แล้ว เพราะไบต์ของรูป processed ขึ้นกับคำตอบของ model
-   (มุมหมุน / ตัดสินใจ retry ด้วยภาพเต็ม) ด่านเดิมที่เทียบรูป processed จับได้แค่ 200 จาก 650 ใบ
-4. **ตอนอนุมัติ** ใบที่ยังค้างคิวและเป็นใบเดียวกับใบที่เพิ่งอนุมัติ จะถูกตีเป็นของซ้ำ
-   (`superseded_by`) แล้วหลุดออกจากคิว — ไม่ลบ ยังเปิดดูได้ที่คิวตรวจกอง "ซ้ำ" เพราะถ้าตีว่าซ้ำผิด
-   ต้องมีที่ให้เจอ และถ้าใบตัวจริงถูกลบ ใบซ้ำจะกลับเข้าคิวเอง (FK `ON DELETE SET NULL`)
-
-"ใบเดียวกัน" มีสองความหมายและต้องแยกกัน:
-
-* **รูปต้นฉบับ hash ตรงกัน** = ไฟล์เดียวกันยิงซ้ำ ชัดเจน 100% ถอนออกจากคิวได้เลย
-* **ทะเบียน + เบอร์ + วันที่ฝาก + ที่จอด ตรงกัน และยังไม่ได้รับรถคืนทั้งคู่** = ใบกระดาษใบเดียวกัน
-  ถ่ายสองรูป (hash จึงต่าง) — แบบนี้เป็นการเดาจากค่าในใบ จึงต้องกัน "การฝากรอบใหม่" ไว้หลายชั้น
-  ตามที่อธิบายในหัวข้อถัดไป
-
-ของที่ค้างอยู่ก่อนปิดต้นเหตุ เก็บกวาดด้วย:
-
-```bash
-.venv/bin/python -m ocrslip.dedup            # รายงานอย่างเดียว ไม่เขียนอะไร
-.venv/bin/python -m ocrslip.dedup --apply    # ถอนใบซ้ำที่ค้างคิวออกจากคิว (ไม่ลบ)
+```
+Photograph the slip → crop the paper → LLM reads Thai handwriting → human confirms
+      → Postgres + the photo as evidence → fuzzy search when the owner returns
 ```
 
-สคริปต์นี้ไม่แตะใบที่คนตรวจไปแล้ว งานที่คนทำไปแล้วต้องไม่ถูกกลบด้วยการเดาของสคริปต์
+Owners come back and remember their own details imperfectly — a transposed digit, a different
+spelling of their name. So retrieval is fuzzy by design: trigram and Levenshtein candidate
+selection in Postgres, reranked in Python, searchable by name, phone or plate.
 
-### ใบที่อนุมัติซ้ำไปแล้วทั้งคู่ (`/dups`)
+| Route | Purpose |
+|---|---|
+| `/in` | Self-service entry form, filled in by the driver (public) |
+| `/out` | Self-service collection request, filled in by the driver (public) |
+| `/` | Upload or photograph slips in bulk (HEIC from iPhone supported) |
+| `/review` | The review queue: needs-review / fast-pass / approved / rejected, with search, sort and pagination |
+| `/search` | Fuzzy search by name, phone or plate |
+| `/table` | Full data table with filters and an Excel export matching exactly what is on screen |
+| `/dashboard` | KPIs, slips per day, breakdowns by type, brand, location and volunteer, and OCR quality |
+| `/dups` | Side-by-side comparison of duplicates that were both already approved |
+| `/slips/{id}` | One slip, its photo, its full edit history, and the button that releases the car |
 
-กรณีที่เครื่องตัดสินเองไม่ได้: ใบกระดาษใบเดียวกันถูกอนุมัติเข้าคลังหลายใบ **และค่าไม่ตรงกัน**
-เพราะ AI อ่านใบเดียวกันสองรอบได้ไม่เหมือนกัน (ของจริงเคยเจอรูปเดียวกันอ่านได้ชื่อ
-"สมฤทัย ปิ่นแก้ว" กับ "กัญญา ใจงาม") แปลว่าในคลังมีแถวที่ผิดอยู่ ถ้าเจ้าของมาหารถแล้วค้นด้วย
-ชื่อจริง อาจเจอแถวที่ผิดหรือไม่เจอเลย
+## Choosing the model by measuring, not by vibes
 
-หน้า `/dups` ไม่ตัดสินอะไรแทนคน หน้าที่ของมันคือทำให้ตัดสินได้เร็ว — ทีละกลุ่ม
-เพราะงานนี้คือการตัดสินซ้ำ ๆ หลายร้อยครั้ง:
+Thai handwriting OCR is not a solved problem, and the slips were filled in with faint
+ballpoint by people who had just lost their homes. Rather than guess, I built a benchmark:
+11 vision models × 3 preprocessing variants, scored against human labels, with every field
+normalized first so the metric measured *did it read correctly* rather than *does it match
+character for character*.
 
-* รูปใบ (รูปเดียวถ้าทุกใบ hash ตรงกัน) อยู่ข้างตารางที่วางทุกใบเทียบกันเป็นคอลัมน์
-* **ช่องที่ขัดกันถูกไฮไลต์** ส่วนช่องที่ต่างกันเป็นเรื่องปกติ (คนอัป/เวลา) แยกไว้เป็นข้อมูลประกอบ
-* ปุ่ม "เก็บใบนี้ ลบที่เหลือ" ต่อคอลัมน์ — กลุ่มถูกคำนวณใหม่ฝั่ง server จาก id ที่เลือก
-  ไม่ได้เชื่อรายการที่ฟอร์มส่งมา ฟอร์มที่ถูกแก้จึงสั่งลบใบนอกกลุ่มไม่ได้
-* เตือนเมื่อกลุ่มมีทั้งใบที่ยังจอดอยู่และใบที่รับรถไปแล้ว (เลือกผิดใบ = รถคันนั้นไม่มีใบ active เหลือ)
-* กลุ่มที่ **ทุกช่องตรงกันหมดและสถานะรถตรงกัน** ไม่มีอะไรให้ตัดสิน รวบได้ทีเดียวทั้งหมด
-  (ตอนเปิดใช้งาน 56 จาก 273 กลุ่มเป็นแบบนี้) ที่เหลือยังต้องดูรูปทีละกลุ่ม
+| Model | Variant | Mean core | Phone | Name≈ | $/1000 slips | p50 |
+|---|---|---|---|---|---|---|
+| **google/gemini-3-flash-preview** | **v1_crop** | **78%** | 100% | 90% | **$1.55** | 2.7s |
+| google/gemini-3.1-pro-preview | v1_crop | 77% | 100% | 70% | $7.05 | 4.7s |
+| qwen/qwen3-vl-235b-a22b-instruct | v1_crop | 70% | 100% | 10% | $0.69 | 10.5s |
+| anthropic/claude-opus-5.5 | v0_raw | 58% | 60% | 60% | $41.86 | 30.8s |
 
-## ฝากหลายรอบ
+Gemini 3 Flash won on accuracy *and* was among the cheapest. Full results in
+[bench/report.md](bench/report.md).
 
-คนกลุ่มหนึ่งเอารถมาฝาก รับกลับ แล้วเอามาฝากใหม่ เห็นมาแล้ว 2-3 รอบต่อคัน โครงสร้างข้อมูล
-รองรับอยู่แล้ว (1 ใบ = 1 รอบ, `car_status` เดินจาก `stored` ไป `returned`) แต่มีสองที่ที่พัง
+Three findings that changed the implementation:
 
-**ตัวจับใบซ้ำแยกไม่ออกว่าอะไรคือรอบใหม่** — วันที่ฝากกันได้แค่รอบที่ห่างกันเป็นวัน
-เช้าฝาก บ่ายรับ เย็นฝากอีก ทะเบียน/เบอร์/วันที่ตรงกันหมดทั้งที่เป็นคนละรอบ ตัวที่แยกออกคือ
-**ที่จอด** (รอบใหม่ได้ช่องจอดใหม่ ส่วนใบเดียวกันสองรูปย่อมเขียนที่จอดเดียวกัน) เทียบแบบไม่ถือสา
-ช่องว่าง/ตัวพิมพ์ เพราะ OCR อ่านใบเดียวกันสองรูปได้เว้นวรรคไม่เท่ากันเป็นปกติ
+1. **Cropping the paper before reading helps; "enhancing" it hurts.** Crop lifted the mean
+   from 69% to 71%, while shadow removal and contrast enhancement dropped it to 68% — lifting
+   contrast distorts thin pen strokes. A second benchmark
+   ([bench/crop_report.md](bench/crop_report.md)) showed the effect is starkest on photos taken
+   from a distance: character error rate halved, and "all three core fields correct" went from
+   0% to 15%. Uncropped, a distant shot is essentially unusable.
 
-พลาดสองทางเจ็บไม่เท่ากัน: เดาว่า "ไม่ซ้ำ" ผิด คนตรวจเสียเวลาทำใบซ้ำใบเดียว เดาว่า "ซ้ำ" ผิด
-รถจอดอยู่จริงแต่ไม่มีใบที่ยัง active ไปโผล่เอาตอนเจ้าของมารับแล้วหาใบไม่เจอ เงื่อนไขจึงเอียง
-ไปทางปล่อยให้ค้างคิวไว้ก่อน
+2. **Letting an LLM find the paper's corners is worse than OpenCV.** It costs 46% more, takes
+   twice as long, and scores worse than not cropping at all. The LLM gets corners roughly
+   right but not to pixel accuracy, and once those feed a perspective warp, an error of a few
+   percent shears whole lines away.
 
-**หน้าค้นหาแสดงทุกรอบเป็นแถวคล้ายกันหมด** เรียงตามคะแนนความเหมือน ซึ่งใบทุกรอบได้เท่ากัน
-(ทะเบียน/ชื่อ/เบอร์ชุดเดียวกัน) เจ้าหน้าที่ขาออกต้องไล่อ่านวันที่เองว่าใบไหนคือรอบปัจจุบัน
-ปิดผิดใบเมื่อไหร่จะเหลือใบค้างที่ไม่มีใครมารับตลอดไป ตอนนี้:
+3. **Exact match is the wrong metric.** The field that failed most was the name — but usually
+   by one or two characters, which fuzzy search still finds and a reviewer corrects in seconds.
+   Measuring character error rate instead of exact match is what made the comparison
+   meaningful.
 
-* แต่ละแถวติดป้าย **"ฝากรอบที่ N จาก M"** (เฉพาะทะเบียนที่มีมากกว่า 1 รอบ)
-* ใบที่รถยังจอดอยู่ถูกดันขึ้นก่อนใบที่รับรถไปแล้วเมื่อคะแนนเท่ากัน
-* หน้าใบ (จุดที่กดปล่อยรถ) มีตารางทุกรอบของทะเบียนนั้น พร้อมที่จอดกับสถานะรถ
-  และลิงก์ข้ามไปรอบอื่น — ไม่ต้องย้อนกลับไปเดาที่หน้าค้นหา
+**Cost in production: about 0.05 THB per slip.** A thousand slips for roughly 51 THB.
 
-นับรอบจาก `deposit_date` ไม่ใช่เวลาที่บันทึกเข้าระบบ (รูปถูกอัปเป็นชุดตอนสิ้นวัน ลำดับจึงสลับได้)
-และไม่นับใบที่ถูกตีว่าซ้ำหรือตีกลับ เพราะไม่ใช่การฝากจริงสักรอบ
+## The part I'd want to be judged on
 
-## ผลวัด accuracy
+### OCR never writes to the real data
 
-ดู [bench/report.md](bench/report.md) — เทียบ 11 models × 3 แบบ preprocessing × 10 ใบ (330 calls)
+Thai handwriting OCR will never be 100% accurate, so no slip is ever trusted. Every one lands
+in a `pending` queue and is automatically flagged when the model reports low confidence, a
+required field is unreadable, a value is malformed, or it looks like a duplicate. A human
+confirms before anything becomes searchable. The dashboard then tracks which fields humans
+correct most often, from the real audit log — so the system reports its own error rate rather
+than asserting an accuracy figure.
 
-- **ที่เลือกใช้**: `google/gemini-3-flash-preview` + crop → เฉลี่ย 78%, $1.55/1000 ใบ, ~3 วินาทีต่อใบ
-- crop กระดาษช่วยจริง (71% vs 69%) แต่ **การเพิ่ม contrast/ลบเงากลับทำให้แย่ลง** (68%)
-- ช่องที่พลาดคือ "ชื่อ" เป็นหลัก แต่ผิดแค่ 1-2 ตัวอักษร (`ชื่อ≈` 90%) ซึ่ง fuzzy search ยังหาเจอ
-  และคนตรวจแก้ได้เร็ว ส่วนเบอร์โทรอ่านถูก 100%
+### Three reviewers, one queue
 
-### ต้นทุนจริง
+Once a back-office team was labelling in parallel, the queue handed all of them the same
+head-of-line slip, and they spent their time redoing each other's work. The fix is two layers,
+because they guard different things:
 
-**ใบละ ~0.051 บาท** (≈ 5 สตางค์) · 1,000 ใบ = ~51 บาท · 10,000 ใบ = ~510 บาท
-(วัดจากค่าที่ OpenRouter เรียกเก็บจริง: input ~2,330 tokens + output ~128 tokens ต่อใบ)
+- **Claiming** (`FOR UPDATE SKIP LOCKED` plus a lease) makes collisions rare. It is advisory,
+  not a lock — people claim a slip and close the tab constantly, and a hard lock would leave
+  the queue full of untouchable slips.
+- **An optimistic write guard** (`require_status` inside the `UPDATE`) makes a collision
+  harmless. This is the layer that actually guarantees nobody's work is silently overwritten.
 
-ระบบบันทึก `ocr_cost_usd` / `ocr_tokens_in` / `ocr_tokens_out` / `ocr_latency_s` ของทุกใบลง DB
-และสรุปยอดรวมเป็นบาทให้ที่หน้า `/dashboard` — ปรับอัตราแลกเปลี่ยนที่ `USD_THB` ใน `.env`
+The same reasoning applies at the checkout point, where several staff work from separate
+screens: the "car collected" write carries its precondition *inside* the `UPDATE`, so pressing
+the same slip twice cannot rewrite who released the car.
 
-รันใหม่:
-```bash
-.venv/bin/python bench/run_bench.py    # cache ไว้ รันซ้ำไม่เสียเงินซ้ำ
-.venv/bin/python bench/score.py
-```
+### Duplicates, and why guessing wrong is asymmetric
 
-## โครงสร้าง
+The upload page didn't clear its file input after a successful upload, so anyone who thought it
+hadn't gone through pressed again. That produced **650 surplus slips across 548 groups** — up
+to 9 copies of one slip — and reviewers kept being handed work a colleague had already done.
+
+Closing the hole was easy. Deciding what counts as a duplicate was not, because the two ways of
+being wrong do not cost the same:
+
+- Guess "not a duplicate" wrongly → a reviewer loses the time to process one extra slip.
+- Guess "duplicate" wrongly → a car is genuinely parked with **no active slip**, which surfaces
+  only when the owner arrives to collect and cannot be found.
+
+So the rule is deliberately biased toward leaving things in the queue, and distinguishes a
+*re-photographed slip* from a *genuinely new parking round* on the parking bay — because a new
+round always gets a new bay, while two photos of one paper slip necessarily carry the same one.
+Where both copies were already approved, the system refuses to decide at all and instead lays
+the evidence out for a human: one photo, every copy's values side by side, conflicting fields
+highlighted, resolved in a click. On launch, **56 of 273 such groups had nothing to decide**
+and were cleared in bulk; the rest needed eyes on the photo.
+
+### The bug that split one car into two deposits
+
+A two-digit year rule — add 2600 if under 50, treat as Buddhist Era, subtract 543 — turned the
+"26" people wrote for 2026 into **2083**, on more than 300 slips. The visible symptom was that
+re-photographing one slip counted as a separate parking round, because the dates disagreed.
+
+The fix resolves a year by picking the reading *closest to today*, since a parking slip is
+always dated the day it was written. And where that date cannot exist at all (29 February in a
+non-leap year), it returns nothing rather than walking to the next candidate: a reviewer can
+fix an empty date, but nobody will ever catch a slip quietly showing the year 2068.
+
+### Then we deleted the need for OCR
+
+Once the initial surge settled, the obvious question was why the slips were being transcribed
+at all. The person who knows the data is the person standing next to the car.
+
+So `/in` lets the driver fill the form in on their own phone and hand the device to a staff
+member, who types a short passcode to attest "I saw this car parked here". That attestation
+replaces the review step entirely — there is no "can we read this?" question left to ask. The
+slip is approved immediately and searchable at once.
+
+**On that path the AI cost is zero and the labelling bottleneck does not exist.** The review
+queue went back to handling only what genuinely needed it: the hand-written slips that had
+already been photographed. The best outcome of the OCR pipeline was identifying the cases where
+it wasn't needed.
+
+The same logic produced `/out`, where drivers request their own car back using their plate and
+phone number, with the plate as the key and the phone as confirmation — and the passcode is
+checked *before* any database lookup, so `/out` cannot be used to probe which plates are parked
+here.
+
+### Built for the actual conditions
+
+Decisions that only make sense having watched people use it:
+
+- **No JavaScript dependency on the public forms.** They are opened over mobile data in the
+  middle of a car park; if htmx fails to load, a plain POST still works. htmx is vendored
+  locally rather than pulled from a CDN, because a captive portal or broken DNS in a flood zone
+  would otherwise cause files to vanish silently on submit.
+- **44px minimum tap targets and 16px minimum font** on small screens — the latter because iOS
+  Safari zooms the viewport when a smaller field takes focus, destroying the layout. A test
+  asserts that every input type the forms use is actually covered by that rule, because it once
+  silently omitted `tel` and `date`: precisely the phone and date fields, filled in one-thumbed
+  beside a car.
+- **Server-side rendering throughout, no chart library.** The dashboard summarises everything
+  in a handful of queries so it opens on a phone in a field.
+- **Mobile layout tested in a real browser over CDP**, because an `auto-fit` grid short by a
+  fraction of a pixel collapses to one column while the HTML stays identical character for
+  character.
+- **A day-colour band on the driver's saved screenshot**, so staff can check at a glance that a
+  screenshot is from the day it claims. Colours cycle every 7 days and quotes every 13, so the
+  pair doesn't repeat for 91 days. It is an eyeball check and the README says so: a screenshot
+  can always be doctored, and the real check is still looking the slip up by reference number.
+
+## Stack
+
+Python 3.14 · FastAPI · Postgres (`pg_trgm`, `fuzzystrmatch`) · OpenCV · Pillow · htmx ·
+server-rendered Jinja2 · OpenRouter for model access · deployed on Render via Docker.
+
+No ORM, no JS framework, no chart library, no background worker. 11.5k lines, five tables,
+223 tests.
 
 ```
 ocrslip/
-  imageio.py     อ่านไฟล์จาก magic bytes (ไฟล์ตัวอย่างเป็น HEIC ทั้งหมดแม้นามสกุลจะเป็น .png/.jpg)
-  preprocess.py  จับขอบกระดาษ (HSV mask + texture mask หลายสเกล, ให้คะแนนตามรูปร่างและ
-                 จำนวนตัวหนังสือข้างใน) -> warp -> หมุนแนวนอน
-                 ไม่ใช้ "ขนาด" เป็นเกณฑ์ เพราะแต่ละคนถ่ายห่างไม่เท่ากัน (5-65% ของเฟรม)
-                 ถ้าไม่มี candidate ไหนหน้าตาเหมือนใบ จะไม่ crop เลยแล้วส่งภาพเต็มให้ model
-                 ส่วนใบกลับหัว 180 องศาดูจากรูปร่างไม่ออก จึงให้ model บอกมาแล้วค่อยหมุนตาม
-  web/pipeline.py  ถ้า crop แล้ว model อ่านไม่ได้สักช่อง จะลองใหม่ด้วยภาพเต็ม — ตาข่ายกันตก
-                 เวลาตัวจับขอบพลาด โดยไม่ต้องไล่จูน CV ทีละเคส
-  reprocess.py   crop รูปที่เก็บไว้ใหม่ + OCR ซ้ำใบที่ยังไม่มีคนยืนยัน (ใช้หลังแก้ตัวจับขอบ)
-  recheck.py     ดึงใบที่ยืนยันไว้ตอน crop ยังพังกลับเข้าคิว — ไม่เขียนทับข้อมูล
-                 แค่เปลี่ยนสถานะให้คนตรวจตัดสินเองจากรูปที่ถูกต้องแล้ว
-  dedup.py       รายงานใบซ้ำ (union-find เพราะใบสามใบเกาะกันคนละทางได้) + ถอนใบซ้ำที่ยัง
-                 ค้างคิวออกจากคิว โดยไม่ลบและไม่แตะใบที่คนตรวจไปแล้ว
-  schema.py      JSON schema + prompt ที่ใช้ทั้ง bench และ production
-  ocr.py         เรียก OpenRouter (structured output + fallback ถ้า model ไม่รองรับ)
-  normalize.py   normalize ชื่อ/เบอร์/ทะเบียน/ยี่ห้อ/วันที่ (พ.ศ. -> ค.ศ., เลขไทย -> อารบิก)
-  review.py      เกณฑ์ว่าใบไหนต้องให้คนตรวจ
-  daystamp.py    สีประจำวัน + คำคมบนใบที่ผู้มาจอดแคปเก็บไว้ (ไม่รู้จักฐานข้อมูล คนเรียกส่งคำคมมาให้)
-  search.py      trigram + levenshtein ใน Postgres แล้ว rerank ด้วย rapidfuzz
-  db.py          schema init + queries
-  web/           FastAPI + Jinja2 + HTMX
-bench/           ชุดวัด accuracy (run_bench.py -> score.py -> report.md)
-db/schema.sql    ตาราง slips / slip_images / slip_edits
-example/         ชุดทดสอบ: รูปใบจอดรถ + label.json (ground truth)
-                 **ไม่ถูก commit ขึ้น git** เพราะเป็นรูปและข้อมูลส่วนตัวของคนจริง
+  preprocess.py   paper detection, perspective warp, tone
+  ocr.py          OpenRouter call, structured output, retries
+  schema.py       field schema + the Thai OCR prompt
+  review.py       which slips need a human
+  dedup.py        duplicate detection (union-find)
+  normalize.py    Thai normalization: numerals, honorifics, plates, dates
+  search.py       fuzzy retrieval
+  db.py           queries, claiming, audit log
+  web/            FastAPI routes, templates, pipeline
+bench/            the accuracy and crop-strategy benchmarks
+tests/            223 tests
 ```
 
-## สิทธิ์การใช้งาน (3 role)
-
-ล็อกอินด้วยบัญชีคงที่ 3 บัญชีที่ตั้งใน `.env` — ไม่มีตาราง user ในฐานข้อมูล เพราะงานนี้มีผู้ใช้ไม่กี่คน
-
-| ทำอะไรได้ | `approver` (คนทำ label) | `user` (เจ้าหน้าที่หน้างาน) | `admin` (ผู้ดูแล) |
-|---|---|---|---|
-| อัปโหลด | ✅ | ✅ | ✅ |
-| ตรวจ + อนุมัติใบในคิว | ✅ | ✅ | ✅ |
-| ดูกอง "อนุมัติแล้ว / ตีกลับ / ทั้งหมด" | ❌ | ✅ | ✅ |
-| ค้นหา / เปิดดูใบรายตัว (พร้อมประวัติการแก้) | ❌ | ✅ | ✅ |
-| กดรับรถกลับ | ❌ | ❌ | ✅ |
-| ตีกลับใบ | ❌ | ❌ | ✅ |
-| ตารางข้อมูล / dashboard / โหลด Excel | ❌ | ❌ | ✅ |
-| จัดการรายชื่อทีม (`/staff`) | ❌ | ❌ | ✅ |
-
-เหตุผลที่ให้ `user` อนุมัติได้: คนถ่ายรูปคือคนที่ยืนอยู่หน้าเจ้าของรถ ตรวจได้แม่นกว่าคนที่มาดูทีหลัง
-และถ้าบังคับให้ admin อนุมัติทุกใบจะเป็นคอขวดตอนรถเข้าพร้อมกันหลายคัน
-ส่วนสิ่งที่ย้อนกลับไม่ได้ (รับรถกลับ) และข้อมูลส่วนตัวทั้งก้อน (Excel) สงวนไว้ให้ admin
-
-`approver` คือบัญชีสำหรับอาสาสมัครที่มาช่วยทำ label อย่างเดียว เห็นเท่าที่ต้องใช้ทำงานพอดี:
-ใบที่กำลังอยู่ในคิวตรวจ กับรูปของใบนั้น — ไม่เห็นคลังใบที่ปิดงานไปแล้ว ไม่เห็นหน้าค้นหาทั้งระบบ
-ไม่เห็นตารางข้อมูล/สรุป/รายชื่อทีม และตีกลับหรือรับรถกลับไม่ได้ (สองอย่างนี้ย้อนไม่ได้)
-ช่องค้นในหน้าคิวใช้ได้ แต่ค้นได้เฉพาะในกองของตัวเอง เพราะกองถูกบังคับทับคำค้นฝั่ง server เสมอ
-
-สิทธิ์ของ `approver` เขียนเป็น **allowlist** ใน `ocrslip/web/main.py` (`APPROVER_PATHS`)
-ไม่ใช่ blacklist — route ใหม่ที่เพิ่มทีหลังจะถูกปิดไว้ก่อนเสมอ ถ้าอยากเปิดให้ต้องเติมชื่อเอง
-
-### ใครเป็นคนบันทึกใบนี้
-
-`staff` เป็นบัญชีที่ใช้ร่วมกันหลายคน ถ้าดูแค่บัญชีที่ล็อกอินจะขึ้นว่า "staff" เหมือนกันหมด
-ทุกใบจึงเก็บชื่อคนจริงแยกไว้ 3 ชั้น:
-
-| คอลัมน์ | คืออะไร | ปลอมได้ไหม |
-|---|---|---|
-| `created_by` | บัญชีที่ล็อกอินตอนอัป (`staff` / `approve` / `admin`) | ปลอมไม่ได้ ระบบใส่ให้เอง |
-| `uploaded_by` | ชื่อคนที่กดอัปโหลด — **บังคับกรอก** | เลือก/พิมพ์เอง |
-| `photographer` | ชื่อคนถ่ายรูป (เว้นว่าง = คนเดียวกับคนอัป) | เลือก/พิมพ์เอง |
-| `reviewed_by` | ชื่อคนที่กดอนุมัติ — **บังคับเลือก** จากรายชื่อเดียวกัน | เลือก/พิมพ์เอง |
-
-ชื่อที่ขึ้นให้เลือกมาจากตาราง `staff_members` ซึ่ง admin จัดการได้ที่ `/staff`
-(เลือกทำเป็นหน้าเว็บแทนการใส่ใน `.env` เพราะแก้ env บน Render จะ restart service ทั้งตัว
-และ admin แก้เองจากมือถือหน้างานไม่ได้) ชื่อใหม่ที่พิมพ์เองตอนอัปจะถูกเพิ่มเข้ารายการอัตโนมัติ
-เพื่อไม่ให้บล็อกคนหน้างานตอนฉุกเฉิน แล้วค่อยให้ admin ไปจัดระเบียบทีหลัง
-
-การบังคับกรอกชื่อคนอัปตรวจทั้งฝั่งเบราว์เซอร์ (`required`) และฝั่ง server —
-เพราะ `required` ใน HTML ข้ามได้ถ้ายิง API ตรง ซึ่งจะทำให้ได้ใบที่ไม่รู้ว่าใครบันทึก
-
-### ตั้งรหัสผ่าน
+## Running it
 
 ```bash
-python -m ocrslip.auth hash 'รหัสผ่านที่ต้องการ'    # ได้ scrypt hash มาใส่ .env
-python -c "import secrets;print(secrets.token_urlsafe(32))"   # ได้ SECRET_KEY
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+cp .env.example .env          # set OPENROUTER_API_KEY and DATABASE_URL
+.venv/bin/python -m ocrslip.db init
+.venv/bin/uvicorn ocrslip.web.main:app --reload
 ```
 
-`.env` เก็บแค่ **hash** ไม่เคยเก็บรหัสผ่านจริง
-
-### กันเดารหัสผ่าน
-
-- scrypt (`n=16384`) ช้าโดยตั้งใจ ทำให้เดารัว ๆ ไม่คุ้ม
-- นับความพยายามที่ผิดแยกทั้งราย IP และรายชื่อผู้ใช้ — พลาดครบ 5 ครั้งใน 15 นาทีแล้วล็อก
-  30 วินาที และเพิ่มเป็นเท่าตัวทุกครั้งที่พลาดซ้ำ
-- เพดานการล็อกไม่เท่ากันโดยตั้งใจ: **ราย IP สูงสุด 30 นาที แต่รายชื่อผู้ใช้สูงสุดแค่ 3 นาที**
-  เพราะใครก็ยิงชื่อ `admin` จาก IP ไหนก็ได้ ถ้าล็อกยาวเท่ากันจะกลายเป็นช่องให้กันเจ้าหน้าที่
-  ตัวจริงเข้าระบบตอนฉุกเฉิน ซึ่งเสียหายกว่าการโดนเดารหัส
-- ชื่อผู้ใช้ที่ไม่มีอยู่จริงก็ถูก verify กับ hash หลอก ใช้เวลาเท่ากัน จึงเดาไม่ได้ว่าบัญชีไหนมีจริง
-- เทียบค่าด้วย `compare_digest` ทุกจุด, cookie เซ็นด้วย HMAC-SHA256, `HttpOnly` + `SameSite=Lax`
-  (ตั้ง `COOKIE_SECURE=true` เมื่อรันหลัง HTTPS)
-
-## ทดสอบ
+Tests, including the ones that need real Postgres semantics:
 
 ```bash
-.venv/bin/python -m pytest tests -q
+OCRSLIP_TEST_DATABASE_URL=postgresql://user@127.0.0.1:5432/ocrslip_test \
+  .venv/bin/python -m pytest -q
 ```
 
-เทสต์ส่วนใหญ่ไม่ต้องใช้ฐานข้อมูล ยกเว้นเรื่องคิวตรวจ — `test_review_claim.py`
-(การจองใบ) กับ `test_review_collision.py` (กันเขียนทับ) ทดสอบด้วย mock ไม่ได้
-เพราะของที่ทดสอบคือ `FOR UPDATE SKIP LOCKED` กับ rowcount ของ `UPDATE` ที่มีเงื่อนไข
-ซึ่งเป็นพฤติกรรมของ Postgres ล้วน ๆ ถ้าไม่ตั้งตัวแปรนี้ไว้ ทั้งสองไฟล์จะถูก skip:
+Deployment, configuration and operational detail are in
+[README.th.md](README.th.md) (Thai), which is the fuller document.
 
-```bash
-docker run -d --name ocrslip-test -e POSTGRES_PASSWORD=test \
-    -e POSTGRES_DB=ocrslip -p 55439:5432 postgres:15
+## Privacy
 
-OCRSLIP_TEST_DATABASE_URL=postgresql://postgres:test@127.0.0.1:55439/ocrslip \
-    .venv/bin/python -m pytest tests -q
-```
+This repository contains **no real slip data**. The slips held flood victims' names, phone
+numbers and licence plates, so every fixture and sample value here is fabricated, the sample
+images are synthesised in code, and the git history has been rewritten to remove the
+benchmark's ground-truth files. Several test files say so explicitly at the top, because the
+constraint is easy to forget six months later.
 
-> ต้องชี้ไปฐานข้อมูลที่ทิ้งข้อมูลได้เท่านั้น เทสต์ `TRUNCATE` ตารางก่อนทุกครั้ง
-> (มันใช้ schema `ocr_test_queue` แยกต่างหาก และ assert ปลายทางก่อนเขียนทุกครั้ง
-> แต่อย่าเสี่ยงชี้ใส่ฐานข้อมูลจริง)
+## A note on the name
 
-> **หมายเหตุ**: เทสต์อีกกลุ่ม (`test_review_queue.py`, `test_roles.py`,
-> `test_web_headers.py`, `test_dashboard*.py`) อ่านฐานข้อมูลตาม `DATABASE_URL` ใน `.env`
-> ตรง ๆ ถ้า `.env` ชี้ production อยู่ เทสต์พวกนี้จะอ่าน production และจะพังถ้ายังไม่ได้
-> รัน `db init` ล่าสุด อยากรันให้หลุดจาก production ทั้งชุด ให้ชี้ `DATABASE_URL`
-> ใน `.env` ไปฐานข้อมูลทิ้งได้ก่อน แล้ว `python -m ocrslip.db init` หนึ่งครั้ง
+In Thai the system is called *ระบบเอื้อเฟื้อที่จอดรถ* — "courtesy parking", deliberately not
+"vehicle custody". The temple was offering space, not accepting legal custody of anybody's
+property, and the Thai word for the latter carries obligations nobody intended to take on.
+Naming it accurately mattered to the people running it.
 
-## Deploy บน Render
+## Licence
 
-ทั้ง `Dockerfile` และ `render.yaml` อยู่ใน repo แล้ว — Render จะ build image เองจาก Dockerfile
-ไม่ต้องตั้ง build command / start command ใน dashboard
-
-### ลองที่เครื่องก่อน
-
-```bash
-docker build -t ocr-dhammakaya .
-docker run --rm -p 8000:8000 --env-file .env -e PORT=8000 ocr-dhammakaya
-# เปิด http://localhost:8000
-```
-
-> **Mac ชิป Apple (arm64)**: wheel ของ `opencv-python-headless` 5.0.0.93 ฝั่ง linux/arm64
-> crash ตอน `import cv2` (Illegal instruction) — ฝั่ง linux/amd64 ซึ่งเป็นสถาปัตยกรรมที่ Render ใช้
-> ไม่มีปัญหา ถ้าจะลองที่เครื่อง Mac ให้ build เป็น amd64 ตรง ๆ (ช้ากว่าเพราะรันผ่าน emulator):
-> ```bash
-> docker build --platform linux/amd64 -t ocr-dhammakaya .
-> docker run --rm --platform linux/amd64 -p 8000:8000 --env-file .env ocr-dhammakaya
-> ```
-
-image ไม่มีข้อมูลจริงติดไปด้วย — `.dockerignore` ตัด `example/`, `bench/out/`, `.env`, `.venv`, `tests/`
-ออกหมด และ Dockerfile copy เฉพาะ `ocrslip/` (รวม template + static) กับ `db/schema.sql`
-process รันด้วย user `ocrslip` (uid 10001) ไม่ใช่ root
-
-### ขั้นตอนบน Render
-
-1. เตรียม Postgres ก่อน — ใช้ **Render Postgres** หรือที่อื่น (Neon / Supabase) ก็ได้
-   เอา connection string มาเก็บไว้ใช้เป็น `DATABASE_URL`
-2. สร้าง hash ของรหัสผ่านไว้ล่วงหน้าที่เครื่องตัวเอง (ห้ามใส่รหัสผ่าน plaintext ลง env):
-   ```bash
-   .venv/bin/python -m ocrslip.auth hash 'รหัสผ่านของ admin'
-   .venv/bin/python -c "import secrets; print(secrets.token_urlsafe(32))"   # SECRET_KEY
-   ```
-3. Render Dashboard → **New → Blueprint** → เลือก repo นี้ → Render อ่าน `render.yaml` แล้วสร้าง
-   web service ชื่อ `ocr-dhammakaya` ให้ (runtime docker, health check `/static/app.css`)
-   (ถ้าอยากให้ health check ยิงหน้า login จริง ๆ เปลี่ยน `healthCheckPath` เป็น `/login` ได้ —
-   ทั้งสองเส้นทางตอบ 200 โดยไม่ต้องต่อ DB)
-4. Render จะถามค่า env ทุกตัวที่ประกาศเป็น `sync: false` — กรอกตามตารางข้างล่าง
-   (`render.yaml` ไม่มีค่าลับอยู่เลย ค่าจริงอยู่ใน dashboard เท่านั้น)
-5. กด deploy รอ build เสร็จ แล้วทำ **ข้อสำคัญ: สร้าง schema** ตามหัวข้อถัดไป
-6. หลังจากนั้น push เข้า branch หลัก = deploy ใหม่อัตโนมัติ (`autoDeployTrigger: commit`)
-
-### env ที่ต้องกรอกใน dashboard
-
-| key | ตัวอย่าง / หมายเหตุ |
-|---|---|
-| `OPENROUTER_API_KEY` | `sk-or-v1-...` จาก https://openrouter.ai/keys |
-| `DATABASE_URL` | `postgresql://user:pass@host/db` — ใช้ **Internal** URL ถ้า DB อยู่บน Render |
-| `DB_SCHEMA` | `ocr_dhammakaya` |
-| `OCR_MODEL` | `google/gemini-3-flash-preview` |
-| `CONFIDENCE_THRESHOLD` | `0.85` |
-| `USD_THB` | `33` |
-| `REVIEW_CLAIM_MINUTES` | `10` — คนตรวจถือใบไว้ได้นานเท่านี้ก่อนใบหลุดกลับเข้าคิว |
-| `SECRET_KEY` | ค่าที่สุ่มจากข้อ 2 — ถ้าไม่ตั้ง คนที่ล็อกอินอยู่จะหลุดทุกครั้งที่ deploy |
-| `ADMIN_USERNAME` / `ADMIN_PASSWORD_HASH` | บัญชีแอดมิน (hash จากข้อ 2) |
-| `USER_USERNAME` / `USER_PASSWORD_HASH` | บัญชีพนักงานหน้างาน |
-| `APPROVE_USERNAME` / `APPROVE_PASSWORD_HASH` | บัญชีคนทำ label (อัปโหลด + อนุมัติเท่านั้น) |
-| `COOKIE_SECURE` | `true` — Render เป็น HTTPS อยู่แล้ว |
-
-Render ตั้ง `PORT` ให้เองตอน runtime, Dockerfile bind `0.0.0.0:$PORT` (default 8000 ถ้าไม่มี)
-ไม่ต้องกรอก `PORT` เอง และ `.env` ไม่ถูก copy เข้า image — `config.py` อ่านจาก env ของ process ตรง ๆ
-
-### สร้าง schema ครั้งแรก (ต้องทำ 1 ครั้ง)
-
-`python -m ocrslip.db init` เป็น idempotent (รันซ้ำได้ ไม่พัง) แต่ **ไม่** ถูกใส่ไว้ใน CMD
-เพราะไม่อยากให้ทุก restart ไปแตะ DDL และไม่อยากให้แอปบูตไม่ขึ้นตอน DB ล่ม
-
-วิธีที่เลือกใช้: **รันมือเดียวผ่าน Render Shell** หลัง deploy แรกสำเร็จ
-service → แท็บ **Shell** → พิมพ์:
-
-```bash
-python -m ocrslip.db init
-```
-
-จะได้ผลลัพธ์แบบ `schema ocr_dhammakaya พร้อมใช้งาน: ['slip_edits', 'slip_images', 'slips']`
-จากนั้นรีเฟรชหน้าเว็บ — `/` ควรใช้งานได้แล้ว (ก่อน init หน้า `/` จะ 500 เพราะยังไม่มีตาราง)
-
-> ถ้าใช้ plan ที่ไม่มี Shell ให้รันจากเครื่องตัวเองแทน โดยใช้ **External** `DATABASE_URL` ของ DB:
-> ```bash
-> DATABASE_URL='postgresql://...external...' .venv/bin/python -m ocrslip.db init
-> ```
+MIT — see [LICENSE](LICENSE).
