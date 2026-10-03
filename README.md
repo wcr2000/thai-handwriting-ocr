@@ -9,6 +9,14 @@ hand-written paper slips, with a volunteer team far too small to type them all i
 It went from empty repository to running in production in a little over two hours, and the
 most useful thing it eventually did was make its own OCR pipeline unnecessary.
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/wcr2000/thai-handwriting-ocr/main/docs/img/pipeline-night.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/wcr2000/thai-handwriting-ocr/main/docs/img/pipeline-day.svg">
+    <img src="https://raw.githubusercontent.com/wcr2000/thai-handwriting-ocr/main/docs/img/pipeline-day.svg" width="100%" alt="Two intake paths: a photographed hand-written slip goes through cropping, an LLM read and a human confirmation; a driver filling the form in themselves skips both the AI and the review queue. Both land in Postgres with fuzzy search over them.">
+  </picture>
+</p>
+
 ---
 
 ## Why this exists
@@ -50,18 +58,19 @@ in the rain.
 
 Figures from the live production dashboard:
 
-| | |
-|---|---|
-| Slips in the system | **8,401** |
-| Approved and searchable | 6,513 |
-| Cars already collected and handed back | 1,110 |
-| Busiest single day | **3,290 slips** |
-| Rejected as unusable | 29 |
-| **Total AI spend, entire deployment** | **฿335** (about US$10) |
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/wcr2000/thai-handwriting-ocr/main/docs/img/impact-night.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/wcr2000/thai-handwriting-ocr/main/docs/img/impact-day.svg">
+    <img src="https://raw.githubusercontent.com/wcr2000/thai-handwriting-ocr/main/docs/img/impact-day.svg" width="100%" alt="8,401 slips in the system, a busiest day of 3,290, 1,110 cars handed back, and US$10 of total AI spend.">
+  </picture>
+</p>
 
-At a typical Thai used-car value of around ฿500,000, those slips stand for roughly **฿4 billion**
-of private property — for most of these families, the largest thing they still owned after the
-home they had just lost.
+Also: 6,513 approved and searchable, and 29 rejected as unusable.
+
+At a typical Thai used-car value of around US$15,000, those slips stand for roughly
+**US$127 million** of private property (about ฿4.2 billion) — for most of these families, the
+largest thing they still owned after the home they had just lost.
 
 The software did not save those cars from the water; the temple's land did. What it was
 responsible for was narrower and still load-bearing: being the only index that could connect a
@@ -69,7 +78,7 @@ car back to its owner. On the busiest day 3,290 slips arrived — a volume no re
 volunteers could have typed into a spreadsheet that day, which is exactly the gap it was built
 to close.
 
-The whole thing ran on ฿335 of inference.
+The whole thing ran on US$10 of inference.
 
 ## What it does
 
@@ -102,12 +111,13 @@ ballpoint by people who had just lost their homes. Rather than guess, I built a 
 normalized first so the metric measured *did it read correctly* rather than *does it match
 character for character*.
 
-| Model | Variant | Mean core | Phone | Name≈ | $/1000 slips | p50 |
-|---|---|---|---|---|---|---|
-| **google/gemini-3-flash-preview** | **v1_crop** | **78%** | 100% | 90% | **$1.55** | 2.7s |
-| google/gemini-3.1-pro-preview | v1_crop | 77% | 100% | 70% | $7.05 | 4.7s |
-| qwen/qwen3-vl-235b-a22b-instruct | v1_crop | 70% | 100% | 10% | $0.69 | 10.5s |
-| anthropic/claude-opus-5.5 | v0_raw | 58% | 60% | 60% | $41.86 | 30.8s |
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/wcr2000/thai-handwriting-ocr/main/docs/img/benchmark-night.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/wcr2000/thai-handwriting-ocr/main/docs/img/benchmark-day.svg">
+    <img src="https://raw.githubusercontent.com/wcr2000/thai-handwriting-ocr/main/docs/img/benchmark-day.svg" width="100%" alt="All 11 models ranked by mean core accuracy. Gemini 3 Flash leads at 78% for $1.55 per 1000 slips, while Claude Opus 5.5 is last at 58% for $41.86.">
+  </picture>
+</p>
 
 Gemini 3 Flash won on accuracy *and* was among the cheapest. Full results in
 [bench/report.md](bench/report.md).
@@ -126,12 +136,20 @@ Three findings that changed the implementation:
    right but not to pixel accuracy, and once those feed a perspective warp, an error of a few
    percent shears whole lines away.
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/wcr2000/thai-handwriting-ocr/main/docs/img/crop-strategy-night.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/wcr2000/thai-handwriting-ocr/main/docs/img/crop-strategy-day.svg">
+    <img src="https://raw.githubusercontent.com/wcr2000/thai-handwriting-ocr/main/docs/img/crop-strategy-day.svg" width="100%" alt="Character error rate by crop strategy: OpenCV crop 0.124, OpenCV plus deskew 0.131, full frame 0.161, LLM-found quad 0.184.">
+  </picture>
+</p>
+
 3. **Exact match is the wrong metric.** The field that failed most was the name — but usually
    by one or two characters, which fuzzy search still finds and a reviewer corrects in seconds.
    Measuring character error rate instead of exact match is what made the comparison
    meaningful.
 
-**Cost in production: about 0.05 THB per slip.** A thousand slips for roughly 51 THB.
+**Cost in production: US$1.55 per 1,000 slips** (about ฿51), or roughly a sixth of a US cent each.
 
 ## The part I'd want to be judged on
 
@@ -261,8 +279,13 @@ ocrslip/
   db.py           queries, claiming, audit log
   web/            FastAPI routes, templates, pipeline
 bench/            the accuracy and crop-strategy benchmarks
+docs/             the README diagrams, generated from the numbers above
 tests/            223 tests
 ```
+
+The diagrams are generated rather than drawn, so their figures cannot drift away from the
+reports they came from: `python docs/make_diagrams.py` rewrites them, with a bounds check that
+fails the build if any label runs off the canvas or lands on top of another.
 
 ## Running it
 
