@@ -263,7 +263,7 @@ def logout():
 
 CAR_TYPES = ("เก๋ง", "กระบะ", "ตู้")
 
-# Provinces promoted to the first group of the dropdown. The temple is in Pathum Thani and
+# Provinces promoted to the first group of the dropdown. The site is in Pathum Thani and
 # most cars come from nearby. On iOS, picking a province means spinning a wheel, so without
 # this promotion every single car means scrolling past dozens of entries.
 COMMON_PROVINCES = ("ปทุมธานี", "กรุงเทพมหานคร", "นนทบุรี", "นครปฐม", "สมุทรปราการ",

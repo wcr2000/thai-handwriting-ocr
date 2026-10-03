@@ -1,11 +1,10 @@
 > **English** · [ภาษาไทย](README.th.md)
 
-# Courtesy Parking OCR — Wat Phra Dhammakaya flood response
+# Courtesy Parking OCR — a flood-response system
 
 A handwriting-OCR and human-review system built during the 2026 Thailand floods, so that a
-temple offering free parking to flood victims could find any car's owner again — out of
-thousands of hand-written paper slips, with a volunteer team that was far too small to type
-them all in.
+temple offering free parking to flood victims could find any car's owner again — across 8,401
+hand-written paper slips, with a volunteer team far too small to type them all in.
 
 It went from empty repository to running in production in a little over two hours, and the
 most useful thing it eventually did was make its own OCR pipeline unnecessary.
@@ -14,20 +13,20 @@ most useful thing it eventually did was make its own OCR pipeline unnecessary.
 
 ## Why this exists
 
-My house flooded. I drove my car to Wat Phra Dhammakaya, which had opened its grounds as free
-parking for people in the same situation, and I could not go home — I slept at the temple for
-a couple of nights.
+During the 2026 floods, a temple opened its grounds as free parking for people whose homes were
+under water. Cars arrived faster than anyone had planned for, and I was there among the people
+parking one.
 
-While I was there I saw what the volunteers were actually up against. Every car that came in
-got a hand-written paper slip: owner's name, phone number, licence plate, vehicle type, and
-where it was parked. On the way out, someone had to find that slip again.
+The problem the volunteers were up against was simple to state and hard to solve. Every car that
+came in got a hand-written paper slip — owner's name, phone number, licence plate, vehicle type,
+and where it was parked. On the way out, someone had to find that slip again.
 
 The slips were piling into the thousands. The plan was to key them into a spreadsheet by hand,
-which needed volunteers who could type Thai quickly and accurately — and there were nowhere
-near enough of them. Meanwhile every hour that the data was not searchable was an hour in which
-an owner arriving to collect their car might simply not be findable.
+which needed volunteers who could type Thai quickly and accurately, and there were nowhere near
+enough of them. Meanwhile every hour the data was not searchable was an hour in which an owner
+arriving to collect their car might simply not be findable.
 
-I had a laptop and nothing else to do, so I built this.
+That is the gap this was built to close.
 
 ## Timeline
 
@@ -46,6 +45,31 @@ Commit timestamps, not reconstruction:
 The first two hours produced something usable. Everything after that was the actual work:
 finding out how it broke in the hands of tired volunteers on their own phones, in a car park,
 in the rain.
+
+## Scale and outcome
+
+Figures from the live production dashboard:
+
+| | |
+|---|---|
+| Slips in the system | **8,401** |
+| Approved and searchable | 6,513 |
+| Cars already collected and handed back | 1,110 |
+| Busiest single day | **3,290 slips** |
+| Rejected as unusable | 29 |
+| **Total AI spend, entire deployment** | **฿335** (about US$10) |
+
+At a typical Thai used-car value of around ฿500,000, those slips stand for roughly **฿4 billion**
+of private property — for most of these families, the largest thing they still owned after the
+home they had just lost.
+
+The software did not save those cars from the water; the temple's land did. What it was
+responsible for was narrower and still load-bearing: being the only index that could connect a
+car back to its owner. On the busiest day 3,290 slips arrived — a volume no realistic number of
+volunteers could have typed into a spreadsheet that day, which is exactly the gap it was built
+to close.
+
+The whole thing ran on ฿335 of inference.
 
 ## What it does
 
@@ -168,6 +192,12 @@ always dated the day it was written. And where that date cannot exist at all (29
 non-leap year), it returns nothing rather than walking to the next candidate: a reviewer can
 fix an empty date, but nobody will ever catch a slip quietly showing the year 2068.
 
+Still outstanding, and visible on the dashboard: the parser is fixed, but the rows written
+before the fix were never backfilled from `raw_ocr`. 1,333 slips still carry an impossible year,
+which is most of the 2,009 currently falling outside the 30-day chart. The dashboard reports
+that number rather than hiding it, which is the point of counting what falls off the edges —
+but it is a backfill still owed, not a solved problem.
+
 ### Then we deleted the need for OCR
 
 Once the initial surge settled, the obvious question was why the slips were being transcribed
@@ -264,9 +294,9 @@ constraint is easy to forget six months later.
 ## A note on the name
 
 In Thai the system is called *ระบบเอื้อเฟื้อที่จอดรถ* — "courtesy parking", deliberately not
-"vehicle custody". The temple was offering space, not accepting legal custody of anybody's
-property, and the Thai word for the latter carries obligations nobody intended to take on.
-Naming it accurately mattered to the people running it.
+"vehicle custody". What was being offered was space, not legal custody of anybody's property,
+and the Thai word for the latter carries obligations nobody intended to take on. Naming it
+accurately mattered to the people running it.
 
 ## Licence
 
