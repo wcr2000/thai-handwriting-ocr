@@ -317,6 +317,54 @@ def mark_returned(
     return cur.rowcount == 1
 
 
+def add_car_check(
+    conn: psycopg.Connection, slip_id: str, tel: str, plate_raw: str, reason: str,
+    by: str | None,
+) -> dict[str, Any]:
+    """Record a visit to a car that stays parked (started it, checked it, took something out).
+
+    The slip itself is left untouched: car_status stays 'stored', because the car is still here.
+    """
+    return conn.execute(
+        f"""INSERT INTO {DB_SCHEMA}.car_checks (slip_id, tel, plate_raw, reason, checked_by)
+            VALUES (%s, %s, %s, %s, %s) RETURNING *""",
+        (slip_id, tel, plate_raw, reason, by),
+    ).fetchone()
+
+
+def open_car_check(conn: psycopg.Connection, slip_ids: list[str]) -> dict[str, Any] | None:
+    """The visit still in progress for any of these slips (checked in, not yet checked out), if any"""
+    if not slip_ids:
+        return None
+    return conn.execute(
+        f"""SELECT * FROM {DB_SCHEMA}.car_checks
+            WHERE slip_id = ANY(%s::uuid[]) AND finished_at IS NULL
+            ORDER BY created_at DESC LIMIT 1""",
+        (slip_ids,),
+    ).fetchone()
+
+
+def finish_car_checks(conn: psycopg.Connection, slip_id: str, by: str | None) -> list[dict[str, Any]]:
+    """Close every visit still open on this slip. Returns the rows closed (empty = nothing was open).
+
+    finished_at IS NULL lives inside the UPDATE, as in mark_returned, so two staff pressing at once
+    cannot overwrite the first one's time.
+    """
+    return conn.execute(
+        f"""UPDATE {DB_SCHEMA}.car_checks SET finished_at = now(), finished_by = %s
+            WHERE slip_id = %s AND finished_at IS NULL RETURNING *""",
+        (by, slip_id),
+    ).fetchall()
+
+
+def list_car_checks(conn: psycopg.Connection, slip_id: str) -> list[dict[str, Any]]:
+    """Every visit to this slip's car, newest first"""
+    return conn.execute(
+        f"""SELECT * FROM {DB_SCHEMA}.car_checks WHERE slip_id = %s ORDER BY created_at DESC""",
+        (slip_id,),
+    ).fetchall()
+
+
 def norm_loc(alias: str) -> str:
     """SQL expression comparing parking spots ignoring whitespace and case ("อาคาร 1  ชั้น 2" = "อาคาร 1 ชั้น 2").
 

@@ -1,0 +1,47 @@
+{% extends "public_base.html" %}
+{% block title %}เช็ครถเสร็จแล้ว{% endblock %}
+{% block content %}
+<div class="card">
+  <h2 style="margin-top:0">เช็ครถเสร็จแล้ว — แจ้งออก</h2>
+  <p class="muted">สำหรับคนที่เข้าไปสตาร์ทรถ เช็คสภาพ หรือเอาของในรถเสร็จแล้ว · รถยังจอดฝากต่อ
+     ใบจอดไม่ถูกปิด · ถ้าจะเอารถออกเลย ให้ใช้ฟอร์ม <a href="/out">ขอรับรถกลับ</a> แทน</p>
+
+  {% if errors %}<div class="err">กรอกไม่ครบหรือไม่ถูกต้อง {{ errors|length }} จุด — ดูข้อความสีแดงใต้ช่องนั้น</div>{% endif %}
+
+  {# A plain POST with no htmx, as on the other public forms. #}
+  <form method="post" action="/check/out" autocomplete="off">
+    <label for="tel">เบอร์โทร</label>
+    <input type="tel" id="tel" name="tel" value="{{ v.tel or '' }}" required
+           class="{{ 'bad' if errors.tel }}" placeholder="0812345678"
+           inputmode="numeric" autocomplete="off" enterkeyhint="next">
+    {% if errors.tel %}<p class="field-err">{{ errors.tel }}</p>{% endif %}
+
+    <label for="noplate">ทะเบียนรถ</label>
+    <input type="text" id="noplate" name="noplate" value="{{ v.noplate or '' }}" required
+           class="{{ 'bad' if errors.noplate }}" placeholder="1กก 1234"
+           autocapitalize="characters" autocorrect="off" spellcheck="false" enterkeyhint="next">
+    {% if errors.noplate %}<p class="field-err">{{ errors.noplate }}</p>{% endif %}
+
+    <div class="staff-box">
+    <p class="muted" style="margin:0"><b>ส่วนนี้สำหรับเจ้าหน้าที่</b><br>
+       ดูว่าไม่ได้ขับรถออกมาด้วย แล้วพิมพ์รหัสและกดยืนยัน</p>
+    <label for="entry_pw">รหัสเจ้าหน้าที่</label>
+    {# Never rendered back into the page: this is the driver's own device. #}
+    <input type="password" id="entry_pw" name="entry_pw" required autocomplete="off"
+           class="{{ 'bad' if errors.entry_pw }}" inputmode="text">
+    {% if errors.entry_pw %}<p class="field-err">{{ errors.entry_pw }}</p>{% endif %}
+
+    <div class="form-actions"><button type="submit">ยืนยันเช็ครถเสร็จแล้ว</button></div>
+    </div>
+  </form>
+</div>
+
+<script>
+  (function () {
+    var first = document.querySelector('.bad');
+    if (!first) return;
+    first.scrollIntoView({ block: 'center' });
+    first.focus({ preventScroll: true });
+  })();
+</script>
+{% endblock %}

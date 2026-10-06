@@ -1,0 +1,80 @@
+{% extends "public_base.html" %}
+{% block title %}ขอเข้าเช็ครถ{% endblock %}
+{% block content %}
+<div class="card">
+  <h2 style="margin-top:0">ขอเข้าเช็ครถ</h2>
+  <p class="muted">สำหรับคนที่ยังไม่รับรถกลับ แต่มาสตาร์ทรถ เช็คสภาพ หรือเอาของในรถ ·
+     รถยังจอดอยู่ที่เดิม ใบจอดไม่ถูกปิด · กรอกแล้วยื่นเครื่องให้เจ้าหน้าที่ยืนยันท้ายฟอร์ม</p>
+
+  {% if errors %}<div class="err">กรอกไม่ครบหรือไม่ถูกต้อง {{ errors|length }} จุด — ดูข้อความสีแดงใต้ช่องนั้น</div>{% endif %}
+
+  {# A plain POST with no htmx, as on /in and /out: opened over mobile data in the car park, the
+     form must still submit if no script loads. #}
+  <form method="post" action="/check" autocomplete="off">
+    <label for="tel">เบอร์โทร</label>
+    <input type="tel" id="tel" name="tel" value="{{ v.tel or '' }}" required
+           class="{{ 'bad' if errors.tel }}" placeholder="0812345678"
+           inputmode="numeric" autocomplete="off" enterkeyhint="next">
+    {% if errors.tel %}<p class="field-err">{{ errors.tel }}</p>{% endif %}
+
+    <label for="noplate">ทะเบียนรถ</label>
+    <input type="text" id="noplate" name="noplate" value="{{ v.noplate or '' }}" required
+           class="{{ 'bad' if errors.noplate }}" placeholder="1กก 1234"
+           autocapitalize="characters" autocorrect="off" spellcheck="false" enterkeyhint="next">
+    {% if errors.noplate %}<p class="field-err">{{ errors.noplate }}</p>{% endif %}
+
+    {# Radio rows rather than a dropdown: there are only a few reasons, and seeing them all at once
+       beats spinning an iOS picker wheel. "Other" is always last and always present. #}
+    <label>มาทำอะไรกับรถ</label>
+    <div class="{{ 'bad' if errors.reason }}" id="reason-box">
+      {% for r in reasons %}
+      <label class="pick-row">
+        <input type="radio" name="reason" value="{{ r }}" required {{ 'checked' if v.reason == r }}>
+        <span>{{ r }}</span>
+      </label>
+      {% endfor %}
+      <label class="pick-row">
+        <input type="radio" name="reason" value="{{ other }}" required {{ 'checked' if v.reason == other }}>
+        <span>อื่นๆ (พิมพ์เอง)</span>
+      </label>
+    </div>
+    <input type="text" id="reason_other" name="reason_other" value="{{ v.reason_other or '' }}"
+           placeholder="เช่น มาเติมลมยาง" maxlength="200">
+    {% if errors.reason %}<p class="field-err">{{ errors.reason }}</p>{% endif %}
+
+    <div class="staff-box">
+    <p class="muted" style="margin:0"><b>ส่วนนี้สำหรับเจ้าหน้าที่</b><br>
+       ตรวจบัตรประชาชนเทียบชื่อบนใบก่อน แล้วพิมพ์รหัสและกดยืนยันให้เข้าเช็ครถ</p>
+    <label for="entry_pw">รหัสเจ้าหน้าที่</label>
+    {# Never rendered back into the page, as on /in and /out: this is the driver's own device. #}
+    <input type="password" id="entry_pw" name="entry_pw" required autocomplete="off"
+           class="{{ 'bad' if errors.entry_pw }}" inputmode="text">
+    {% if errors.entry_pw %}<p class="field-err">{{ errors.entry_pw }}</p>{% endif %}
+
+    <div class="form-actions"><button type="submit">ยืนยันให้เข้าเช็ครถ</button></div>
+    </div>
+  </form>
+</div>
+
+<script>
+  (function () {
+    // Show the free-text box only when "other" is picked. Without JS it simply stays visible,
+    // which still works: the server ignores it unless "other" was chosen.
+    var box = document.getElementById('reason_other');
+    var radios = document.querySelectorAll('input[name=reason]');
+    function sync() {
+      var other = document.querySelector('input[name=reason][value="{{ other }}"]').checked;
+      box.hidden = !other;
+      box.required = other;
+      if (other && document.activeElement && document.activeElement.name === 'reason') box.focus();
+    }
+    radios.forEach(function (r) { r.addEventListener('change', sync); });
+    sync();
+
+    var first = document.querySelector('.bad');
+    if (!first) return;
+    first.scrollIntoView({ block: 'center' });
+    if (first.focus) first.focus({ preventScroll: true });
+  })();
+</script>
+{% endblock %}

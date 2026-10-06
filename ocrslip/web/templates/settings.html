@@ -39,6 +39,13 @@
        ภาพเก่าที่เอามาอ้างว่าเป็นของวันนี้จะสีถูกแต่คำคมผิด ถ้าห่างกันไม่เกินเท่านี้</p>
     {% endif %}
 
+    <label for="check_reasons">เหตุผลในฟอร์มเข้าเช็ครถ <a href="/check" target="_blank">/check</a>
+      <span class="muted">(บรรทัดละหนึ่งเหตุผล)</span></label>
+    <textarea id="check_reasons" name="check_reasons" rows="4">{{ check_reasons }}</textarea>
+    <p class="muted">{% if from_db.check_reasons %}ตั้งไว้จากหน้านี้
+       {% else %}ยังไม่เคยตั้ง — กำลังใช้ชุดที่มากับระบบ{% endif %}
+       · ตัวเลือก "อื่นๆ (พิมพ์เอง)" ต่อท้ายให้เสมอ ไม่ต้องใส่ในนี้</p>
+
     <p><button type="submit">บันทึก</button></p>
   </form>
 

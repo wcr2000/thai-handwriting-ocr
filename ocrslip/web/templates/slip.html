@@ -75,6 +75,20 @@
       </table>
     </div>
     {% endif %}
+    {% if checks %}
+    <div class="card">
+      <h3>เจ้าของเข้ามาเช็ครถ {{ checks|length }} ครั้ง</h3>
+      <table>
+        <tr><th>เข้า</th><th>ออก</th><th>มาเพื่อ</th><th>เบอร์ที่กรอก</th></tr>
+        {% for c in checks %}
+        <tr><td>{{ c.created_at.strftime('%d/%m/%Y %H:%M') }}</td>
+            <td>{% if c.finished_at %}{{ c.finished_at.strftime('%d/%m/%Y %H:%M') }}
+                {% else %}<span class="badge warn">ยังอยู่ที่รถ</span>{% endif %}</td>
+            <td>{{ c.reason }}</td><td>{{ c.tel or '—' }}</td></tr>
+        {% endfor %}
+      </table>
+    </div>
+    {% endif %}
     {% if slip.car_status == 'stored' and user %}
     <form method="post" action="/slips/{{ slip.id }}/return" class="card">
       <h3>ยืนยันการรับรถคืน</h3>

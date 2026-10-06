@@ -26,9 +26,9 @@ from ..config import (
 )
 from ..daystamp import QUOTES, day_stamp, quote_cycle_days
 from ..db import (
-    add_staff, build_filters, clean_person_name, connect, dashboard_stats, export_rows, get_image, get_slip,
-    delete_slip, deposit_history, deposit_rounds, get_settings, insert_slip, list_edits,
-    open_slip_by_plate, set_setting, slips_by_plate,
+    add_car_check, add_staff, build_filters, clean_person_name, connect, dashboard_stats, export_rows, get_image, get_slip,
+    delete_slip, deposit_history, deposit_rounds, finish_car_checks, get_settings, insert_slip,
+    list_car_checks, list_edits, open_car_check, open_slip_by_plate, set_setting, slips_by_plate,
     claim_next, claim_one, known_people, list_staff, mark_returned, mark_superseded, next_in_queue,
     query_slips, reject_slip, release_claims, review_counts,
     set_staff_active, update_slip,
@@ -47,10 +47,11 @@ app = FastAPI(title="ระบบเอื้อเฟื้อที่จอ�
 _SECRET = SECRET_KEY or secrets.token_urlsafe(32)
 
 # Pages reachable without logging in.
-# "/in" = the self-service entry form, "/out" = the collection request form. Both have to be
+# "/in" = the self-service entry form, "/out" = the collection request form. All three have to be
 # open to the public. What gates them is the code a staff member types to close the form, not
 # a login. (Checked server-side only; see config.ENTRY_PASSWORD.)
-PUBLIC_PATHS = ("/login", "/static", "/health", "/favicon.ico", "/in", "/out")
+# "/check" = a visit to a car that stays parked (start it, check it, take something out).
+PUBLIC_PATHS = ("/login", "/static", "/health", "/favicon.ico", "/in", "/out", "/check")
 # Admin-only pages — the irreversible actions, and the bulk personal data
 ADMIN_ONLY = ("/table", "/dashboard", "/export.xlsx", "/staff", "/settings", "/dups")
 # "/reject" is deliberately absent: the person at the review screen (the approver) is the one
@@ -276,6 +277,13 @@ COMMON_PROVINCES = ("ปทุมธานี", "กรุงเทพมหา�
 SETTING_BUILDINGS = "entry_buildings"
 SETTING_FLOORS = "entry_floors"
 SETTING_QUOTES = "day_quotes"
+SETTING_CHECK_REASONS = "check_reasons"
+
+# Reasons offered on /check when none have been set from the settings page. "Other" is not in
+# this list: it is always appended by the form itself, so clearing the list in settings can
+# never leave a visitor with no way to state why they came.
+CHECK_REASONS = ("มาสตาร์ท/เช็คสภาพรถ", "มาเอาของในรถ")
+CHECK_OTHER = "__other__"
 
 
 def _lines(text: str) -> tuple[str, ...]:
@@ -302,6 +310,11 @@ def _day_quotes(conn) -> tuple[str, ...]:
     has to take effect immediately.
     """
     return _lines(get_settings(conn).get(SETTING_QUOTES, "")) or QUOTES
+
+
+def _check_reasons(conn) -> tuple[str, ...]:
+    """The reasons offered on /check — settable from the web UI, falling back to CHECK_REASONS"""
+    return _lines(get_settings(conn).get(SETTING_CHECK_REASONS, "")) or CHECK_REASONS
 
 
 def _entry_choices(buildings, floors) -> dict[str, Any]:
@@ -495,6 +508,11 @@ async def pickup_submit(request: Request):
         chosen = chosen or match[0]
 
         ok = mark_returned(conn, str(chosen["id"]), RETURNED_BY_OUT, RETURNED_NOTE_OUT)
+        if ok:
+            # Somebody who went in to check the car and then decided to drive it away never
+            # comes back through /check/out. Leaving that visit open would list them as
+            # "still at the car" forever, so leaving with the car closes it too.
+            finish_car_checks(conn, str(chosen["id"]), RETURNED_BY_OUT)
         conn.commit()
         if not ok:
             # mark_returned returning False means the slip was already closed (staff pressed
@@ -509,6 +527,155 @@ async def pickup_submit(request: Request):
         stamp = day_stamp(slip["returned_at"], _day_quotes(conn))
 
     return render(request, "out_done.html", slip=slip, stamp=stamp)
+
+
+# ---------- a visit to a car that stays parked (/check, /check/out) ----------
+# Some owners do not want the car back yet; they come to start it, check on it, or take
+# something out of it. They still have to pass the screening point on the way to the car and
+# again on the way back, so this runs the same gate as /out (plate + phone number + staff
+# passcode) twice — /check when they go in, /check/out when they come back — and closes no slip:
+# the slip stays 'stored', and each visit is one row in car_checks with a start and a finish.
+
+CHECKED_BY_FORM = "ฟอร์มเช็ครถ"
+
+
+def _check_form(request: Request, conn, errors: dict, v: dict) -> HTMLResponse:
+    return render(request, "check.html", errors=errors, v=v,
+                  reasons=_check_reasons(conn), other=CHECK_OTHER)
+
+
+def _parked_match(conn, tel: str, plate: str, errors: dict) -> list[dict[str, Any]]:
+    """The still-parked slips matching this plate and phone, filling errors when there are none.
+
+    Shared by check-in and check-out so the two can never disagree about which car is meant.
+    The phone number is confirmation, not a key — same rule as /out, since some photographed
+    slips have a phone number OCR could not read.
+    """
+    rows = slips_by_plate(conn, plate)
+    stored = [r for r in rows if r["car_status"] == "stored"]
+    match = [r for r in stored if not (r["tel_digits"] or "") or r["tel_digits"] == tel]
+    if not rows:
+        errors["noplate"] = "ไม่พบใบจอดของทะเบียนนี้ — ตรวจตัวอักษรกับตัวเลขอีกครั้ง"
+    elif not stored:
+        errors["noplate"] = "ใบของทะเบียนนี้รับรถกลับไปแล้ว — รถไม่ได้จอดอยู่ที่นี่"
+    elif not match:
+        errors["tel"] = "เบอร์โทรไม่ตรงกับใบจอดของทะเบียนนี้"
+    return match
+
+
+def _bad_pw(form) -> bool:
+    # Checked before any lookup, as on /out: a wrong code must reveal nothing about which plates
+    # are parked here.
+    return not secrets.compare_digest(
+        (form.get("entry_pw") or "").encode(), ENTRY_PASSWORD.encode())
+
+
+@app.get("/check", response_class=HTMLResponse)
+def check_form(request: Request):
+    if not ENTRY_PASSWORD:
+        return HTMLResponse("ยังไม่ได้เปิดใช้ฟอร์มนี้ (ผู้ดูแลระบบยังไม่ได้ตั้ง ENTRY_PASSWORD)",
+                            status_code=503)
+    with connect() as conn:
+        return _check_form(request, conn, {}, {})
+
+
+@app.post("/check", response_class=HTMLResponse)
+async def check_submit(request: Request):
+    if not ENTRY_PASSWORD:
+        return HTMLResponse("ยังไม่ได้เปิดใช้ฟอร์มนี้", status_code=503)
+
+    form = await request.form()
+    v = {k: (form.get(k) or "").strip() for k in ("tel", "noplate", "reason", "reason_other")}
+    tel, plate = norm_phone(v["tel"]), norm_plate(v["noplate"])
+
+    with connect() as conn:
+        reasons = _check_reasons(conn)
+        # The chosen reason must be one of the offered ones (or "other" with text): a free value
+        # posted straight in would make the reasons impossible to count later.
+        reason = v["reason_other"] if v["reason"] == CHECK_OTHER else v["reason"]
+
+        errors: dict[str, str] = {}
+        if len(tel) != 10:
+            errors["tel"] = "เบอร์โทรต้องเป็นตัวเลข 10 หลัก"
+        if not plate:
+            errors["noplate"] = "กรอกทะเบียนรถ"
+        if v["reason"] == CHECK_OTHER and not v["reason_other"]:
+            errors["reason"] = "พิมพ์เหตุผลที่มา"
+        elif v["reason"] != CHECK_OTHER and v["reason"] not in reasons:
+            errors["reason"] = "เลือกเหตุผลที่มา"
+        if _bad_pw(form):
+            errors["entry_pw"] = "รหัสเจ้าหน้าที่ไม่ถูกต้อง"
+        if errors:
+            return _check_form(request, conn, errors, v)
+
+        match = _parked_match(conn, tel, plate, errors)
+        # A visit already in progress means the last one was never checked out. Opening a second
+        # would leave two "still at the car" rows for one person; staff close the old one first.
+        if not errors and open_car_check(conn, [str(r["id"]) for r in match]):
+            errors["noplate"] = ("ทะเบียนนี้เข้าเช็ครถอยู่แล้ว ยังไม่ได้แจ้งออก — "
+                                 "ให้กรอกฟอร์มเช็ครถขาออกก่อน แล้วค่อยเข้าใหม่")
+        if errors:
+            return _check_form(request, conn, errors, v)
+
+        # Unlike /out there is no slip picker: nothing is being closed, so linking the visit to
+        # the most recent deposit among several open slips cannot strand anything.
+        slip = max(match, key=lambda r: (r["deposit_date"] is not None, r["deposit_date"],
+                                         r["created_at"]))
+        check = add_car_check(conn, str(slip["id"]), v["tel"], v["noplate"], reason,
+                              CHECKED_BY_FORM)
+        conn.commit()
+        stamp = day_stamp(check["created_at"], _day_quotes(conn))
+
+    return render(request, "check_done.html", slip=slip, check=check, stamp=stamp)
+
+
+@app.get("/check/out", response_class=HTMLResponse)
+def check_out_form(request: Request):
+    if not ENTRY_PASSWORD:
+        return HTMLResponse("ยังไม่ได้เปิดใช้ฟอร์มนี้ (ผู้ดูแลระบบยังไม่ได้ตั้ง ENTRY_PASSWORD)",
+                            status_code=503)
+    return render(request, "check_out.html", errors={}, v={})
+
+
+@app.post("/check/out", response_class=HTMLResponse)
+async def check_out_submit(request: Request):
+    """The owner is back from the car: close the visit. The slip itself stays open."""
+    if not ENTRY_PASSWORD:
+        return HTMLResponse("ยังไม่ได้เปิดใช้ฟอร์มนี้", status_code=503)
+
+    form = await request.form()
+    v = {k: (form.get(k) or "").strip() for k in ("tel", "noplate")}
+    tel, plate = norm_phone(v["tel"]), norm_plate(v["noplate"])
+
+    errors: dict[str, str] = {}
+    if len(tel) != 10:
+        errors["tel"] = "เบอร์โทรต้องเป็นตัวเลข 10 หลัก"
+    if not plate:
+        errors["noplate"] = "กรอกทะเบียนรถ"
+    if _bad_pw(form):
+        errors["entry_pw"] = "รหัสเจ้าหน้าที่ไม่ถูกต้อง"
+    if errors:
+        return render(request, "check_out.html", errors=errors, v=v)
+
+    with connect() as conn:
+        match = _parked_match(conn, tel, plate, errors)
+        visit = None if errors else open_car_check(conn, [str(r["id"]) for r in match])
+        if not errors and visit is None:
+            errors["noplate"] = "ทะเบียนนี้ไม่มีการเข้าเช็ครถที่ค้างอยู่ — อาจแจ้งออกไปแล้ว"
+        if errors:
+            return render(request, "check_out.html", errors=errors, v=v)
+
+        closed = finish_car_checks(conn, str(visit["slip_id"]), CHECKED_BY_FORM)
+        conn.commit()
+        if not closed:
+            # Someone else closed it between the lookup and the update
+            errors["noplate"] = "การเข้าเช็ครถนี้ถูกแจ้งออกไปแล้วเมื่อครู่นี้"
+            return render(request, "check_out.html", errors=errors, v=v)
+        check = closed[0]
+        slip = get_slip(conn, str(check["slip_id"]))
+        stamp = day_stamp(check["finished_at"], _day_quotes(conn))
+
+    return render(request, "check_out_done.html", slip=slip, check=check, stamp=stamp)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -836,8 +1003,9 @@ def slip_detail(request: Request, slip_id: str, taken: int = 0):
         # A lone slip needs no deposit-history card whose single row is the open slip itself.
         history = deposit_history(conn, slip["plate_norm"])
         history = history if len(history) > 1 else []
+        checks = list_car_checks(conn, slip_id)
     return render(request, "slip.html", slip=slip, edits=edits, has_image=has_image,
-                  taken=bool(taken), history=history)
+                  taken=bool(taken), history=history, checks=checks)
 
 
 @app.post("/slips/{slip_id}/return")
@@ -850,6 +1018,8 @@ async def do_return(request: Request, slip_id: str):
             (form.get("note") or None),
             clean_person_name(form.get("released_to") or "") or None,
         )
+        if ok:  # same as /out: leaving with the car ends any visit still open on it
+            finish_car_checks(conn, slip_id, form.get("returned_by") or None)
         conn.commit()
     # A failed close means somebody closed it first, which has to be made plain rather than
     # silently redirecting back as though it had succeeded — otherwise staff never learn that
@@ -1045,15 +1215,18 @@ def settings_page(request: Request, saved: int = 0):
         stored = get_settings(conn)
         buildings, floors = _entry_lists(conn)
         quotes = _day_quotes(conn)
+        reasons = _check_reasons(conn)
     return render(
         request, "settings.html",
         buildings="\n".join(buildings), floors="\n".join(floors),
         quotes="\n".join(quotes), quote_days=quote_cycle_days(quotes),
+        check_reasons="\n".join(reasons),
         # State plainly where each displayed value came from. Otherwise an admin cannot tell
         # whether they are looking at the env default or at a value they set themselves, and
         # may clear it believing "clearing it leaves the same value anyway".
         from_db={"buildings": SETTING_BUILDINGS in stored, "floors": SETTING_FLOORS in stored,
-                 "quotes": SETTING_QUOTES in stored},
+                 "quotes": SETTING_QUOTES in stored,
+                 "check_reasons": SETTING_CHECK_REASONS in stored},
         entry_open=bool(ENTRY_PASSWORD), saved=bool(saved))
 
 
@@ -1065,6 +1238,7 @@ async def settings_save(request: Request):
         set_setting(conn, SETTING_BUILDINGS, str(form.get("buildings") or ""), account)
         set_setting(conn, SETTING_FLOORS, str(form.get("floors") or ""), account)
         set_setting(conn, SETTING_QUOTES, str(form.get("quotes") or ""), account)
+        set_setting(conn, SETTING_CHECK_REASONS, str(form.get("check_reasons") or ""), account)
         conn.commit()
     return RedirectResponse("/settings?saved=1", status_code=303)
 

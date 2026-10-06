@@ -209,3 +209,29 @@ CREATE TABLE IF NOT EXISTS ocr_dhammakaya.app_settings (
     updated_by text,
     updated_at timestamptz NOT NULL DEFAULT now()
 );
+
+-- A visit to a car that stays parked: the owner came to start it, check on it, or take something
+-- out of it. Kept apart from slips because the slip's own state does not change (the car is
+-- still here), yet the visit still has to be on record, attested by staff at the screening
+-- point, the same way the way in and the way out are.
+-- slip_id is the parked slip the plate and phone number matched at the time of the visit.
+-- ON DELETE CASCADE: a visit to a slip that was deleted as junk is not worth keeping on its own.
+CREATE TABLE IF NOT EXISTS ocr_dhammakaya.car_checks (
+    id         bigserial PRIMARY KEY,
+    slip_id    uuid NOT NULL REFERENCES ocr_dhammakaya.slips(id) ON DELETE CASCADE,
+    tel        text,
+    plate_raw  text,
+    reason     text NOT NULL,
+    checked_by text,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS car_checks_slip_idx
+    ON ocr_dhammakaya.car_checks (slip_id, created_at DESC);
+
+-- The other half of a visit: when the owner comes back past the screening point having finished
+-- with the car. NULL means they are still at the car (or never reported back), which is exactly
+-- the list staff need when asking "who is in the car park right now".
+ALTER TABLE ocr_dhammakaya.car_checks ADD COLUMN IF NOT EXISTS finished_at timestamptz;
+ALTER TABLE ocr_dhammakaya.car_checks ADD COLUMN IF NOT EXISTS finished_by text;
+CREATE INDEX IF NOT EXISTS car_checks_open_idx
+    ON ocr_dhammakaya.car_checks (slip_id) WHERE finished_at IS NULL;

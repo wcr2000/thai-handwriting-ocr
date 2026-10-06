@@ -1,0 +1,27 @@
+{% extends "public_base.html" %}
+{% block title %}เข้าเช็ครถได้ — {{ slip.plate_raw }}{% endblock %}
+{% block content %}
+{# What the driver shows at the car and keeps as evidence of the visit. It must say plainly that the
+   car is still parked and the slip still open, or someone reads "confirmed" as "released" and
+   drives off with it. #}
+<div class="card done-card">
+  <p class="done-stamp">✓ เจ้าหน้าที่ให้เข้าเช็ครถได้</p>
+  <table>
+    <tr><th>ชื่อ - นามสกุล</th><td>{{ slip.name or '—' }}</td></tr>
+    <tr><th>ทะเบียน</th><td><b>{{ slip.plate_raw or '—' }}</b> {{ slip.province or '' }}</td></tr>
+    <tr><th>รถ</th><td>{{ slip.brand or '—' }} ({{ slip.car_type or '—' }})</td></tr>
+    <tr><th>ที่จอด</th><td>{{ slip.location or '—' }}</td></tr>
+    <tr><th>มาเพื่อ</th><td><b>{{ check.reason }}</b></td></tr>
+    <tr><th>เลขอ้างอิงใบจอด</th><td><code>{{ slip.id|string|upper|truncate(8, true, '') }}</code></td></tr>
+    <tr><th>เข้าเช็ครถเมื่อ</th><td><b>{{ check.created_at.strftime('%d/%m/%Y %H:%M') }}</b></td></tr>
+  </table>
+  {% if stamp %}
+  <div class="day-stamp" style="--stamp-ink:{{ stamp.ink }}; --stamp-wash:{{ stamp.wash }}">
+    <p class="day-stamp-quote">{{ stamp.quote }}</p>
+  </div>
+  {% endif %}
+  <p class="done-note">⚠️ รถยังจอดฝากอยู่ ใบจอดยังไม่ถูกปิด — ถ้าจะนำรถออก ต้องกรอกฟอร์มขาออกอีกครั้ง</p>
+  <p class="muted">เสร็จแล้วกลับมาที่จุดคัดกรอง แจ้งเจ้าหน้าที่ที่หน้า
+     <a href="/check/out">เช็ครถเสร็จแล้ว</a></p>
+</div>
+{% endblock %}
